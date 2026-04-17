@@ -29,8 +29,8 @@ export async function POST(request: NextRequest) {
 
     // Customer confirmation email
     await resend.emails.send({
- from: 'Cady Hollow Campground <reservations@cadyhollow.com>',
- replyTo: 'cadyhollowcg@gmail.com',
+ from: '${process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} <${process.env.RESEND_FROM_EMAIL || "reservations@example.com"}>',
+ replyTo: '${process.env.REPLY_TO_EMAIL || "info@example.com"}',
       to: guestEmail,
       subject: `Reservation Confirmed — ${siteTypeLabel(siteType)} ${siteNumber} · ${arrival}`,
       html: `
@@ -45,8 +45,8 @@ export async function POST(request: NextRequest) {
             
             <!-- Header -->
             <div style="background-color:#2B2B2B;padding:32px;text-align:center;">
-              <h1 style="color:#ffffff;margin:0 0 4px;font-size:24px;">Cady Hollow Campground</h1>
-              <p style="color:#3DBDD4;margin:0;font-size:14px;">Port Allegany, PA</p>
+              <h1 style="color:#ffffff;margin:0 0 4px;font-size:24px;">${process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}</h1>
+              <p style="color:#3DBDD4;margin:0;font-size:14px;">${process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || "Location"}</p>
             </div>
 
             <!-- Success Banner -->
@@ -119,8 +119,8 @@ export async function POST(request: NextRequest) {
             <!-- Contact -->
             <div style="margin:16px;padding:24px;text-align:center;">
               <p style="color:#6B7280;font-size:14px;margin:0 0 4px;">Questions? We're happy to help!</p>
-              <a href="mailto:info@cadyhollow.com" style="color:#3DBDD4;font-size:14px;">info@cadyhollow.com</a>
-              <p style="color:#4B5563;font-size:12px;margin:16px 0 0;">© 2026 Cady Hollow Campground · Port Allegany, PA</p>
+              <a href="mailto:${process.env.NEXT_PUBLIC_CONTACT_EMAIL || "info@example.com"}" style="color:#3DBDD4;font-size:14px;">${process.env.NEXT_PUBLIC_CONTACT_EMAIL || "info@example.com"}</a>
+              <p style="color:#4B5563;font-size:12px;margin:16px 0 0;">© 2026 ${process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} · ${process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || "Location"}</p>
             </div>
 
           </div>
@@ -131,9 +131,9 @@ export async function POST(request: NextRequest) {
 
     // Staff notification email
     await resend.emails.send({
-     from: 'Cady Hollow Campground <reservations@cadyhollow.com>',
-     replyTo: 'cadyhollowcg@gmail.com',
-      to: 'charissachevy@gmail.com',
+     from: '${process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} <${process.env.RESEND_FROM_EMAIL || "reservations@example.com"}>',
+     replyTo: '${process.env.REPLY_TO_EMAIL || "info@example.com"}',
+      to: '${process.env.NEXT_PUBLIC_CONTACT_EMAIL || "info@example.com"}',
       subject: `New Reservation — ${siteTypeLabel(siteType)} ${siteNumber} · ${arrival}`,
       html: `
         <!DOCTYPE html>
