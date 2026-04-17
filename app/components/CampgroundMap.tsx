@@ -231,9 +231,9 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
           <ellipse cx="97" cy="66" rx="5" ry="7" fill="#2B2B2B"/>
           <line x1="83" y1="74" x2="111" y2="67" stroke="#4DBFB8" strokeWidth="3" strokeLinecap="round"/>
           <line x1="83" y1="67" x2="111" y2="74" stroke="#4DBFB8" strokeWidth="3" strokeLinecap="round"/>
-          <text x="97" y="90" textAnchor="middle" fontFamily="Arial" fontSize="12" fontWeight="bold" fill="white">Cady Hollow</text>
+          <text x="97" y="90" textAnchor="middle" fontFamily="Arial" fontSize="12" fontWeight="bold" fill="white">{campgroundName}</text>
           <text x="97" y="103" textAnchor="middle" fontFamily="Arial" fontSize="7.5" fill="#4DBFB8" letterSpacing="1">CAMPGROUND</text>
-          <text x="97" y="117" textAnchor="middle" fontFamily="Arial" fontSize="8" fill="#aaa">Port Allegany, PA</text>
+          <text x="97" y="117" textAnchor="middle" fontFamily="Arial" fontSize="8" fill="#aaa">{campgroundLocation}</text>
 
           {/* LOOP 1 ROADS */}
           <rect x="52" y="178" width="536" height="13" fill="#b0a090" rx="6"/>
@@ -343,7 +343,7 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
 
           {/* Title */}
           <rect x="210" y="1042" width="400" height="28" fill="#2B2B2B" rx="6"/>
-          <text x="410" y="1061" textAnchor="middle" fontFamily="Arial" fontSize="11" fontWeight="bold" fill="white">Cady Hollow Campground — Port Allegany, PA</text>
+          <text x="410" y="1061" textAnchor="middle" fontFamily="Arial" fontSize="11" fontWeight="bold" fill="white">{campgroundName} — {campgroundLocation}</text>
         </svg>
 
         {/* Tooltip */}
