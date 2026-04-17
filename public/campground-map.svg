@@ -1,0 +1,293 @@
+<svg width="100%" viewBox="0 0 820 1080" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Cady Hollow Campground Site Map</title>
+<desc>Site map of Cady Hollow Campground showing all sites, cabins, and amenities</desc>
+
+<!-- Grass -->
+<rect width="820" height="1080" fill="#c8e6c0"/>
+
+<!-- PERIMETER TREES top -->
+<g fill="#2d6a1f">
+  <circle cx="210" cy="15" r="13"/><circle cx="235" cy="8" r="10"/><circle cx="258" cy="16" r="12"/>
+  <circle cx="282" cy="9" r="10"/><circle cx="305" cy="16" r="13"/><circle cx="328" cy="9" r="11"/>
+  <circle cx="352" cy="16" r="12"/><circle cx="376" cy="9" r="10"/><circle cx="400" cy="16" r="13"/>
+  <circle cx="424" cy="9" r="11"/><circle cx="448" cy="16" r="12"/><circle cx="472" cy="9" r="10"/>
+  <circle cx="496" cy="16" r="13"/><circle cx="520" cy="9" r="11"/><circle cx="544" cy="16" r="12"/>
+  <circle cx="568" cy="9" r="10"/>
+</g>
+<g fill="#2d6a1f">
+  <circle cx="775" cy="55" r="14"/><circle cx="790" cy="80" r="11"/>
+  <circle cx="778" cy="108" r="13"/><circle cx="792" cy="135" r="11"/>
+  <circle cx="779" cy="163" r="14"/><circle cx="793" cy="192" r="11"/>
+  <circle cx="779" cy="222" r="13"/><circle cx="793" cy="252" r="11"/>
+  <circle cx="779" cy="283" r="14"/><circle cx="793" cy="314" r="11"/>
+  <circle cx="779" cy="346" r="13"/><circle cx="793" cy="378" r="11"/>
+  <circle cx="779" cy="410" r="14"/><circle cx="793" cy="442" r="11"/>
+  <circle cx="779" cy="475" r="13"/><circle cx="793" cy="508" r="11"/>
+  <circle cx="779" cy="541" r="14"/>
+</g>
+<g fill="#2d6a1f">
+  <circle cx="14" cy="95" r="12"/><circle cx="7" cy="124" r="10"/>
+  <circle cx="15" cy="153" r="12"/><circle cx="7" cy="182" r="10"/>
+  <circle cx="15" cy="211" r="12"/><circle cx="7" cy="240" r="10"/>
+  <circle cx="15" cy="269" r="12"/><circle cx="7" cy="298" r="10"/>
+  <circle cx="15" cy="327" r="12"/>
+</g>
+<g fill="#2d6a1f">
+  <circle cx="54" cy="882" r="14"/><circle cx="82" cy="873" r="11"/><circle cx="110" cy="883" r="13"/>
+  <circle cx="140" cy="874" r="11"/><circle cx="170" cy="883" r="14"/><circle cx="200" cy="874" r="11"/>
+  <circle cx="230" cy="883" r="13"/><circle cx="260" cy="874" r="11"/><circle cx="290" cy="883" r="14"/>
+  <circle cx="322" cy="874" r="11"/><circle cx="354" cy="883" r="13"/><circle cx="386" cy="874" r="11"/>
+  <circle cx="418" cy="883" r="14"/><circle cx="450" cy="874" r="11"/><circle cx="482" cy="883" r="13"/>
+  <circle cx="514" cy="874" r="11"/><circle cx="546" cy="883" r="14"/><circle cx="578" cy="874" r="11"/>
+  <circle cx="610" cy="883" r="13"/><circle cx="642" cy="874" r="11"/><circle cx="674" cy="883" r="14"/>
+  <circle cx="706" cy="874" r="11"/><circle cx="738" cy="883" r="13"/>
+</g>
+<g fill="#2d6a1f">
+  <circle cx="592" cy="12" r="12"/><circle cx="616" cy="7" r="10"/><circle cx="640" cy="13" r="12"/>
+  <circle cx="664" cy="7" r="10"/><circle cx="688" cy="13" r="12"/><circle cx="712" cy="7" r="10"/>
+  <circle cx="736" cy="14" r="12"/><circle cx="758" cy="8" r="10"/>
+  <circle cx="608" cy="36" r="11"/><circle cx="632" cy="30" r="10"/><circle cx="656" cy="37" r="12"/>
+  <circle cx="680" cy="30" r="10"/><circle cx="704" cy="37" r="11"/><circle cx="728" cy="30" r="10"/>
+  <circle cx="752" cy="38" r="12"/>
+  <circle cx="600" cy="66" r="11"/><circle cx="598" cy="94" r="12"/>
+  <circle cx="597" cy="122" r="11"/><circle cx="598" cy="150" r="12"/>
+  <circle cx="597" cy="178" r="11"/><circle cx="598" cy="206" r="10"/>
+  <circle cx="597" cy="234" r="11"/>
+</g>
+<g fill="#2d6a1f" opacity="0.85">
+  <circle cx="85" cy="622" r="9"/><circle cx="112" cy="614" r="7"/>
+  <circle cx="148" cy="623" r="9"/><circle cx="186" cy="615" r="7"/>
+  <circle cx="224" cy="623" r="8"/><circle cx="260" cy="615" r="7"/>
+  <circle cx="296" cy="623" r="9"/><circle cx="330" cy="615" r="7"/>
+</g>
+
+<!-- CHECK IN / STORE -->
+<rect x="28" y="240" width="20" height="390" fill="#b0a090" rx="3"/>
+<text x="38" y="440" text-anchor="middle" font-family="Arial" font-size="9" font-weight="bold" fill="#5a4a3a" transform="rotate(-90,38,440)">CHECK-IN / STORE</text>
+
+<!-- LOGO -->
+<rect x="30" y="25" width="135" height="95" fill="#2B2B2B" rx="10"/>
+<ellipse cx="97" cy="57" rx="9" ry="15" fill="#4DBFB8"/>
+<ellipse cx="97" cy="66" rx="5" ry="7" fill="#2B2B2B"/>
+<line x1="83" y1="74" x2="111" y2="67" stroke="#4DBFB8" stroke-width="3" stroke-linecap="round"/>
+<line x1="83" y1="67" x2="111" y2="74" stroke="#4DBFB8" stroke-width="3" stroke-linecap="round"/>
+<text x="97" y="90" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="white">Cady Hollow</text>
+<text x="97" y="103" text-anchor="middle" font-family="Arial" font-size="7.5" fill="#4DBFB8" letter-spacing="1">CAMPGROUND</text>
+<text x="97" y="117" text-anchor="middle" font-family="Arial" font-size="8" fill="#aaa">Port Allegany, PA</text>
+<text x="97" y="130" text-anchor="middle" font-family="Arial" font-size="7.5" fill="#888">The PA Wilds</text>
+
+<!-- LEGEND -->
+<rect x="176" y="26" width="390" height="32" fill="white" rx="6" stroke="#ccc" stroke-width="0.5"/>
+<rect x="186" y="35" width="13" height="14" fill="#a8d8a8" rx="2" stroke="#5a8a5a" stroke-width="0.5"/>
+<text x="203" y="46" font-family="Arial" font-size="10" fill="#333">Full hookup</text>
+<rect x="278" y="35" width="13" height="14" fill="#b8cce8" rx="2" stroke="#4a6a9a" stroke-width="0.5"/>
+<text x="295" y="46" font-family="Arial" font-size="10" fill="#333">Water &amp; electric</text>
+<rect x="408" y="35" width="13" height="14" fill="#e88a8a" rx="2" stroke="#a84a4a" stroke-width="0.5"/>
+<text x="425" y="46" font-family="Arial" font-size="10" fill="#333">Cabins 2 &amp; 3</text>
+<rect x="510" y="35" width="13" height="14" fill="#f5e07a" rx="2" stroke="#a89020" stroke-width="0.5"/>
+<text x="527" y="46" font-family="Arial" font-size="10" fill="#333">Cabin 1</text>
+
+<!-- SITES 80-85 + CABINS -->
+<rect x="608" y="62" width="20" height="34" fill="#b8cce8" rx="2" stroke="#4a6a9a" stroke-width="0.5"/>
+<text x="618" y="83" text-anchor="middle" font-family="Arial" font-size="7" font-weight="bold" fill="#0C447C" transform="rotate(-90,618,83)">80</text>
+<g fill="#b8cce8" stroke="#4a6a9a" stroke-width="0.5">
+  <rect x="632" y="64" width="20" height="30" rx="2"/>
+  <text x="642" y="82" text-anchor="middle" font-family="Arial" font-size="7" font-weight="bold" fill="#0C447C" transform="rotate(-90,642,82)">81</text>
+  <rect x="655" y="64" width="20" height="30" rx="2"/>
+  <text x="665" y="82" text-anchor="middle" font-family="Arial" font-size="7" font-weight="bold" fill="#0C447C" transform="rotate(-90,665,82)">82</text>
+  <rect x="678" y="64" width="20" height="30" rx="2"/>
+  <text x="688" y="82" text-anchor="middle" font-family="Arial" font-size="7" font-weight="bold" fill="#0C447C" transform="rotate(-90,688,82)">83</text>
+  <rect x="701" y="64" width="20" height="30" rx="2"/>
+  <text x="711" y="82" text-anchor="middle" font-family="Arial" font-size="7" font-weight="bold" fill="#0C447C" transform="rotate(-90,711,82)">84</text>
+  <rect x="724" y="64" width="20" height="30" rx="2"/>
+  <text x="734" y="82" text-anchor="middle" font-family="Arial" font-size="7" font-weight="bold" fill="#0C447C" transform="rotate(-90,734,82)">85</text>
+</g>
+<rect x="748" y="64" width="22" height="30" fill="#e88a8a" rx="3" stroke="#a84a4a" stroke-width="0.5"/>
+<text x="759" y="82" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#791F1F" transform="rotate(-90,759,82)">C2</text>
+<rect x="748" y="158" width="22" height="30" fill="#e88a8a" rx="3" stroke="#a84a4a" stroke-width="0.5"/>
+<text x="759" y="176" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#791F1F" transform="rotate(-90,759,176)">C3</text>
+
+<!-- LOOP 1 roads -->
+<rect x="52" y="178" width="536" height="13" fill="#b0a090" rx="6"/>
+<rect x="52" y="320" width="536" height="13" fill="#b0a090" rx="6"/>
+<rect x="52" y="178" width="13" height="155" fill="#b0a090"/>
+<rect x="575" y="178" width="13" height="155" fill="#b0a090"/>
+
+<!-- Volleyball -->
+<rect x="250" y="148" width="150" height="26" fill="#d4c4a8" rx="3" stroke="#a09070" stroke-width="0.5"/>
+<line x1="325" y1="148" x2="325" y2="174" stroke="#888" stroke-width="0.5" stroke-dasharray="3,3"/>
+<text x="325" y="164" text-anchor="middle" font-family="Arial" font-size="8" fill="#6a5a4a">Volleyball / Basketball</text>
+
+<!-- ROW 1: 63-74 full hookup -->
+<g fill="#a8d8a8" stroke="#5a8a5a" stroke-width="0.5">
+  <rect x="65" y="191" width="28" height="36" rx="2"/><text x="79" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,79,215)">63</text>
+  <rect x="95" y="191" width="28" height="36" rx="2"/><text x="109" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,109,215)">64</text>
+  <rect x="125" y="191" width="28" height="36" rx="2"/><text x="139" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,139,215)">65</text>
+  <rect x="155" y="191" width="28" height="36" rx="2"/><text x="169" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,169,215)">66</text>
+  <rect x="185" y="191" width="28" height="36" rx="2"/><text x="199" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,199,215)">67</text>
+  <rect x="215" y="191" width="28" height="36" rx="2"/><text x="229" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,229,215)">68</text>
+  <rect x="245" y="191" width="28" height="36" rx="2"/><text x="259" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,259,215)">69</text>
+  <rect x="275" y="191" width="28" height="36" rx="2"/><text x="289" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,289,215)">70</text>
+  <rect x="305" y="191" width="28" height="36" rx="2"/><text x="319" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,319,215)">71</text>
+  <rect x="335" y="191" width="28" height="36" rx="2"/><text x="349" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,349,215)">72</text>
+  <rect x="365" y="191" width="28" height="36" rx="2"/><text x="379" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,379,215)">73</text>
+  <rect x="395" y="191" width="28" height="36" rx="2"/><text x="409" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,409,215)">74</text>
+</g>
+<!-- 75-79 water/electric -->
+<g fill="#b8cce8" stroke="#4a6a9a" stroke-width="0.5">
+  <rect x="425" y="191" width="28" height="36" rx="2"/><text x="439" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#0C447C" transform="rotate(-90,439,215)">75</text>
+  <rect x="455" y="191" width="28" height="36" rx="2"/><text x="469" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#0C447C" transform="rotate(-90,469,215)">76</text>
+  <rect x="485" y="191" width="28" height="36" rx="2"/><text x="499" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,499,215)">77</text>
+  <rect x="515" y="191" width="28" height="36" rx="2"/><text x="529" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#0C447C" transform="rotate(-90,529,215)">78</text>
+  <rect x="545" y="191" width="28" height="36" rx="2"/><text x="559" y="215" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#0C447C" transform="rotate(-90,559,215)">79</text>
+</g>
+
+<!-- ROW 2: 46-57 full hookup -->
+<g fill="#a8d8a8" stroke="#5a8a5a" stroke-width="0.5">
+  <rect x="65" y="282" width="28" height="36" rx="2"/><text x="79" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,79,306)">46</text>
+  <rect x="95" y="282" width="28" height="36" rx="2"/><text x="109" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,109,306)">47</text>
+  <rect x="125" y="282" width="28" height="36" rx="2"/><text x="139" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,139,306)">48</text>
+  <rect x="155" y="282" width="28" height="36" rx="2"/><text x="169" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,169,306)">49</text>
+  <rect x="185" y="282" width="28" height="36" rx="2"/><text x="199" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,199,306)">50</text>
+  <rect x="215" y="282" width="28" height="36" rx="2"/><text x="229" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,229,306)">51</text>
+  <rect x="245" y="282" width="28" height="36" rx="2"/><text x="259" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,259,306)">52</text>
+  <rect x="275" y="282" width="28" height="36" rx="2"/><text x="289" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,289,306)">53</text>
+  <rect x="305" y="282" width="28" height="36" rx="2"/><text x="319" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,319,306)">54</text>
+  <rect x="335" y="282" width="28" height="36" rx="2"/><text x="349" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,349,306)">55</text>
+  <rect x="365" y="282" width="28" height="36" rx="2"/><text x="379" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,379,306)">56</text>
+  <rect x="395" y="282" width="28" height="36" rx="2"/><text x="409" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,409,306)">57</text>
+</g>
+<!-- 58-62 water/electric -->
+<g fill="#b8cce8" stroke="#4a6a9a" stroke-width="0.5">
+  <rect x="425" y="282" width="28" height="36" rx="2"/><text x="439" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#0C447C" transform="rotate(-90,439,306)">58</text>
+  <rect x="455" y="282" width="28" height="36" rx="2"/><text x="469" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#0C447C" transform="rotate(-90,469,306)">59</text>
+  <rect x="485" y="282" width="28" height="36" rx="2"/><text x="499" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#0C447C" transform="rotate(-90,499,306)">60</text>
+  <rect x="515" y="282" width="28" height="36" rx="2"/><text x="529" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#0C447C" transform="rotate(-90,529,306)">61</text>
+  <rect x="545" y="282" width="28" height="36" rx="2"/><text x="559" y="306" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#0C447C" transform="rotate(-90,559,306)">62</text>
+</g>
+
+<!-- LOOP 2 roads -->
+<rect x="52" y="358" width="536" height="13" fill="#b0a090" rx="6"/>
+<rect x="52" y="530" width="536" height="13" fill="#b0a090" rx="6"/>
+<rect x="52" y="358" width="13" height="185" fill="#b0a090"/>
+<rect x="575" y="358" width="13" height="185" fill="#b0a090"/>
+
+<!-- Cabin 1 -->
+<rect x="65" y="372" width="28" height="36" fill="#f5e07a" rx="3" stroke="#a89020" stroke-width="0.5"/>
+<text x="79" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#633806" transform="rotate(-90,79,396)">C1</text>
+
+<!-- ROW 3: 31-45 -->
+<g fill="#a8d8a8" stroke="#5a8a5a" stroke-width="0.5">
+  <rect x="95" y="372" width="28" height="36" rx="2"/><text x="109" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,109,396)">31</text>
+  <rect x="125" y="372" width="28" height="36" rx="2"/><text x="139" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,139,396)">32</text>
+  <rect x="155" y="372" width="28" height="36" rx="2"/><text x="169" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,169,396)">33</text>
+  <rect x="185" y="372" width="28" height="36" rx="2"/><text x="199" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,199,396)">34</text>
+  <rect x="215" y="372" width="28" height="36" rx="2"/><text x="229" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,229,396)">35</text>
+  <rect x="245" y="372" width="28" height="36" rx="2"/><text x="259" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,259,396)">36</text>
+  <rect x="275" y="372" width="28" height="36" rx="2"/><text x="289" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,289,396)">37</text>
+  <rect x="305" y="372" width="28" height="36" rx="2"/><text x="319" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,319,396)">38</text>
+  <rect x="335" y="372" width="28" height="36" rx="2"/><text x="349" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,349,396)">39</text>
+  <rect x="365" y="372" width="28" height="36" rx="2"/><text x="379" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,379,396)">40</text>
+  <rect x="395" y="372" width="28" height="36" rx="2"/><text x="409" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,409,396)">41</text>
+  <rect x="425" y="372" width="28" height="36" rx="2"/><text x="439" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,439,396)">42</text>
+  <rect x="455" y="372" width="28" height="36" rx="2"/><text x="469" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,469,396)">43</text>
+  <rect x="485" y="372" width="28" height="36" rx="2"/><text x="499" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,499,396)">44</text>
+  <rect x="515" y="372" width="28" height="36" rx="2"/><text x="529" y="396" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,529,396)">45</text>
+</g>
+
+<!-- Bath house -->
+<rect x="278" y="415" width="58" height="62" fill="#e8e0d0" rx="4" stroke="#a09080" stroke-width="0.5"/>
+<text x="307" y="436" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#5a4a3a">Bath</text>
+<text x="307" y="447" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#5a4a3a">house</text>
+<rect x="285" y="453" width="44" height="18" fill="#d0c8b8" rx="2"/>
+<text x="307" y="465" text-anchor="middle" font-family="Arial" font-size="7" fill="#5a4a3a">Laundry</text>
+
+<!-- ROW 4: 14-20 -->
+<g fill="#a8d8a8" stroke="#5a8a5a" stroke-width="0.5">
+  <rect x="65" y="490" width="28" height="36" rx="2"/><text x="79" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,79,514)">14</text>
+  <rect x="95" y="490" width="28" height="36" rx="2"/><text x="109" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,109,514)">15</text>
+  <rect x="125" y="490" width="28" height="36" rx="2"/><text x="139" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,139,514)">16</text>
+  <rect x="155" y="490" width="28" height="36" rx="2"/><text x="169" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,169,514)">17</text>
+  <rect x="185" y="490" width="28" height="36" rx="2"/><text x="199" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,199,514)">18</text>
+  <rect x="215" y="490" width="28" height="36" rx="2"/><text x="229" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,229,514)">19</text>
+  <rect x="245" y="490" width="28" height="36" rx="2"/><text x="259" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,259,514)">20</text>
+</g>
+
+<!-- ROW 4: 21-29 -->
+<g fill="#a8d8a8" stroke="#5a8a5a" stroke-width="0.5">
+  <rect x="305" y="490" width="28" height="36" rx="2"/><text x="319" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,319,514)">21</text>
+  <rect x="335" y="490" width="28" height="36" rx="2"/><text x="349" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,349,514)">22</text>
+  <rect x="365" y="490" width="28" height="36" rx="2"/><text x="379" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,379,514)">23</text>
+  <rect x="395" y="490" width="28" height="36" rx="2"/><text x="409" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,409,514)">24</text>
+  <rect x="425" y="490" width="28" height="36" rx="2"/><text x="439" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,439,514)">25</text>
+  <rect x="455" y="490" width="28" height="36" rx="2"/><text x="469" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,469,514)">26</text>
+  <rect x="485" y="490" width="28" height="36" rx="2"/><text x="499" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,499,514)">27</text>
+  <rect x="515" y="490" width="28" height="36" rx="2"/><text x="529" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,529,514)">28</text>
+  <rect x="545" y="490" width="28" height="36" rx="2"/><text x="559" y="514" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,559,514)">29</text>
+</g>
+
+<!-- SITES 1-13 road -->
+<rect x="52" y="558" width="506" height="12" fill="#b0a090" rx="4"/>
+
+<!-- Sites 1-13 -->
+<g fill="#a8d8a8" stroke="#5a8a5a" stroke-width="0.5">
+  <rect x="65" y="571" width="28" height="36" rx="2"/><text x="79" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,79,595)">1</text>
+  <rect x="95" y="571" width="28" height="36" rx="2"/><text x="109" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,109,595)">2</text>
+  <rect x="125" y="571" width="28" height="36" rx="2"/><text x="139" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,139,595)">3</text>
+  <rect x="155" y="571" width="28" height="36" rx="2"/><text x="169" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,169,595)">4</text>
+  <rect x="185" y="571" width="28" height="36" rx="2"/><text x="199" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,199,595)">5</text>
+  <rect x="215" y="571" width="28" height="36" rx="2"/><text x="229" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,229,595)">6</text>
+  <rect x="245" y="571" width="28" height="36" rx="2"/><text x="259" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,259,595)">7</text>
+  <rect x="275" y="571" width="28" height="36" rx="2"/><text x="289" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,289,595)">8</text>
+  <rect x="305" y="571" width="28" height="36" rx="2"/><text x="319" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,319,595)">9</text>
+  <rect x="335" y="571" width="28" height="36" rx="2"/><text x="349" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,349,595)">10</text>
+  <rect x="365" y="571" width="28" height="36" rx="2"/><text x="379" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,379,595)">11</text>
+  <rect x="395" y="571" width="28" height="36" rx="2"/><text x="409" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,409,595)">12</text>
+  <rect x="425" y="571" width="28" height="36" rx="2"/><text x="439" y="595" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#27500A" transform="rotate(-90,439,595)">13</text>
+</g>
+
+<!-- Dump station -->
+<rect x="460" y="566" width="98" height="26" fill="#c8b898" rx="3" stroke="#907858" stroke-width="0.5"/>
+<text x="509" y="583" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#5a4030">Dump station</text>
+
+<!-- Open field -->
+<text x="300" y="640" text-anchor="middle" font-family="Arial" font-size="9" fill="#5a8a3a" font-style="italic">open field</text>
+
+<!-- POOL -->
+<rect x="54" y="658" width="68" height="68" fill="#7dd4e8" rx="8" stroke="#4a9ab8" stroke-width="1"/>
+<rect x="59" y="663" width="58" height="58" fill="#aeeeff" rx="5" opacity="0.7"/>
+<text x="88" y="696" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="#0C447C">Pool</text>
+
+<!-- PAVILION -->
+<rect x="54" y="738" width="105" height="50" fill="#2d6a1f" rx="6"/>
+<text x="106" y="768" text-anchor="middle" font-family="Arial" font-size="10" font-weight="bold" fill="white">Pavilion</text>
+
+<!-- Corn hole -->
+<rect x="54" y="794" width="105" height="28" fill="#c8e6c0" rx="4" stroke="#5a8a5a" stroke-width="0.5"/>
+<text x="106" y="812" text-anchor="middle" font-family="Arial" font-size="8" fill="#27500A">Corn hole court</text>
+
+<!-- POND -->
+<ellipse cx="330" cy="748" rx="118" ry="80" fill="#7dd4e8" stroke="#4a9ab8" stroke-width="1"/>
+<ellipse cx="330" cy="748" rx="97" ry="64" fill="#aeeeff" opacity="0.6"/>
+<ellipse cx="330" cy="748" rx="60" ry="40" fill="#c8f4ff" opacity="0.5"/>
+<text x="330" y="753" text-anchor="middle" font-family="Arial" font-size="13" font-weight="bold" fill="#0C447C">Pond</text>
+
+<!-- PLAYGROUND -->
+<rect x="496" y="668" width="100" height="54" fill="#f4c0d1" rx="5" stroke="#d4537e" stroke-width="0.5"/>
+<text x="546" y="692" text-anchor="middle" font-family="Arial" font-size="10" font-weight="bold" fill="#791F1F">Playground</text>
+<text x="546" y="708" text-anchor="middle" font-family="Arial" font-size="8" fill="#993556">Equipment area</text>
+
+<!-- PUTT PUTT -->
+<rect x="614" y="572" width="120" height="58" fill="#97C459" rx="6" stroke="#3B6D11" stroke-width="0.5"/>
+<text x="674" y="596" text-anchor="middle" font-family="Arial" font-size="10" font-weight="bold" fill="#173404">Putt-putt</text>
+<text x="674" y="613" text-anchor="middle" font-family="Arial" font-size="10" font-weight="bold" fill="#173404">course</text>
+
+<!-- GOLF ACCURACY RANGE -->
+<rect x="54" y="920" width="220" height="46" fill="#639922" rx="6" stroke="#3B6D11" stroke-width="0.5"/>
+<text x="164" y="948" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="white">Golf Accuracy Range</text>
+
+<!-- Title -->
+<rect x="210" y="1042" width="400" height="28" fill="#2B2B2B" rx="6"/>
+<text x="410" y="1061" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="white">Cady Hollow Campground — Port Allegany, PA</text>
+
+</svg>

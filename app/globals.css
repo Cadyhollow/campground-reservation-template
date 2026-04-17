@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+/* Dark background inputs - white text */
+.bg-gray-800 input,
+.bg-gray-800 input[type="text"],
+.bg-gray-800 input[type="email"],
+.bg-gray-800 input[type="tel"],
+.bg-gray-800 input[type="number"],
+.bg-gray-800 textarea,
+.bg-gray-800 select {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}
+
+/* Dark autofill */
+.bg-gray-800 input:-webkit-autofill,
+.bg-gray-800 input:-webkit-autofill:hover,
+.bg-gray-800 input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0px 1000px #1f2937 inset !important;
+  -webkit-text-fill-color: #ffffff !important;
+}
+
+/* Light background inputs - dark text */
+.bg-white input,
+.bg-white input[type="text"],
+.bg-white input[type="email"],
+.bg-white input[type="tel"],
+.bg-white input[type="number"],
+.bg-white select,
+.bg-white textarea {
+  color: #111111 !important;
+  -webkit-text-fill-color: #111111 !important;
+}
