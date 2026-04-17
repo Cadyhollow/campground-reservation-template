@@ -70,15 +70,15 @@ function ConfirmationContent() {
       {/* Header */}
       <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: '#2B2B2B' }}>
         <Image
-          src="/images/Cadylogo.png"
-          alt="Cady Hollow"
+          src="/images/logo.png"
+          alt="Campground Logo"
           width={48}
           height={48}
           className="rounded-full"
           style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }}
         />
         <div>
-          <h1 className="text-white font-bold">Cady Hollow Campground</h1>
+          <h1 className="text-white font-bold">Campground</h1>
           <p className="text-sm" style={{ color: '#3DBDD4' }}>Reservation Confirmed</p>
         </div>
       </div>
@@ -189,8 +189,8 @@ function ConfirmationContent() {
         <div className="text-center space-y-4">
           <p className="text-gray-400 text-sm">
             Questions? Contact us at{' '}
-            <a href="mailto:info@cadyhollow.com" style={{ color: '#3DBDD4' }}>
-              info@cadyhollow.com
+            <a href="mailto:info@example.com" style={{ color: '#3DBDD4' }}>
+              info@example.com
             </a>
           </p>
           <Link
