@@ -41,14 +41,14 @@ export default function AdminLoginPage() {
         {/* Logo */}
         <div className="text-center mb-8">
           <Image
-            src="/images/Cadylogo.png"
-            alt="Cady Hollow"
+            src="/images/logo.png"
+            alt="Campground Logo"
             width={100}
             height={100}
             className="rounded-full mx-auto mb-4"
             style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }}
           />
-          <h1 className="text-white font-bold text-xl">Cady Hollow Campground</h1>
+          <h1 className="text-white font-bold text-xl">{process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}</h1>
           <p className="text-sm mt-1" style={{ color: '#3DBDD4' }}>Admin Dashboard</p>
         </div>
 
@@ -88,7 +88,7 @@ export default function AdminLoginPage() {
         </div>
 
         <p className="text-center text-gray-600 text-xs mt-6">
-          © 2026 Cady Hollow Campground
+          © 2026 {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}
         </p>
       </div>
     </main>
