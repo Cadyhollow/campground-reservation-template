@@ -15,11 +15,11 @@ type Addon = {
 
 const WAIVER_TEXT = `CADY HOLLOW CAMPGROUND LIABILITY WAIVER
 
-In consideration of myself and all persons entering under my supervision including visitors, the undersigned hereby waive, release and forever discharge Cady Hollow Campground, its owners, affiliates, managers, members, agents, attorneys, employees, staff, volunteers, heirs, executors, administrators, representatives, predecessors, successors and assigns from any claims resulting from physical or personal injury, pain, suffering, illness, disfigurement, temporary or permanent disability, loss or death, and any property damage that may occur caused by fire, theft, vandalism, water or land-related accidents, natural events or any other occurrences or mishaps.
+In consideration of myself and all persons entering under my supervision including visitors, the undersigned hereby waive, release and forever discharge {campgroundName}, its owners, affiliates, managers, members, agents, attorneys, employees, staff, volunteers, heirs, executors, administrators, representatives, predecessors, successors and assigns from any claims resulting from physical or personal injury, pain, suffering, illness, disfigurement, temporary or permanent disability, loss or death, and any property damage that may occur caused by fire, theft, vandalism, water or land-related accidents, natural events or any other occurrences or mishaps.
 
-We are here of our free will, and entirely at our own risk. I acknowledge that camping has many hazards and that there are risks that cannot be eliminated, particularly in a wilderness environment. We understand that these injuries or outcomes may arise by our own or others' negligence or conditions on the premises or the conditions or our use of amenities offered at the premises or related to travel to and from the premises. Nonetheless, we assume all related risks, both known and unknown. Cady Hollow Campground is not responsible for errors, omissions, acts or failures to act of any party or entity conducting a specific event or activity. I fully understand that this is a release of liability and I agree to voluntarily give up or waive any right that I otherwise have to bring legal action against Cady Hollow Campground or its owners, for any personal injury or property damage whatsoever for negligence on the part of Cady Hollow Campground or its owners, agents and employees. This waiver and release of liability shall remain in effect for the duration of my presence at the premises.
+We are here of our free will, and entirely at our own risk. I acknowledge that camping has many hazards and that there are risks that cannot be eliminated, particularly in a wilderness environment. We understand that these injuries or outcomes may arise by our own or others' negligence or conditions on the premises or the conditions or our use of amenities offered at the premises or related to travel to and from the premises. Nonetheless, we assume all related risks, both known and unknown. {campgroundName} is not responsible for errors, omissions, acts or failures to act of any party or entity conducting a specific event or activity. I fully understand that this is a release of liability and I agree to voluntarily give up or waive any right that I otherwise have to bring legal action against {campgroundName} or its owners, for any personal injury or property damage whatsoever for negligence on the part of {campgroundName} or its owners, agents and employees. This waiver and release of liability shall remain in effect for the duration of my presence at the premises.
 
-We further agree to indemnify, defend, and hold harmless Rian and Charissa Chiaravalloti and Cady Hollow Campground, against any and all claims, suits or actions of any kind whatsoever for liability, damages, compensation or otherwise brought by me or anyone on my behalf, including attorney's fees and any related costs.
+We further agree to indemnify, defend, and hold harmless {ownerNames} and {campgroundName}, against any and all claims, suits or actions of any kind whatsoever for liability, damages, compensation or otherwise brought by me or anyone on my behalf, including attorney's fees and any related costs.
 
 I acknowledge that children must be supervised at all times. No child may swim in the pool without an adult parent or guardian present. There is no lifeguard on duty and the pool goes up to 9 feet in depth. Pool is open from Memorial Day to Labor Day and 11-7 daily.`
 
@@ -242,9 +242,9 @@ function BookingForm() {
     <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
       {/* Header */}
       <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: '#2B2B2B' }}>
-        <Image src="/images/Cadylogo.png" alt="Cady Hollow" width={48} height={48} className="rounded-full" style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }} />
+        <Image src="/images/logo.png" alt="Campground Logo" width={48} height={48} className="rounded-full" style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }} />
         <div>
-          <h1 className="text-white font-bold">Cady Hollow Campground</h1>
+          <h1 className="text-white font-bold">{campgroundName}</h1>
           <p className="text-sm" style={{ color: '#3DBDD4' }}>Complete your reservation</p>
         </div>
       </div>
@@ -363,7 +363,7 @@ function BookingForm() {
                       className="w-4 h-4 mt-0.5 accent-teal-500"
                     />
                     <label htmlFor="waiver_agree" className="text-gray-300 text-sm">
-                      I have read, understand, and agree to the Cady Hollow Campground Liability Waiver above. I acknowledge that my electronic signature is legally binding.
+                      I have read, understand, and agree to the {campgroundName} Liability Waiver above. I acknowledge that my electronic signature is legally binding.
                     </label>
                   </div>
 
