@@ -241,7 +241,7 @@ export default function CalendarPage() {
                     <div className="flex items-center justify-between mb-1">
                       <span
                         className="text-sm font-semibold w-6 h-6 flex items-center justify-center rounded-full"
-                        style={{ backgroundColor: todayFlag ? '#3DBDD4' : 'transparent', color: todayFlag ? 'white' : '#374151' }}
+                        style={{ backgroundColor: todayFlag ? 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' : 'transparent', color: todayFlag ? 'white' : '#374151' }}
                       >
                         {day}
                       </span>
@@ -374,7 +374,7 @@ export default function CalendarPage() {
                 
                   <a href={'/admin/reservations?id=' + selected.id}
                   className="mt-4 w-full block text-center py-2 rounded-lg text-sm font-medium text-white"
-                  style={{ backgroundColor: '#3DBDD4' }}
+                  style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}
                 >
                   View Full Reservation
                 </a>
@@ -397,7 +397,7 @@ export default function CalendarPage() {
                     <th
                       key={day}
                       className="text-center text-xs font-semibold py-2 border-b border-gray-100 w-9"
-                      style={{ color: isToday(day) ? '#3DBDD4' : '#6b7280' }}
+                      style={{ color: isToday(day) ? 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' : '#6b7280' }}
                     >
                       {day}
                     </th>
@@ -515,7 +515,7 @@ export default function CalendarPage() {
                 
                   <a href={'/admin/reservations?id=' + selected.id}
                   className="mt-4 w-full block text-center py-2 rounded-lg text-sm font-medium text-white"
-                  style={{ backgroundColor: '#3DBDD4' }}
+                  style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}
                 >
                   View Full Reservation
                 </a>

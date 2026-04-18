@@ -245,7 +245,7 @@ function BookingForm() {
         <Image src="/images/logo.png" alt="Campground Logo" width={48} height={48} className="rounded-full" style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }} />
         <div>
           <h1 className="text-white font-bold">{campgroundName}</h1>
-          <p className="text-sm" style={{ color: '#3DBDD4' }}>Complete your reservation</p>
+          <p className="text-sm" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>Complete your reservation</p>
         </div>
       </div>
 
@@ -269,7 +269,7 @@ function BookingForm() {
                   <label className="block text-sm font-medium text-gray-300 mb-1">Phone Number *</label>
                   <input className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="(555) 555-5555" type="tel" value={form.guest_phone} onChange={e => setForm({ ...form, guest_phone: e.target.value })} />
                 </div>
-                <button onClick={validateAndContinue} className="w-full py-3 rounded-xl text-white font-semibold transition-colors mt-2" style={{ backgroundColor: '#3DBDD4' }} onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')} onMouseOut={e => (e.currentTarget.style.backgroundColor = '#3DBDD4')}>
+                <button onClick={validateAndContinue} className="w-full py-3 rounded-xl text-white font-semibold transition-colors mt-2" style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }} onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')} onMouseOut={e => (e.currentTarget.style.backgroundColor = 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'')}>
                   Continue to Add-Ons →
                 </button>
               </div>
@@ -278,7 +278,7 @@ function BookingForm() {
                 <p className="text-white font-medium">{form.guest_name}</p>
                 <p>{form.guest_email}</p>
                 <p>{form.guest_phone}</p>
-                <button onClick={() => { setStep(1); setWaiverSigned(false) }} className="text-xs mt-2" style={{ color: '#3DBDD4' }}>Edit</button>
+                <button onClick={() => { setStep(1); setWaiverSigned(false) }} className="text-xs mt-2" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>Edit</button>
               </div>
             )}
           </div>
@@ -296,12 +296,12 @@ function BookingForm() {
                       <div>
                         <p className="text-white font-medium text-sm">{addon.name}</p>
                         {addon.description && <p className="text-gray-400 text-xs">{addon.description}</p>}
-                        <p className="text-sm mt-0.5" style={{ color: '#3DBDD4' }}>${(addon.price / 100).toFixed(2)}</p>
+                        <p className="text-sm mt-0.5" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>${(addon.price / 100).toFixed(2)}</p>
                       </div>
                       <div className="flex items-center gap-2">
                         <button onClick={() => setSelectedAddons(prev => ({ ...prev, [addon.id]: Math.max(0, (prev[addon.id] || 0) - 1) }))} className="w-8 h-8 rounded-full bg-gray-700 text-white font-bold hover:bg-gray-600">-</button>
                         <span className="text-white w-6 text-center">{selectedAddons[addon.id] || 0}</span>
-                        <button onClick={() => setSelectedAddons(prev => ({ ...prev, [addon.id]: (prev[addon.id] || 0) + 1 }))} className="w-8 h-8 rounded-full text-white font-bold" style={{ backgroundColor: '#3DBDD4' }}>+</button>
+                        <button onClick={() => setSelectedAddons(prev => ({ ...prev, [addon.id]: (prev[addon.id] || 0) + 1 }))} className="w-8 h-8 rounded-full text-white font-bold" style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>+</button>
                       </div>
                     </div>
                   ))}
@@ -313,7 +313,7 @@ function BookingForm() {
                 <h3 className="text-white font-medium mb-3">Discount Code</h3>
                 <div className="flex gap-2">
                   <input className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm uppercase" placeholder="Enter code..." value={discountCode} onChange={e => { setDiscountCode(e.target.value.toUpperCase()); setDiscountResult(null); setDiscountError('') }} />
-                  <button onClick={checkDiscount} disabled={checkingDiscount} className="px-4 py-2 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: '#3DBDD4' }}>{checkingDiscount ? '...' : 'Apply'}</button>
+                  <button onClick={checkDiscount} disabled={checkingDiscount} className="px-4 py-2 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>{checkingDiscount ? '...' : 'Apply'}</button>
                 </div>
                 {discountError && <p className="text-red-400 text-sm mt-2">{discountError}</p>}
                 {discountResult && <p className="text-green-400 text-sm mt-2">✓ {discountResult.discount_type === 'percent' ? `${discountResult.discount_value}% discount applied!` : `$${(discountResult.discount_value / 100).toFixed(2)} discount applied!`}</p>}
@@ -370,9 +370,9 @@ function BookingForm() {
                   <button
                     onClick={acceptWaiver}
                     className="w-full py-3 rounded-xl text-white font-semibold transition-colors"
-                    style={{ backgroundColor: '#3DBDD4' }}
+                    style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}
                     onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-                    onMouseOut={e => (e.currentTarget.style.backgroundColor = '#3DBDD4')}
+                    onMouseOut={e => (e.currentTarget.style.backgroundColor = 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'')}
                   >
                     Accept Waiver & Continue to Payment →
                   </button>
@@ -380,7 +380,7 @@ function BookingForm() {
               ) : (
                 <div className="pt-4 border-t border-gray-700">
                   <p className="text-green-400 font-medium">✓ Liability waiver signed</p>
-                  <button onClick={() => { setWaiverSigned(false); setStep(2) }} className="text-xs mt-1" style={{ color: '#3DBDD4' }}>Re-sign</button>
+                  <button onClick={() => { setWaiverSigned(false); setStep(2) }} className="text-xs mt-1" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>Re-sign</button>
                 </div>
               )}
             </div>
@@ -442,7 +442,7 @@ function BookingForm() {
                 <button
                   disabled={paymentLoading || !squareLoaded}
                   className="w-full py-3 rounded-xl font-semibold border-2 transition-colors disabled:opacity-50"
-                  style={{ borderColor: '#3DBDD4', color: '#3DBDD4', backgroundColor: 'transparent' }}
+                  style={{ borderColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'', color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'', backgroundColor: 'transparent' }}
                   onClick={() => handlePayment('deposit')}
                 >
                   {paymentLoading && selectedPaymentType === 'deposit' ? 'Processing...' : `Pay Deposit — $${(deposit / 100).toFixed(2)}`}
@@ -451,9 +451,9 @@ function BookingForm() {
                 <button
                   disabled={paymentLoading || !squareLoaded}
                   className="w-full py-3 rounded-xl text-white font-semibold transition-colors disabled:opacity-50"
-                  style={{ backgroundColor: '#3DBDD4' }}
+                  style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}
                   onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-                  onMouseOut={e => (e.currentTarget.style.backgroundColor = '#3DBDD4')}
+                  onMouseOut={e => (e.currentTarget.style.backgroundColor = 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'')}
                   onClick={() => handlePayment('full')}
                 >
                   {paymentLoading && selectedPaymentType === 'full' ? 'Processing...' : `Pay in Full — $${(total / 100).toFixed(2)}`}
@@ -477,7 +477,7 @@ function BookingForm() {
               <div className="border-t border-gray-700 pt-3">
                 <div className="flex justify-between">
                   <p className="text-white font-bold">Total</p>
-                  <p className="font-bold text-lg" style={{ color: '#3DBDD4' }}>${(total / 100).toFixed(2)}</p>
+                  <p className="font-bold text-lg" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>${(total / 100).toFixed(2)}</p>
                 </div>
               </div>
             </div>
