@@ -49,7 +49,7 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
   const isAvailable = availableSiteIds.includes(site.id)
   
   if (!isAvailable) return '#d1d5db'
-  if (selectedSiteId === site.id) return 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4''
+  if (selectedSiteId === site.id) return 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)''
   if (hoveredNum === num) return '#6ee7b7'
   
   if (num === 'C1') return '#f5e07a'
@@ -158,7 +158,7 @@ export default function CampgroundMap({ sites, availableSiteIds, selectedSiteId,
     <span className="text-gray-600">Not available for selected dates</span>
   </div>
   <div className="flex items-center gap-1.5">
-    <div className="w-3 h-3 rounded-sm border-2" style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'', borderColor: '#0e7490' }}/>
+    <div className="w-3 h-3 rounded-sm border-2" style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'', borderColor: '#0e7490' }}/>
     <span className="text-gray-600">Selected</span>
   </div>
 </div>

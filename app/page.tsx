@@ -104,7 +104,7 @@ export default function HomePage() {
           />
         </div>
         <h1 className="text-3xl font-bold text-white mb-2">Welcome to {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || 'Our Campground'}</h1>
-        <p className="text-lg mb-1" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>{process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || 'Location'}</p>
+        <p className="text-lg mb-1" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>{process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || 'Location'}</p>
         <p className="text-gray-400 mb-8 max-w-md">
           Your home away from home. Book your perfect campsite, cabin, or tent site today.
         </p>
@@ -180,9 +180,9 @@ export default function HomePage() {
           <button
             onClick={handleSearch}
             className="w-full py-3 rounded-xl text-white font-semibold text-lg transition-colors"
-            style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}
+            style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}
             onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-            onMouseOut={e => (e.currentTarget.style.backgroundColor = 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'')}
+            onMouseOut={e => (e.currentTarget.style.backgroundColor = 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'')}
           >
             Search Available Sites
           </button>
@@ -220,7 +220,7 @@ export default function HomePage() {
             <button
               onClick={() => { setStep(1); setSelectedSite(null) }}
               className="text-sm px-4 py-2 rounded-lg"
-              style={{ backgroundColor: '#2B2B2B', color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}
+              style={{ backgroundColor: '#2B2B2B', color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}
             >
               ← Change Dates
             </button>
@@ -235,7 +235,7 @@ export default function HomePage() {
     <div className="text-6xl mb-4">❄️</div>
     <p className="text-white text-xl font-bold mb-3">We're Closed for the Season</p>
     <p className="text-gray-400 mb-4">{closedMessage}</p>
-    <p className="text-sm" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>
+    <p className="text-sm" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>
       We are open from {seasonStart} through {seasonEnd}
     </p>
   </div>
@@ -271,7 +271,7 @@ export default function HomePage() {
           }`}
           style={{
             backgroundColor: '#2B2B2B',
-            outline: selectedSite?.id === site.id ? '2px solid #3DBDD4' : 'none',
+            outline: selectedSite?.id === site.id ? '2px solid var(--accent-color)' : 'none',
           }}
         >
           <div className="flex items-start justify-between mb-3">
@@ -279,7 +279,7 @@ export default function HomePage() {
               <h3 className="text-white font-bold text-lg">
                 {site.site_type === 'rv_site' ? 'RV Site' : site.site_type === 'cabin' ? 'Cabin' : 'Tent Site'} {site.site_number}
               </h3>
-              <p className="text-sm" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>
+              <p className="text-sm" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>
                 {site.site_type === 'rv_site' && `${site.amp_service === '30amp' ? '30 Amp' : '30/50 Amp'} · ${site.hookups === 'full' ? 'Full Hookup' : 'Water & Electric'}`}
                 {site.site_type === 'cabin' && 'Private Cabin'}
                 {site.site_type === 'tent' && 'Tent Site'}
@@ -305,7 +305,7 @@ export default function HomePage() {
           )}
           {site.meets_min_stay && selectedSite?.id === site.id && (
             <div className="mt-3 pt-3 border-t border-gray-600">
-              <p className="text-sm font-medium" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>
+              <p className="text-sm font-medium" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>
                 Selected — scroll down to continue
               </p>
             </div>
@@ -330,9 +330,9 @@ export default function HomePage() {
                 </div>
                 <button
                   className="px-8 py-3 rounded-xl text-white font-semibold transition-colors"
-                  style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}
+                  style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}
                   onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-                  onMouseOut={e => (e.currentTarget.style.backgroundColor = 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'')}
+                  onMouseOut={e => (e.currentTarget.style.backgroundColor = 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'')}
                   onClick={handleContinue}
                 >
                   Continue →

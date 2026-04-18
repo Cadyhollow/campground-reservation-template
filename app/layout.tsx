@@ -27,9 +27,9 @@ async function getAccentColor() {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
     const { data } = await supabase.from('settings').select('accent_color').eq('id', 1).single();
-    return data?.accent_color || '#3DBDD4';
+    return data?.accent_color || 'var(--accent-color)';
   } catch {
-    return '#3DBDD4';
+    return 'var(--accent-color)';
   }
 }
 

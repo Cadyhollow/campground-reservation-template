@@ -79,7 +79,7 @@ function ConfirmationContent() {
         />
         <div>
           <h1 className="text-white font-bold">Campground</h1>
-          <p className="text-sm" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>Reservation Confirmed</p>
+          <p className="text-sm" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>Reservation Confirmed</p>
         </div>
       </div>
 
@@ -90,7 +90,7 @@ function ConfirmationContent() {
           <h2 className="text-3xl font-bold text-white mb-2">You're all set!</h2>
           <p className="text-gray-400 mb-2">
             Your reservation is confirmed. A confirmation email has been sent to{' '}
-            <span style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>{reservation.guest_email}</span>
+            <span style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>{reservation.guest_email}</span>
           </p>
           <p className="text-gray-500 text-sm">
             Confirmation #{reservation.id.slice(0, 8).toUpperCase()}
@@ -161,19 +161,19 @@ function ConfirmationContent() {
           <h3 className="text-white font-bold text-lg mb-4">Important Information</h3>
           <div className="space-y-3 text-sm text-gray-300">
             <div className="flex gap-3">
-              <span style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>✓</span>
+              <span style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>✓</span>
               <p>Check-in is at <span className="text-white font-medium">2:00 PM</span>. Please check in at the office upon arrival.</p>
             </div>
             <div className="flex gap-3">
-              <span style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>✓</span>
+              <span style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>✓</span>
               <p>Check-out is at <span className="text-white font-medium">12:00 PM (noon)</span>.</p>
             </div>
             <div className="flex gap-3">
-              <span style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>✓</span>
+              <span style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>✓</span>
               <p>All pets must be on a leash at all times.</p>
             </div>
             <div className="flex gap-3">
-              <span style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>✓</span>
+              <span style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>✓</span>
               <p>Cancellations must be made at least <span className="text-white font-medium">7 days before arrival</span> by contacting us directly.</p>
             </div>
             {reservation.amount_paid < reservation.total_price && (
@@ -189,14 +189,14 @@ function ConfirmationContent() {
         <div className="text-center space-y-4">
           <p className="text-gray-400 text-sm">
             Questions? Contact us at{' '}
-            <a href="mailto:info@example.com" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}>
+            <a href="mailto:info@example.com" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>
               info@example.com
             </a>
           </p>
           <Link
             href="/"
             className="inline-block px-8 py-3 rounded-xl text-white font-semibold"
-            style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || '#3DBDD4'' }}
+            style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}
           >
             Make Another Reservation
           </Link>
