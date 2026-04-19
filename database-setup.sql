@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS settings (
   cancellation_policy text DEFAULT '',
   closed_season_message text DEFAULT '',
   accent_color text DEFAULT '#3DBDD4',
-  liability_waiver_text text DEFAULT ''
+  liability_waiver_text text DEFAULT '',
+  show_site_map boolean DEFAULT false
 );
 
 -- Reservations table
