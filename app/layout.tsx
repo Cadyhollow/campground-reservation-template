@@ -16,8 +16,8 @@ const geistMono = Geist_Mono({
 const campgroundName = process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground";
 
 export const metadata: Metadata = {
-  title: `${campgroundName} - Reservations`,
-  description: `Book your stay at ${campgroundName}.`,
+  title: `${process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} - Reservations`,
+  description: `Book your stay at ${process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}.`,
 };
 
 export default function RootLayout({

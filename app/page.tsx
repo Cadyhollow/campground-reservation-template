@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Image from 'next/image'
 import CampgroundMap from './components/CampgroundMap'
+import { supabase } from '@/lib/supabase'
 
 type Site = {
   id: string
@@ -34,8 +35,12 @@ export default function HomePage() {
   const [closedMessage, setClosedMessage] = useState('')
   const [seasonStart, setSeasonStart] = useState('')
   const [seasonEnd, setSeasonEnd] = useState('')
+  const [settings, setSettings] = useState<any>(null)
 
   const today = new Date().toISOString().split('T')[0]
+
+  // Fetch settings on load
+  useState(() => { supabase.from('settings').select('*').limit(1).single().then(({ data }) => { if (data) setSettings(data) }) })
 
   async function handleSearch() {
     if (!arrival || !departure) {
@@ -104,7 +109,7 @@ export default function HomePage() {
           />
         </div>
         <h1 className="text-3xl font-bold text-white mb-2">Welcome to {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || 'Our Campground'}</h1>
-        <p className="text-lg mb-1" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>{process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || 'Location'}</p>
+        <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || 'Location'}</p>
         <p className="text-gray-400 mb-8 max-w-md">
           Your home away from home. Book your perfect campsite, cabin, or tent site today.
         </p>
@@ -180,9 +185,9 @@ export default function HomePage() {
           <button
             onClick={handleSearch}
             className="w-full py-3 rounded-xl text-white font-semibold text-lg transition-colors"
-            style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}
+            style={{ backgroundColor: 'var(--accent-color)' }}
             onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-            onMouseOut={e => (e.currentTarget.style.backgroundColor = 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'')}
+            onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}
           >
             Search Available Sites
           </button>
@@ -220,7 +225,7 @@ export default function HomePage() {
             <button
               onClick={() => { setStep(1); setSelectedSite(null) }}
               className="text-sm px-4 py-2 rounded-lg"
-              style={{ backgroundColor: '#2B2B2B', color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}
+              style={{ backgroundColor: '#2B2B2B', color: 'var(--accent-color)' }}
             >
               ← Change Dates
             </button>
@@ -235,7 +240,7 @@ export default function HomePage() {
     <div className="text-6xl mb-4">❄️</div>
     <p className="text-white text-xl font-bold mb-3">We're Closed for the Season</p>
     <p className="text-gray-400 mb-4">{closedMessage}</p>
-    <p className="text-sm" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>
+    <p className="text-sm" style={{ color: 'var(--accent-color)' }}>
       We are open from {seasonStart} through {seasonEnd}
     </p>
   </div>
@@ -246,19 +251,20 @@ export default function HomePage() {
   </div>
 ) : (
   <>
-    {/* Interactive Map */}
-    <div className="rounded-2xl p-4 mb-6" style={{ backgroundColor: '#2B2B2B' }}>
-      <h3 className="text-white font-semibold mb-3 text-sm">
-        Click a site on the map to select it — <span className="text-gray-400">grey = not available for selected dates</span>
-      </h3>
-      <CampgroundMap
-        sites={sites}
-        availableSiteIds={sites.filter(s => s.meets_min_stay !== false).map(s => s.id)}
-        selectedSiteId={selectedSite?.id}
-       onSelectSite={(site) => setSelectedSite(site as any)}
-        nights={Math.round((new Date(departure).getTime() - new Date(arrival).getTime()) / (1000 * 60 * 60 * 24))}
-      />
-    </div>
+    {/* Interactive Map - only shown if show_site_map is enabled in settings */}
+    {settings?.show_site_map && (
+      <div className="rounded-2xl p-4 mb-6" style={{ backgroundColor: '#2B2B2B' }}>
+        <h3 className="text-white font-semibold mb-3 text-sm">
+          Click a site on the map to select it — <span className="text-gray-400">grey = not available for selected dates</span>
+        </h3>
+        <CampgroundMap
+          onSiteSelect={(site) => setSelectedSite(site as any)}
+          arrival={arrival}
+          departure={departure}
+          bookedSiteIds={sites.filter(s => s.meets_min_stay === false).map(s => s.id)}
+        />
+      </div>
+    )}
 
     {/* Site Cards */}
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -279,7 +285,7 @@ export default function HomePage() {
               <h3 className="text-white font-bold text-lg">
                 {site.site_type === 'rv_site' ? 'RV Site' : site.site_type === 'cabin' ? 'Cabin' : 'Tent Site'} {site.site_number}
               </h3>
-              <p className="text-sm" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>
+              <p className="text-sm" style={{ color: 'var(--accent-color)' }}>
                 {site.site_type === 'rv_site' && `${site.amp_service === '30amp' ? '30 Amp' : '30/50 Amp'} · ${site.hookups === 'full' ? 'Full Hookup' : 'Water & Electric'}`}
                 {site.site_type === 'cabin' && 'Private Cabin'}
                 {site.site_type === 'tent' && 'Tent Site'}
@@ -305,7 +311,7 @@ export default function HomePage() {
           )}
           {site.meets_min_stay && selectedSite?.id === site.id && (
             <div className="mt-3 pt-3 border-t border-gray-600">
-              <p className="text-sm font-medium" style={{ color: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}>
+              <p className="text-sm font-medium" style={{ color: 'var(--accent-color)' }}>
                 Selected — scroll down to continue
               </p>
             </div>
@@ -330,9 +336,9 @@ export default function HomePage() {
                 </div>
                 <button
                   className="px-8 py-3 rounded-xl text-white font-semibold transition-colors"
-                  style={{ backgroundColor: 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'' }}
+                  style={{ backgroundColor: 'var(--accent-color)' }}
                   onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-                  onMouseOut={e => (e.currentTarget.style.backgroundColor = 'process.env.NEXT_PUBLIC_COLOR_ACCENT || 'var(--accent-color)'')}
+                  onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}
                   onClick={handleContinue}
                 >
                   Continue →
