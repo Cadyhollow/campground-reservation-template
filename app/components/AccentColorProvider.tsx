@@ -10,7 +10,7 @@ export default function AccentColorProvider() {
         const { data } = await supabase
           .from('settings')
           .select('accent_color')
-          .eq('id', 1)
+          .limit(1)
           .single()
         
         if (data?.accent_color) {
