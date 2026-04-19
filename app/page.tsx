@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Image from 'next/image'
 import CampgroundMap from './components/CampgroundMap'
 import { supabase } from '@/lib/supabase'
@@ -40,7 +40,7 @@ export default function HomePage() {
   const today = new Date().toISOString().split('T')[0]
 
   // Fetch settings on load
-  useState(() => { supabase.from('settings').select('*').limit(1).single().then(({ data }) => { if (data) setSettings(data) }) })
+  useEffect(() => { supabase.from('settings').select('*').limit(1).single().then(({ data }) => { if (data) setSettings(data) }) }, [])
 
   async function handleSearch() {
     if (!arrival || !departure) {

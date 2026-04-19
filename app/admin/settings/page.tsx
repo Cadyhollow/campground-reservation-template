@@ -20,6 +20,7 @@ const defaultSettings = {
   base_occupancy_children: 2,
   cancellation_policy: '',
   accent_color: '#2D6A4F',
+  show_site_map: false,
   season_start: 'May 1',
   season_end: 'October 11',
   closed_season_message: 'We are closed for the season. We look forward to welcoming you back next year!',
@@ -53,6 +54,7 @@ export default function SettingsPage() {
         base_occupancy_children: data.base_occupancy_children || 2,
         cancellation_policy: data.cancellation_policy || '',
         accent_color: data.accent_color || '#2D6A4F',
+        show_site_map: data.show_site_map || false,
         season_start: data.season_start || 'May 1',
         season_end: data.season_end || 'October 11',
         closed_season_message: data.closed_season_message || 'We are closed for the season. We look forward to welcoming you back next year!',
@@ -79,6 +81,7 @@ export default function SettingsPage() {
       base_occupancy_children: form.base_occupancy_children,
       cancellation_policy: form.cancellation_policy,
       accent_color: form.accent_color,
+      show_site_map: form.show_site_map,
       season_start: form.season_start,
       season_end: form.season_end,
       closed_season_message: form.closed_season_message,
@@ -121,7 +124,7 @@ export default function SettingsPage() {
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Phone</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_phone} onChange={e => setForm({ ...form, park_phone: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Address</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_address} onChange={e => setForm({ ...form, park_address: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Website</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_website} onChange={e => setForm({ ...form, park_website: e.target.value })} /></div>
-            <div><label className="block text-sm font-medium text-gray-700 mb-1">Brand Color</label><div className="flex items-center gap-3"><input type="color" className="w-12 h-10 rounded border border-gray-200 cursor-pointer" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /><input className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /></div></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Show Site Map</label><div className="flex items-center gap-3"><input type="checkbox" checked={form.show_site_map} onChange={e => setForm({ ...form, show_site_map: e.target.checked })} className="w-5 h-5 rounded" /><span className="text-sm text-gray-600">{form.show_site_map ? 'Map is visible to guests' : 'List view shown to guests'}</span></div></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Brand Color</label><div className="flex items-center gap-3"><input type="color" className="w-12 h-10 rounded border border-gray-200 cursor-pointer" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /><input className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /></div></div>
           </div>
         </div>
 
