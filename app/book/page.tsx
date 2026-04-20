@@ -423,7 +423,7 @@ function BookingForm() {
   </p>
   <p className="text-gray-300 text-xs leading-relaxed">
     <span className="text-white font-medium">ℹ️ Pricing: </span>
-    All prices include taxes and fees — no surprises at checkout.
+    
   </p>
 </div>
 

@@ -117,3 +117,14 @@ CREATE TABLE IF NOT EXISTS cancellation_rules (
 -- Insert default rows
 INSERT INTO settings (id, park_name) VALUES (1, 'My Campground') ON CONFLICT (id) DO NOTHING;
 INSERT INTO cancellation_rules (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- Fees table (taxes and other charges)
+CREATE TABLE IF NOT EXISTS fees (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  name text NOT NULL,
+  type text NOT NULL CHECK (type IN ('percentage', 'flat')),
+  amount numeric NOT NULL,
+  applies_to text DEFAULT 'all',
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);

@@ -14,6 +14,7 @@ const navigation = [
   { name: 'Min. Stay Rules', href: '/admin/min-stay' },
   { name: 'Cancellation Rules', href: '/admin/cancellation-rules' },
   { name: 'Add-Ons', href: '/admin/addons' },
+  { name: 'Taxes \& Fees', href: '/admin/fees' },
   { name: 'Discounts', href: '/admin/discounts' },
   { name: 'Blocked Dates', href: '/admin/blocked-dates' },
   { name: 'Settings', href: '/admin/settings' },

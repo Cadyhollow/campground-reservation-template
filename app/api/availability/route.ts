@@ -111,6 +111,11 @@ export async function GET(request: NextRequest) {
     (new Date(departure).getTime() - new Date(arrival).getTime()) / (1000 * 60 * 60 * 24)
   )
 
+  const { data: fees } = await supabase
+    .from('fees')
+    .select('*')
+    .eq('is_active', true)
+
   const sitesWithPricing = availableSites.map(site => {
     const applicableRules = pricingRules?.filter(rule => {
       if (rule.site_id) return rule.site_id === site.id
@@ -131,10 +136,29 @@ export async function GET(request: NextRequest) {
       ? Math.max(...applicableMinStay.map(r => r.min_nights))
       : 1
 
+    const basePrice = nightlyRate * nights
+
+    const applicableFees = (fees || []).filter(fee =>
+      fee.applies_to === 'all' || fee.applies_to === site.site_type
+    )
+
+    const feeBreakdown = applicableFees.map(fee => ({
+      name: fee.name,
+      type: fee.type,
+      amount: fee.type === 'percentage'
+        ? parseFloat((basePrice * fee.amount / 100).toFixed(2))
+        : parseFloat(fee.amount.toFixed(2)),
+    }))
+
+    const feesTotal = feeBreakdown.reduce((sum, f) => sum + f.amount, 0)
+
     return {
       ...site,
       nightly_rate: nightlyRate,
-      total_price: nightlyRate * nights,
+      base_price: basePrice,
+      fees_breakdown: feeBreakdown,
+      fees_total: feesTotal,
+      total_price: parseFloat((basePrice + feesTotal).toFixed(2)),
       nights,
       min_stay: minStay,
       meets_min_stay: nights >= minStay,
