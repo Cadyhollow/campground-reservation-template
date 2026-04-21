@@ -75,17 +75,24 @@ CREATE TABLE IF NOT EXISTS reservations (
 CREATE TABLE IF NOT EXISTS blocked_dates (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   site_id uuid REFERENCES sites(id),
-  blocked_date date NOT NULL,
-  reason text
+  date date NOT NULL,
+  end_date date,
+  reason text,
+  notes text DEFAULT '',
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
 );
 
 -- Addons table
 CREATE TABLE IF NOT EXISTS addons (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   name text NOT NULL,
-  price numeric NOT NULL,
   description text,
-  is_active boolean DEFAULT true
+  price integer NOT NULL DEFAULT 0,
+  is_early_checkin boolean DEFAULT false,
+  is_active boolean DEFAULT true,
+  display_order integer DEFAULT 0,
+  created_at timestamptz DEFAULT now()
 );
 
 -- Reservation addons table
@@ -101,17 +108,28 @@ CREATE TABLE IF NOT EXISTS reservation_addons (
 CREATE TABLE IF NOT EXISTS discounts (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   code text UNIQUE NOT NULL,
-  type text NOT NULL,
-  amount numeric NOT NULL,
-  is_active boolean DEFAULT true
+  description text DEFAULT '',
+  discount_type text NOT NULL DEFAULT 'percentage',
+  discount_value numeric NOT NULL DEFAULT 0,
+  valid_from date,
+  valid_until date,
+  max_uses integer,
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
 );
 
 -- Cancellation rules table
 CREATE TABLE IF NOT EXISTS cancellation_rules (
-  id integer PRIMARY KEY DEFAULT 1,
-  full_refund_days integer DEFAULT 7,
-  partial_refund_days integer DEFAULT 3,
-  partial_refund_percent numeric DEFAULT 50
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  name text DEFAULT '',
+  start_date date,
+  end_date date,
+  deposit_refundable boolean DEFAULT true,
+  refund_percent numeric DEFAULT 100,
+  cancellation_deadline_days integer DEFAULT 7,
+  policy_text text DEFAULT '',
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
 );
 
 -- Insert default rows
