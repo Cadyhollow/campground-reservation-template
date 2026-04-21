@@ -21,6 +21,7 @@ const defaultSettings = {
   cancellation_policy: '',
   accent_color: '#2D6A4F',
   show_site_map: false,
+  admin_password: '',
   season_start: 'May 1',
   season_end: 'October 11',
   closed_season_message: 'We are closed for the season. We look forward to welcoming you back next year!',
@@ -55,6 +56,7 @@ export default function SettingsPage() {
         cancellation_policy: data.cancellation_policy || '',
         accent_color: data.accent_color || '#2D6A4F',
         show_site_map: data.show_site_map || false,
+        admin_password: '',
         season_start: data.season_start || 'May 1',
         season_end: data.season_end || 'October 11',
         closed_season_message: data.closed_season_message || 'We are closed for the season. We look forward to welcoming you back next year!',
@@ -82,10 +84,10 @@ export default function SettingsPage() {
       cancellation_policy: form.cancellation_policy,
       accent_color: form.accent_color,
       show_site_map: form.show_site_map,
+      ...(form.admin_password ? { admin_password: form.admin_password } : {}),
       season_start: form.season_start,
       season_end: form.season_end,
       closed_season_message: form.closed_season_message,
-      updated_at: new Date().toISOString(),
     }
     if (settingsId) {
       const { error } = await supabase.from('settings').update(payload).eq('id', settingsId)
