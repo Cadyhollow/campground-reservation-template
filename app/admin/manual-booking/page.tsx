@@ -18,6 +18,7 @@ export default function ManualBookingPage() {
   const [sites, setSites] = useState<Site[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [fees, setFees] = useState<{name:string,type:string,amount:number,applies_to:string}[]>([])
   const [form, setForm] = useState({
     site_id: '',
     arrival_date: '',
@@ -54,7 +55,12 @@ export default function ManualBookingPage() {
   const extraAdults = Math.max(0, form.num_adults - 2)
   const extraChildren = Math.max(0, form.num_children - 2)
   const extraGuestFee = (extraAdults * 1000 + extraChildren * 500) * nights
-  const total = baseTotal + extraGuestFee
+  const applicableFees = selectedSite ? fees.filter(f => f.applies_to === 'all' || f.applies_to === selectedSite.site_type) : []
+  const feesTotal = applicableFees.reduce((sum, f) => sum + (f.type === 'percentage' ? (baseTotal / 100) * f.amount / 100 : f.amount) * 100, 0)
+  const total = baseTotal + extraGuestFee + feesTotal
+
+  // Fetch fees on load
+  if (fees.length === 0) { supabase.from('fees').select('*').eq('is_active', true).then(({data}) => { if (data) setFees(data) }) }
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
   const hookupLabel = (h: string) => ({ full: 'Full Hookup', water_electric: 'Water & Electric', none: 'None' }[h] || h)
@@ -190,7 +196,7 @@ export default function ManualBookingPage() {
                   type="date"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                   value={form.departure_date}
-                  onChange={e => setForm({ ...form, departure_date: e.target.value })}
+                  onChange={e => { if (form.arrival_date && e.target.value && e.target.value <= form.arrival_date) { toast.error('Departure must be after arrival date.'); return; } setForm({ ...form, departure_date: e.target.value }) }}
                 />
               </div>
               <div>
@@ -337,6 +343,12 @@ export default function ManualBookingPage() {
                       <span>${(extraGuestFee / 100).toFixed(2)}</span>
                     </div>
                   )}
+                  {applicableFees.map((fee, i) => (
+                    <div key={i} className="flex justify-between text-gray-600">
+                      <span>{fee.name}</span>
+                      <span>${(fee.type === "percentage" ? (baseTotal / 100) * fee.amount / 100 : fee.amount).toFixed(2)}</span>
+                    </div>
+                  ))}
                   <div className="flex justify-between font-bold text-gray-900 border-t border-gray-100 pt-2 mt-2">
                     <span>Total</span>
                     <span>${(total / 100).toFixed(2)}</span>

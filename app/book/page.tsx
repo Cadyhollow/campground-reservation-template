@@ -15,11 +15,11 @@ type Addon = {
 
 const WAIVER_TEXT = `CADY HOLLOW CAMPGROUND LIABILITY WAIVER
 
-In consideration of myself and all persons entering under my supervision including visitors, the undersigned hereby waive, release and forever discharge {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}, its owners, affiliates, managers, members, agents, attorneys, employees, staff, volunteers, heirs, executors, administrators, representatives, predecessors, successors and assigns from any claims resulting from physical or personal injury, pain, suffering, illness, disfigurement, temporary or permanent disability, loss or death, and any property damage that may occur caused by fire, theft, vandalism, water or land-related accidents, natural events or any other occurrences or mishaps.
+In consideration of myself and all persons entering under my supervision including visitors, the undersigned hereby waive, release and forever discharge Campground, its owners, affiliates, managers, members, agents, attorneys, employees, staff, volunteers, heirs, executors, administrators, representatives, predecessors, successors and assigns from any claims resulting from physical or personal injury, pain, suffering, illness, disfigurement, temporary or permanent disability, loss or death, and any property damage that may occur caused by fire, theft, vandalism, water or land-related accidents, natural events or any other occurrences or mishaps.
 
-We are here of our free will, and entirely at our own risk. I acknowledge that camping has many hazards and that there are risks that cannot be eliminated, particularly in a wilderness environment. We understand that these injuries or outcomes may arise by our own or others' negligence or conditions on the premises or the conditions or our use of amenities offered at the premises or related to travel to and from the premises. Nonetheless, we assume all related risks, both known and unknown. {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} is not responsible for errors, omissions, acts or failures to act of any party or entity conducting a specific event or activity. I fully understand that this is a release of liability and I agree to voluntarily give up or waive any right that I otherwise have to bring legal action against {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} or its owners, for any personal injury or property damage whatsoever for negligence on the part of {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} or its owners, agents and employees. This waiver and release of liability shall remain in effect for the duration of my presence at the premises.
+We are here of our free will, and entirely at our own risk. I acknowledge that camping has many hazards and that there are risks that cannot be eliminated, particularly in a wilderness environment. We understand that these injuries or outcomes may arise by our own or others' negligence or conditions on the premises or the conditions or our use of amenities offered at the premises or related to travel to and from the premises. Nonetheless, we assume all related risks, both known and unknown. Campground is not responsible for errors, omissions, acts or failures to act of any party or entity conducting a specific event or activity. I fully understand that this is a release of liability and I agree to voluntarily give up or waive any right that I otherwise have to bring legal action against Campground or its owners, for any personal injury or property damage whatsoever for negligence on the part of Campground or its owners, agents and employees. This waiver and release of liability shall remain in effect for the duration of my presence at the premises.
 
-We further agree to indemnify, defend, and hold harmless {ownerNames} and {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}, against any and all claims, suits or actions of any kind whatsoever for liability, damages, compensation or otherwise brought by me or anyone on my behalf, including attorney's fees and any related costs.
+We further agree to indemnify, defend, and hold harmless The Owners and Campground, against any and all claims, suits or actions of any kind whatsoever for liability, damages, compensation or otherwise brought by me or anyone on my behalf, including attorney's fees and any related costs.
 
 I acknowledge that children must be supervised at all times. No child may swim in the pool without an adult parent or guardian present. There is no lifeguard on duty and the pool goes up to 9 feet in depth. Pool is open from Memorial Day to Labor Day and 11-7 daily.`
 
@@ -45,6 +45,22 @@ function BookingForm() {
   const [cancellationPolicy, setCancellationPolicy] = useState<any>(null)
   const [waiverSigned, setWaiverSigned] = useState(false)
   const [waiverChecked, setWaiverChecked] = useState(false)
+  const [feesBreakdown, setFeesBreakdown] = useState<{ name: string; amount: number }[]>([])
+
+  useEffect(() => {
+    supabase.from("fees").select("*").eq("is_active", true).then(({ data }) => {
+      if (data && site.total_price) {
+        const basePrice = site.total_price / 100
+        const breakdown = data
+          .filter(f => f.applies_to === "all" || f.applies_to === site.site_type)
+          .map(f => ({
+            name: f.name,
+            amount: f.type === "percentage" ? parseFloat((basePrice * f.amount / 100).toFixed(2)) : parseFloat(f.amount.toFixed(2))
+          }))
+        setFeesBreakdown(breakdown)
+      }
+    })
+  }, [])
   const [hasSignature, setHasSignature] = useState(false)
 
   const site = {
@@ -244,7 +260,7 @@ function BookingForm() {
       <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: '#2B2B2B' }}>
         <Image src="/images/logo.png" alt="Campground Logo" width={48} height={48} className="rounded-full" style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }} />
         <div>
-          <h1 className="text-white font-bold">{process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}</h1>
+          <h1 className="text-white font-bold">Campground</h1>
           <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Complete your reservation</p>
         </div>
       </div>
@@ -363,7 +379,7 @@ function BookingForm() {
                       className="w-4 h-4 mt-0.5 accent-teal-500"
                     />
                     <label htmlFor="waiver_agree" className="text-gray-300 text-sm">
-                      I have read, understand, and agree to the {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} Liability Waiver above. I acknowledge that my electronic signature is legally binding.
+                      I have read, understand, and agree to the Campground Liability Waiver above. I acknowledge that my electronic signature is legally binding.
                     </label>
                   </div>
 
@@ -400,6 +416,12 @@ function BookingForm() {
                 {extraGuestFee > 0 && <div className="flex justify-between text-gray-300"><span>Extra guest fees</span><span>${(extraGuestFee / 100).toFixed(2)}</span></div>}
                 {addonTotal > 0 && <div className="flex justify-between text-gray-300"><span>Add-ons</span><span>${(addonTotal / 100).toFixed(2)}</span></div>}
                 {discountAmount > 0 && <div className="flex justify-between text-green-400"><span>Discount ({discountResult.code})</span><span>-${(discountAmount / 100).toFixed(2)}</span></div>}
+                {feesBreakdown.map((fee, i) => (
+                  <div key={i} className="flex justify-between text-gray-300">
+                    <span>{fee.name}</span>
+                    <span>${fee.amount.toFixed(2)}</span>
+                  </div>
+                ))}
                 <div className="border-t border-gray-700 pt-2 flex justify-between text-white font-bold">
                   <span>Total</span><span>${(total / 100).toFixed(2)}</span>
                 </div>
@@ -421,10 +443,7 @@ function BookingForm() {
     <span className="text-white font-medium">ℹ️ Site Selection: </span>
     Site choice is not guaranteed — we will do our best to honor your selection.
   </p>
-  <p className="text-gray-300 text-xs leading-relaxed">
-    <span className="text-white font-medium">ℹ️ Pricing: </span>
-    
-  </p>
+
 </div>
 
               {/* Square Card Form */}
