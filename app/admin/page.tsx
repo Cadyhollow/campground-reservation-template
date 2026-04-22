@@ -1,9 +1,14 @@
 'use client'
+import { useEffect, useState } from 'react'
+import { supabase } from '@/lib/supabase'
 
-import { useState } from 'react'
 import Image from 'next/image'
 
 export default function HomePage() {
+  const [settings, setSettings] = useState<any>({})
+  useEffect(() => {
+    supabase.from('settings').select('*').limit(1).single().then(({ data }) => { if (data) setSettings(data) })
+  }, [])
   const [step, setStep] = useState(1)
   const [arrival, setArrival] = useState('')
   const [departure, setDeparture] = useState('')
@@ -45,7 +50,7 @@ export default function HomePage() {
         <h1 className="text-3xl font-bold text-white mb-2">Welcome to {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}</h1>
         <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || "Location"}</p>
         <p className="text-gray-400 mb-8 max-w-md">
-          Your home away from home. Book your perfect campsite, cabin, or tent site today.
+          {settings?.park_tagline || "Book your perfect campsite, cabin, or tent site today."}
         </p>
 
         {/* Search Box */}
