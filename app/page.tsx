@@ -1,5 +1,4 @@
 'use client'
-
 import { useState, useEffect } from 'react'
 import Image from 'next/image'
 import CampgroundMap from './components/CampgroundMap'
@@ -39,25 +38,15 @@ export default function HomePage() {
 
   const today = new Date().toISOString().split('T')[0]
 
-  // Fetch settings on load
   useEffect(() => { supabase.from('settings').select('*').limit(1).single().then(({ data }) => { if (data) setSettings(data) }) }, [])
 
   async function handleSearch() {
-    if (!arrival || !departure) {
-      alert('Please select both arrival and departure dates.')
-      return
-    }
-    if (departure <= arrival) {
-      alert('Departure date must be after arrival date.')
-      return
-    }
+    if (!arrival || !departure) { alert('Please select both arrival and departure dates.'); return }
+    if (departure <= arrival) { alert('Departure date must be after arrival date.'); return }
     setLoading(true)
     setStep(2)
     setSelectedSite(null)
-
-    const res = await fetch(
-      `/api/availability?arrival=${arrival}&departure=${departure}&siteType=${siteType}`
-    )
+    const res = await fetch(`/api/availability?arrival=${arrival}&departure=${departure}&siteType=${siteType}`)
     const data = await res.json()
     setSites(data.sites || [])
     setIsClosed(data.closed || false)
@@ -97,17 +86,23 @@ export default function HomePage() {
       {/* Hero Section */}
       <div className="flex flex-col items-center justify-center px-4 py-16 text-center"
         style={{ backgroundColor: '#2B2B2B' }}>
-        <div className="mb-6">
+
+        <div className={`mb-6 overflow-hidden flex items-center justify-center ${
+          settings?.logo_shape === 'circle' ? 'w-40 h-40 rounded-full' :
+          settings?.logo_shape === 'rounded' ? 'w-40 h-40 rounded-xl' :
+          settings?.logo_shape === 'square' ? 'w-40 h-40 rounded-none' :
+          'w-40 h-24'
+        }`}>
           <Image
             src={settings?.logo_url || '/images/logo.png'}
             alt={settings?.park_name || 'Campground'}
             width={160}
             height={160}
-            className="rounded-full mx-auto"
-            style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }}
+            className="object-contain w-full h-full"
             priority
           />
         </div>
+
         <h1 className="text-3xl font-bold text-white mb-2">Welcome to {settings?.park_name || 'Our Campground'}</h1>
         <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{settings?.park_location || 'Location'}</p>
         <p className="text-gray-400 mb-8 max-w-md">
@@ -120,61 +115,32 @@ export default function HomePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Arrival Date</label>
-              <input
-                type="date"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                min={today}
-                value={arrival}
-                onChange={e => {
-                  setArrival(e.target.value)
-                  if (departure && departure <= e.target.value) setDeparture('')
-                }}
-              />
+              <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" min={today} value={arrival}
+                onChange={e => { setArrival(e.target.value); if (departure && departure <= e.target.value) setDeparture('') }} />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Departure Date</label>
-              <input
-                type="date"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                min={arrival || today}
-                value={departure}
-                onChange={e => setDeparture(e.target.value)}
-              />
+              <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" min={arrival || today} value={departure}
+                onChange={e => setDeparture(e.target.value)} />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Guests</label>
               <div className="flex gap-2">
                 <div className="flex-1">
-                  <input
-                    type="number"
-                    min={1}
-                    max={20}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                    value={adults}
-                    onChange={e => setAdults(parseInt(e.target.value))}
-                  />
+                  <input type="number" min={1} max={20} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={adults}
+                    onChange={e => setAdults(parseInt(e.target.value))} />
                   <p className="text-xs text-gray-400 mt-0.5 text-center">Adults</p>
                 </div>
                 <div className="flex-1">
-                  <input
-                    type="number"
-                    min={0}
-                    max={20}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                    value={children}
-                    onChange={e => setChildren(parseInt(e.target.value))}
-                  />
+                  <input type="number" min={0} max={20} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={children}
+                    onChange={e => setChildren(parseInt(e.target.value))} />
                   <p className="text-xs text-gray-400 mt-0.5 text-center">Children</p>
                 </div>
               </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Site Type</label>
-              <select
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                value={siteType}
-                onChange={e => setSiteType(e.target.value)}
-              >
+              <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={siteType} onChange={e => setSiteType(e.target.value)}>
                 <option value="all">All Types</option>
                 <option value="rv_site">RV Sites</option>
                 <option value="cabin">Cabins</option>
@@ -182,13 +148,11 @@ export default function HomePage() {
               </select>
             </div>
           </div>
-          <button
-            onClick={handleSearch}
+          <button onClick={handleSearch}
             className="w-full py-3 rounded-xl text-white font-semibold text-lg transition-colors"
             style={{ backgroundColor: 'var(--accent-color)' }}
             onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-            onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}
-          >
+            onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}>
             Search Available Sites
           </button>
         </div>
@@ -222,122 +186,92 @@ export default function HomePage() {
                 {children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}
               </p>
             </div>
-            <button
-              onClick={() => { setStep(1); setSelectedSite(null) }}
+            <button onClick={() => { setStep(1); setSelectedSite(null) }}
               className="text-sm px-4 py-2 rounded-lg"
-              style={{ backgroundColor: '#2B2B2B', color: 'var(--accent-color)' }}
-            >
+              style={{ backgroundColor: '#2B2B2B', color: 'var(--accent-color)' }}>
               ← Change Dates
             </button>
           </div>
 
-        {loading ? (
-  <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
-    <p className="text-gray-400 text-lg">Searching for available sites...</p>
-  </div>
-) : isClosed ? (
-  <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
-    <div className="text-6xl mb-4">❄️</div>
-    <p className="text-white text-xl font-bold mb-3">We're Closed for the Season</p>
-    <p className="text-gray-400 mb-4">{closedMessage}</p>
-    <p className="text-sm" style={{ color: 'var(--accent-color)' }}>
-      We are open from {seasonStart} through {seasonEnd}
-    </p>
-  </div>
-) : sites.length === 0 ? (
-  <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
-    <p className="text-white text-lg font-semibold mb-2">No sites available</p>
-    <p className="text-gray-400">Try different dates or a different site type.</p>
-  </div>
-) : (
-  <>
-    {settings?.show_site_map && (
-      <div className="rounded-2xl p-4 mb-6" style={{ backgroundColor: '#2B2B2B' }}>
-        <h3 className="text-white font-semibold mb-3 text-sm">
-          Click a site on the map to select it — <span className="text-gray-400">grey = not available for selected dates</span>
-        </h3>
-        <CampgroundMap
-          onSiteSelect={(site) => setSelectedSite(site as any)}
-          arrival={arrival}
-          departure={departure}
-          bookedSiteIds={sites.filter(s => s.meets_min_stay === false).map(s => s.id)}
-        />
-      </div>
-    )}
-
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {sites.map(site => (
-        <div
-          key={site.id}
-          onClick={() => site.meets_min_stay && setSelectedSite(site)}
-          className={`rounded-2xl p-6 transition-all ${
-            site.meets_min_stay ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
-          }`}
-          style={{
-            backgroundColor: '#2B2B2B',
-            outline: selectedSite?.id === site.id ? '2px solid var(--accent-color)' : 'none',
-          }}
-        >
-          <div className="flex items-start justify-between mb-3">
-            <div>
-              <h3 className="text-white font-bold text-lg">
-                {site.site_type === 'rv_site' ? 'RV Site' : site.site_type === 'cabin' ? 'Cabin' : 'Tent Site'} {site.site_number}
-              </h3>
-              <p className="text-sm" style={{ color: 'var(--accent-color)' }}>
-                {site.site_type === 'rv_site' && `${site.amp_service === '30amp' ? '30 Amp' : '30/50 Amp'} · ${site.hookups === 'full' ? 'Full Hookup' : 'Water & Electric'}`}
-                {site.site_type === 'cabin' && 'Private Cabin'}
-                {site.site_type === 'tent' && 'Tent Site'}
-              </p>
+          {loading ? (
+            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+              <p className="text-gray-400 text-lg">Searching for available sites...</p>
             </div>
-            <div className="text-right">
-              <p className="text-white font-bold text-xl">
-                ${(site.nightly_rate / 100).toFixed(0)}<span className="text-sm font-normal text-gray-400">/night</span>
-              </p>
-              <p className="text-sm text-gray-400">${(site.total_price / 100).toFixed(0)} total</p>
+          ) : isClosed ? (
+            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+              <div className="text-6xl mb-4">❄️</div>
+              <p className="text-white text-xl font-bold mb-3">We're Closed for the Season</p>
+              <p className="text-gray-400 mb-4">{closedMessage}</p>
+              <p className="text-sm" style={{ color: 'var(--accent-color)' }}>We are open from {seasonStart} through {seasonEnd}</p>
             </div>
-          </div>
-          {site.max_rv_length && (
-            <p className="text-gray-400 text-sm mb-2">Max RV length: {site.max_rv_length}ft</p>
-          )}
-          {site.description && (
-            <p className="text-gray-400 text-sm mb-2">{site.description}</p>
-          )}
-          {!site.meets_min_stay && (
-            <p className="text-yellow-400 text-sm mt-2">
-              Minimum {site.min_stay} nights required for this site
-            </p>
-          )}
-          {site.meets_min_stay && selectedSite?.id === site.id && (
-            <div className="mt-3 pt-3 border-t border-gray-600">
-              <p className="text-sm font-medium" style={{ color: 'var(--accent-color)' }}>
-                Selected — scroll down to continue
-              </p>
+          ) : sites.length === 0 ? (
+            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+              <p className="text-white text-lg font-semibold mb-2">No sites available</p>
+              <p className="text-gray-400">Try different dates or a different site type.</p>
             </div>
+          ) : (
+            <>
+              {settings?.show_site_map && (
+                <div className="rounded-2xl p-4 mb-6" style={{ backgroundColor: '#2B2B2B' }}>
+                  <h3 className="text-white font-semibold mb-3 text-sm">
+                    Click a site on the map to select it — <span className="text-gray-400">grey = not available for selected dates</span>
+                  </h3>
+                  <CampgroundMap
+                    onSiteSelect={(site) => setSelectedSite(site as any)}
+                    arrival={arrival}
+                    departure={departure}
+                    bookedSiteIds={sites.filter(s => s.meets_min_stay === false).map(s => s.id)}
+                  />
+                </div>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {sites.map(site => (
+                  <div key={site.id}
+                    onClick={() => site.meets_min_stay && setSelectedSite(site)}
+                    className={`rounded-2xl p-6 transition-all ${site.meets_min_stay ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'}`}
+                    style={{ backgroundColor: '#2B2B2B', outline: selectedSite?.id === site.id ? '2px solid var(--accent-color)' : 'none' }}>
+                    <div className="flex items-start justify-between mb-3">
+                      <div>
+                        <h3 className="text-white font-bold text-lg">
+                          {site.site_type === 'rv_site' ? 'RV Site' : site.site_type === 'cabin' ? 'Cabin' : 'Tent Site'} {site.site_number}
+                        </h3>
+                        <p className="text-sm" style={{ color: 'var(--accent-color)' }}>
+                          {site.site_type === 'rv_site' && `${site.amp_service === '30amp' ? '30 Amp' : '30/50 Amp'} · ${site.hookups === 'full' ? 'Full Hookup' : 'Water & Electric'}`}
+                          {site.site_type === 'cabin' && 'Private Cabin'}
+                          {site.site_type === 'tent' && 'Tent Site'}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-white font-bold text-xl">${(site.nightly_rate / 100).toFixed(0)}<span className="text-sm font-normal text-gray-400">/night</span></p>
+                        <p className="text-sm text-gray-400">${(site.total_price / 100).toFixed(0)} total</p>
+                      </div>
+                    </div>
+                    {site.max_rv_length && <p className="text-gray-400 text-sm mb-2">Max RV length: {site.max_rv_length}ft</p>}
+                    {site.description && <p className="text-gray-400 text-sm mb-2">{site.description}</p>}
+                    {!site.meets_min_stay && <p className="text-yellow-400 text-sm mt-2">Minimum {site.min_stay} nights required for this site</p>}
+                    {site.meets_min_stay && selectedSite?.id === site.id && (
+                      <div className="mt-3 pt-3 border-t border-gray-600">
+                        <p className="text-sm font-medium" style={{ color: 'var(--accent-color)' }}>Selected — scroll down to continue</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
           )}
-        </div>
-      ))}
-    </div>
-  </>
-)}
 
           {selectedSite && (
             <div className="mt-8 rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-white font-semibold">
-                    {siteTypeLabel(selectedSite.site_type)} {selectedSite.site_number} selected
-                  </p>
-                  <p className="text-gray-400 text-sm">
-                    {selectedSite.nights} nights · ${(selectedSite.total_price / 100).toFixed(2)} total
-                  </p>
+                  <p className="text-white font-semibold">{siteTypeLabel(selectedSite.site_type)} {selectedSite.site_number} selected</p>
+                  <p className="text-gray-400 text-sm">{selectedSite.nights} nights · ${(selectedSite.total_price / 100).toFixed(2)} total</p>
                 </div>
-                <button
-                  className="px-8 py-3 rounded-xl text-white font-semibold transition-colors"
+                <button className="px-8 py-3 rounded-xl text-white font-semibold transition-colors"
                   style={{ backgroundColor: 'var(--accent-color)' }}
                   onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
                   onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}
-                  onClick={handleContinue}
-                >
+                  onClick={handleContinue}>
                   Continue →
                 </button>
               </div>
