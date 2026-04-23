@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import AccentColorProvider from "./components/AccentColorProvider";
+import { createClient } from "@supabase/supabase-js";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,12 +14,23 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const campgroundName = process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground";
+async function getSettings() {
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+  const { data } = await supabase.from('settings').select('park_name').limit(1).single();
+  return data;
+}
 
-export const metadata: Metadata = {
-  title: `${process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} - Reservations`,
-  description: `Book your stay at ${process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}.`,
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const settings = await getSettings();
+  const name = settings?.park_name || "Campground";
+  return {
+    title: `${name} - Reservations`,
+    description: `Book your stay at ${name}.`,
+  };
+}
 
 export default function RootLayout({
   children,

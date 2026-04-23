@@ -1,8 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
 
 const navigation = [
   { name: 'Dashboard', href: '/admin' },
@@ -28,6 +29,13 @@ export default function AdminLayout({
 }) {
   const pathname = usePathname()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [settings, setSettings] = useState<any>(null)
+
+  useEffect(() => {
+    supabase.from('settings').select('park_name').limit(1).single().then(({ data }) => {
+      if (data) setSettings(data)
+    })
+  }, [])
 
   async function handleLogout() {
     await fetch('/api/admin-auth', { method: 'DELETE' })
@@ -54,7 +62,7 @@ export default function AdminLayout({
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
         `}>
           <div className="hidden lg:block px-6 py-6 border-b border-green-700">
-            <h1 className="text-xl font-bold">{process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}</h1>
+            <h1 className="text-xl font-bold">{settings?.park_name || 'Campground'}</h1>
             <p className="text-green-300 text-sm mt-1">Admin Dashboard</p>
           </div>
 

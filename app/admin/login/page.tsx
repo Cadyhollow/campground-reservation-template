@@ -1,14 +1,22 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
+import { supabase } from '@/lib/supabase'
 
 export default function AdminLoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [settings, setSettings] = useState<any>(null)
   const router = useRouter()
+
+  useEffect(() => {
+    supabase.from('settings').select('park_name, logo_url').limit(1).single().then(({ data }) => {
+      if (data) setSettings(data)
+    })
+  }, [])
 
   async function handleLogin() {
     if (!password) { setError('Please enter the password.'); return }
@@ -41,14 +49,14 @@ export default function AdminLoginPage() {
         {/* Logo */}
         <div className="text-center mb-8">
           <Image
-            src="/images/logo.png"
-            alt="Campground Logo"
+            src={settings?.logo_url || '/images/logo.png'}
+            alt={settings?.park_name || 'Campground Logo'}
             width={100}
             height={100}
             className="rounded-full mx-auto mb-4"
             style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }}
           />
-          <h1 className="text-white font-bold text-xl">{process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}</h1>
+          <h1 className="text-white font-bold text-xl">{settings?.park_name || 'Campground'}</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--accent-color)' }}>Admin Dashboard</p>
         </div>
 
@@ -88,7 +96,7 @@ export default function AdminLoginPage() {
         </div>
 
         <p className="text-center text-gray-600 text-xs mt-6">
-          © 2026 {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}
+          © 2026 {settings?.park_name || 'Campground'}
         </p>
       </div>
     </main>

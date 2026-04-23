@@ -99,8 +99,8 @@ export default function HomePage() {
         style={{ backgroundColor: '#2B2B2B' }}>
         <div className="mb-6">
           <Image
-            src="/images/logo.png"
-            alt={process.env.NEXT_PUBLIC_CAMPGROUND_NAME || 'Campground'}
+            src={settings?.logo_url || '/images/logo.png'}
+            alt={settings?.park_name || 'Campground'}
             width={160}
             height={160}
             className="rounded-full mx-auto"
@@ -108,8 +108,8 @@ export default function HomePage() {
             priority
           />
         </div>
-        <h1 className="text-3xl font-bold text-white mb-2">Welcome to {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || 'Our Campground'}</h1>
-        <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || 'Location'}</p>
+        <h1 className="text-3xl font-bold text-white mb-2">Welcome to {settings?.park_name || 'Our Campground'}</h1>
+        <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{settings?.park_location || 'Location'}</p>
         <p className="text-gray-400 mb-8 max-w-md">
           {settings?.park_tagline || "Book your perfect campsite, cabin, or tent site today."}
         </p>
@@ -251,7 +251,6 @@ export default function HomePage() {
   </div>
 ) : (
   <>
-    {/* Interactive Map - only shown if show_site_map is enabled in settings */}
     {settings?.show_site_map && (
       <div className="rounded-2xl p-4 mb-6" style={{ backgroundColor: '#2B2B2B' }}>
         <h3 className="text-white font-semibold mb-3 text-sm">
@@ -266,7 +265,6 @@ export default function HomePage() {
       </div>
     )}
 
-    {/* Site Cards */}
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {sites.map(site => (
         <div
@@ -322,7 +320,6 @@ export default function HomePage() {
   </>
 )}
 
-          {/* Continue Button */}
           {selectedSite && (
             <div className="mt-8 rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
               <div className="flex items-center justify-between">
@@ -351,7 +348,7 @@ export default function HomePage() {
 
       {/* Footer */}
       <div className="text-center py-8 text-gray-600 text-sm">
-        © 2026 {process.env.NEXT_PUBLIC_CAMPGROUND_NAME} · {process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || 'Location'}
+        © 2026 {settings?.park_name || 'Campground'} · {settings?.park_location || 'Location'}
       </div>
     </main>
   )

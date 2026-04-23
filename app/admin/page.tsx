@@ -1,7 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-
 import Image from 'next/image'
 
 export default function HomePage() {
@@ -38,8 +37,8 @@ export default function HomePage() {
         style={{ backgroundColor: '#2B2B2B' }}>
         <div className="mb-6">
           <Image
-            src="/images/logo.png"
-            alt="Campground Logo"
+            src={settings?.logo_url || '/images/logo.png'}
+            alt={settings?.park_name || 'Campground Logo'}
             width={160}
             height={160}
             className="rounded-full mx-auto"
@@ -47,8 +46,8 @@ export default function HomePage() {
             priority
           />
         </div>
-        <h1 className="text-3xl font-bold text-white mb-2">Welcome to {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}</h1>
-        <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || "Location"}</p>
+        <h1 className="text-3xl font-bold text-white mb-2">Welcome to {settings?.park_name || 'Our Campground'}</h1>
+        <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{settings?.park_location || 'Location'}</p>
         <p className="text-gray-400 mb-8 max-w-md">
           {settings?.park_tagline || "Book your perfect campsite, cabin, or tent site today."}
         </p>
@@ -179,7 +178,7 @@ export default function HomePage() {
 
       {/* Footer */}
       <div className="text-center py-8 text-gray-600 text-sm">
-        © 2026 {process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} · {process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || "Location"}
+        © 2026 {settings?.park_name || 'Campground'} · {settings?.park_location || 'Location'}
       </div>
     </main>
   )

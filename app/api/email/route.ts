@@ -1,7 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
+import { createClient } from '@supabase/supabase-js'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
+
+async function getSettings() {
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  )
+  const { data } = await supabase
+    .from('settings')
+    .select('park_name, park_location, park_email')
+    .limit(1)
+    .single()
+  return data
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,6 +36,13 @@ export async function POST(request: NextRequest) {
       confirmationNumber,
     } = body
 
+    const settings = await getSettings()
+    const campgroundName = settings?.park_name || 'Campground'
+    const campgroundLocation = settings?.park_location || ''
+    const contactEmail = settings?.park_email || process.env.RESEND_FROM_EMAIL || 'reservations@example.com'
+    const fromEmail = process.env.RESEND_FROM_EMAIL || 'reservations@example.com'
+    const replyToEmail = settings?.park_email || process.env.RESEND_FROM_EMAIL || 'info@example.com'
+
     const siteTypeLabel = (type: string) =>
       ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
 
@@ -29,8 +50,8 @@ export async function POST(request: NextRequest) {
 
     // Customer confirmation email
     await resend.emails.send({
- from: '${process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} <${process.env.RESEND_FROM_EMAIL || "reservations@example.com"}>',
- replyTo: '${process.env.REPLY_TO_EMAIL || "info@example.com"}',
+      from: `${campgroundName} <${fromEmail}>`,
+      replyTo: replyToEmail,
       to: guestEmail,
       subject: `Reservation Confirmed — ${siteTypeLabel(siteType)} ${siteNumber} · ${arrival}`,
       html: `
@@ -45,8 +66,8 @@ export async function POST(request: NextRequest) {
             
             <!-- Header -->
             <div style="background-color:#2B2B2B;padding:32px;text-align:center;">
-              <h1 style="color:#ffffff;margin:0 0 4px;font-size:24px;">${process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"}</h1>
-              <p style="color:var(--accent-color);margin:0;font-size:14px;">${process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || "Location"}</p>
+              <h1 style="color:#ffffff;margin:0 0 4px;font-size:24px;">${campgroundName}</h1>
+              <p style="color:#9CA3AF;margin:0;font-size:14px;">${campgroundLocation}</p>
             </div>
 
             <!-- Success Banner -->
@@ -108,7 +129,7 @@ export async function POST(request: NextRequest) {
             <!-- Important Info -->
             <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
               <h3 style="color:#ffffff;margin:0 0 16px;font-size:18px;">Important Information</h3>
-              <div style="space-y:8px;">
+              <div>
                 <p style="color:#9CA3AF;font-size:14px;margin:0 0 8px;">✓ Check-in is at <strong style="color:#ffffff;">2:00 PM</strong>. Please check in at the office upon arrival.</p>
                 <p style="color:#9CA3AF;font-size:14px;margin:0 0 8px;">✓ Check-out is at <strong style="color:#ffffff;">12:00 PM (noon)</strong>.</p>
                 <p style="color:#9CA3AF;font-size:14px;margin:0 0 8px;">✓ All pets must be on a leash at all times.</p>
@@ -119,8 +140,8 @@ export async function POST(request: NextRequest) {
             <!-- Contact -->
             <div style="margin:16px;padding:24px;text-align:center;">
               <p style="color:#6B7280;font-size:14px;margin:0 0 4px;">Questions? We're happy to help!</p>
-              <a href="mailto:${process.env.NEXT_PUBLIC_CONTACT_EMAIL || "info@example.com"}" style="color:var(--accent-color);font-size:14px;">${process.env.NEXT_PUBLIC_CONTACT_EMAIL || "info@example.com"}</a>
-              <p style="color:#4B5563;font-size:12px;margin:16px 0 0;">© 2026 ${process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} · ${process.env.NEXT_PUBLIC_CAMPGROUND_LOCATION || "Location"}</p>
+              <a href="mailto:${contactEmail}" style="color:#12c9e5;font-size:14px;">${contactEmail}</a>
+              <p style="color:#4B5563;font-size:12px;margin:16px 0 0;">© 2026 ${campgroundName} · ${campgroundLocation}</p>
             </div>
 
           </div>
@@ -131,9 +152,9 @@ export async function POST(request: NextRequest) {
 
     // Staff notification email
     await resend.emails.send({
-     from: '${process.env.NEXT_PUBLIC_CAMPGROUND_NAME || "Campground"} <${process.env.RESEND_FROM_EMAIL || "reservations@example.com"}>',
-     replyTo: '${process.env.REPLY_TO_EMAIL || "info@example.com"}',
-      to: '${process.env.NEXT_PUBLIC_CONTACT_EMAIL || "info@example.com"}',
+      from: `${campgroundName} <${fromEmail}>`,
+      replyTo: replyToEmail,
+      to: contactEmail,
       subject: `New Reservation — ${siteTypeLabel(siteType)} ${siteNumber} · ${arrival}`,
       html: `
         <!DOCTYPE html>
