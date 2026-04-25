@@ -118,7 +118,7 @@ export default function SitesPage() {
     fetchSites()
   }
 
-  const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent' }[type] || type)
+  const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent', yurt: 'Yurt', tiny_home: 'Tiny Home', lodge: 'Lodge Room', glamping: 'Glamping', treehouse: 'Treehouse' }[type] || type)
   const hookupLabel = (h: string) => ({ full: 'Full Hookup', water_electric: 'Water & Electric', none: 'None' }[h] || h)
   const ampLabel = (a: string) => ({ '30amp': '30 Amp', '30_50amp': '30/50 Amp', none: 'N/A' }[a] || a)
 
@@ -161,6 +161,11 @@ export default function SitesPage() {
                 <option value="rv_site">RV Site</option>
                 <option value="cabin">Cabin</option>
                 <option value="tent">Tent Site</option>
+                <option value="yurt">Yurt</option>
+                <option value="tiny_home">Tiny Home</option>
+                <option value="lodge">Lodge Room</option>
+                <option value="glamping">Glamping</option>
+                <option value="treehouse">Treehouse</option>
               </select>
             </div>
             <div>

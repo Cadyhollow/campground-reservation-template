@@ -35,10 +35,19 @@ export default function HomePage() {
   const [seasonStart, setSeasonStart] = useState('')
   const [seasonEnd, setSeasonEnd] = useState('')
   const [settings, setSettings] = useState<any>(null)
+  const [siteTypes, setSiteTypes] = useState<string[]>([])
 
   const today = new Date().toISOString().split('T')[0]
 
-  useEffect(() => { supabase.from('settings').select('*').limit(1).single().then(({ data }) => { if (data) setSettings(data) }) }, [])
+  useEffect(() => {
+    supabase.from('settings').select('*').limit(1).single().then(({ data }) => { if (data) setSettings(data) })
+    supabase.from('sites').select('site_type').then(({ data }) => {
+      if (data) {
+        const types = [...new Set(data.map((s: any) => s.site_type))]
+        setSiteTypes(types)
+      }
+    })
+  }, [])
 
   async function handleSearch() {
     if (!arrival || !departure) { alert('Please select both arrival and departure dates.'); return }
@@ -78,6 +87,17 @@ export default function HomePage() {
       children: children.toString(),
     })
     window.location.href = `/book?${params.toString()}`
+  }
+
+  const siteTypeInfo: Record<string, { icon: string; label: string; desc: string }> = {
+    rv_site: { icon: '🏕️', label: 'RV Sites', desc: 'Full hookup and water & electric sites available with 30 and 30/50 amp service.' },
+    cabin: { icon: '🛖', label: 'Cabins', desc: 'Cozy cabins for a comfortable glamping experience in the great outdoors.' },
+    tent: { icon: '⛺', label: 'Tent Sites', desc: 'Back to nature tent camping with easy access to all park amenities.' },
+    yurt: { icon: '🏠', label: 'Yurts', desc: 'Unique circular yurt accommodations blending comfort with nature.' },
+    tiny_home: { icon: '🏡', label: 'Tiny Homes', desc: 'Fully equipped tiny homes for a cozy and modern camping experience.' },
+    lodge: { icon: '🏰', label: 'Lodge Rooms', desc: 'Comfortable lodge rooms with all the amenities you need.' },
+    glamping: { icon: '✨', label: 'Glamping', desc: 'Glamorous camping with luxury amenities in a beautiful natural setting.' },
+    treehouse: { icon: '🌲', label: 'Treehouses', desc: 'Unique treehouse accommodations nestled among the treetops.' },
   }
 
   return (
@@ -159,19 +179,18 @@ export default function HomePage() {
       </div>
 
       {/* Feature Cards */}
-      {step === 1 && (
+      {step === 1 && siteTypes.length > 0 && (
         <div className="max-w-5xl mx-auto px-4 py-16 grid grid-cols-1 md:grid-cols-3 gap-8 text-center">
-          {[
-            { icon: '🏕️', title: 'RV Sites', desc: 'Full hookup and water & electric sites available with 30 and 30/50 amp service.' },
-            { icon: '🛖', title: 'Cozy Cabins', desc: 'Three unique cabins for a comfortable glamping experience in the woods.' },
-            { icon: '⛺', title: 'Tent Sites', desc: 'Back to nature tent camping with easy access to all park amenities.' },
-          ].map(item => (
-            <div key={item.title} className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
-              <div className="text-4xl mb-3">{item.icon}</div>
-              <h3 className="text-white font-bold text-lg mb-2">{item.title}</h3>
-              <p className="text-gray-400 text-sm">{item.desc}</p>
-            </div>
-          ))}
+          {siteTypes.map(type => {
+            const info = siteTypeInfo[type] || { icon: '🏕️', label: type, desc: 'Come enjoy your stay with us.' }
+            return (
+              <div key={type} className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
+                <div className="text-4xl mb-3">{info.icon}</div>
+                <h3 className="text-white font-bold text-lg mb-2">{info.label}</h3>
+                <p className="text-gray-400 text-sm">{info.desc}</p>
+              </div>
+            )
+          })}
         </div>
       )}
 
