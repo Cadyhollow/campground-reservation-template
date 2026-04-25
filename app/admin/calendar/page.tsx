@@ -34,6 +34,11 @@ const SITE_TYPE_COLORS: Record<string, { bg: string; text: string; border: strin
   rv_site: { bg: '#dcfce7', text: '#166534', border: '#86efac' },
   cabin: { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
   tent: { bg: '#dbeafe', text: '#1e40af', border: '#93c5fd' },
+  yurt: { bg: '#fce7f3', text: '#9d174d', border: '#f9a8d4' },
+  tiny_home: { bg: '#ede9fe', text: '#5b21b6', border: '#c4b5fd' },
+  lodge: { bg: '#fee2e2', text: '#991b1b', border: '#fca5a5' },
+  glamping: { bg: '#fff7ed', text: '#9a3412', border: '#fdba74' },
+  treehouse: { bg: '#f0fdf4', text: '#14532d', border: '#86efac' },
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -137,6 +142,11 @@ export default function CalendarPage() {
 
   const siteTypeLabel = (type: string) => {
     if (type === 'rv_site') return 'RV'
+    if (type === 'yurt') return 'Yurt'
+    if (type === 'tiny_home') return 'Tiny Home'
+    if (type === 'lodge') return 'Lodge'
+    if (type === 'glamping') return 'Glamping'
+    if (type === 'treehouse') return 'Treehouse'
     if (type === 'cabin') return 'Cabin'
     if (type === 'tent') return 'Tent'
     return type

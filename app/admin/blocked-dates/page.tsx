@@ -98,7 +98,7 @@ export default function BlockedDatesPage() {
   const siteLabel = (b: BlockedDate) => {
     if (!b.site_id) return 'All Sites'
     return b.sites
-      ? `${b.sites.site_type === 'rv_site' ? 'RV' : b.sites.site_type === 'cabin' ? 'Cabin' : 'Tent'} ${b.sites.site_number}`
+      ? `${({ rv_site: 'RV', cabin: 'Cabin', tent: 'Tent', yurt: 'Yurt', tiny_home: 'Tiny Home', lodge: 'Lodge', glamping: 'Glamping', treehouse: 'Treehouse' }[b.sites.site_type] || b.sites.site_type)} ${b.sites.site_number}`
       : 'Specific Site'
   }
 
@@ -148,7 +148,7 @@ export default function BlockedDatesPage() {
                   <option value="">Select a site...</option>
                   {sites.map(site => (
                     <option key={site.id} value={site.id}>
-                      {site.site_type === 'rv_site' ? 'RV' : site.site_type === 'cabin' ? 'Cabin' : 'Tent'} {site.site_number}
+                      {({ rv_site: 'RV', cabin: 'Cabin', tent: 'Tent', yurt: 'Yurt', tiny_home: 'Tiny Home', lodge: 'Lodge', glamping: 'Glamping', treehouse: 'Treehouse' }[site.site_type] || site.site_type)} {site.site_number}
                     </option>
                   ))}
                 </select>
