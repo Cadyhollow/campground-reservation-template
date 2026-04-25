@@ -78,7 +78,7 @@ export default function ReservationsPage() {
     manual: 'bg-blue-100 text-blue-700',
   }[status] || 'bg-gray-100 text-gray-700')
 
-  const siteTypeLabel = (type: string) => ({ rv_site: 'RV', cabin: 'Cabin', tent: 'Tent' }[type] || type)
+  const siteTypeLabel = (type: string) => ({ rv_site: 'RV', cabin: 'Cabin', tent: 'Tent', yurt: 'Yurt', tiny_home: 'Tiny Home', lodge: 'Lodge', glamping: 'Glamping', treehouse: 'Treehouse' }[type] || type)
 
   const nights = (res: Reservation) => {
     const a = new Date(res.arrival_date)

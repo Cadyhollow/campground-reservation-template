@@ -118,6 +118,11 @@ export default function FeesPage() {
               <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.applies_to} onChange={e => setForm({ ...form, applies_to: e.target.value })}>
                 <option value="all">All Sites</option>
                 <option value="rv_site">RV Sites Only</option>
+                <option value="yurt">Yurts Only</option>
+                <option value="tiny_home">Tiny Homes Only</option>
+                <option value="lodge">Lodge Rooms Only</option>
+                <option value="glamping">Glamping Only</option>
+                <option value="treehouse">Treehouses Only</option>
                 <option value="cabin">Cabins Only</option>
                 <option value="tent">Tent Sites Only</option>
               </select>

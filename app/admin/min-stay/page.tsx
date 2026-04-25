@@ -120,7 +120,7 @@ export default function MinStayPage() {
     fetchData()
   }
 
-  const siteTypeLabel = (type: string) => ({ rv_site: 'All RV Sites', cabin: 'All Cabins', tent: 'All Tent Sites' }[type] || type)
+  const siteTypeLabel = (type: string) => ({ rv_site: 'All RV Sites', cabin: 'All Cabins', tent: 'All Tent Sites', yurt: 'All Yurts', tiny_home: 'All Tiny Homes', lodge: 'All Lodge Rooms', glamping: 'All Glamping', treehouse: 'All Treehouses' }[type] || type)
 
   const targetLabel = (rule: MinStayRule) => {
     if (rule.site_id) {
@@ -182,6 +182,11 @@ export default function MinStayPage() {
                   onChange={e => setForm({ ...form, site_type: e.target.value })}
                 >
                   <option value="rv_site">All RV Sites</option>
+                  <option value="yurt">All Yurts</option>
+                  <option value="tiny_home">All Tiny Homes</option>
+                  <option value="lodge">All Lodge Rooms</option>
+                  <option value="glamping">All Glamping</option>
+                  <option value="treehouse">All Treehouses</option>
                   <option value="cabin">All Cabins</option>
                   <option value="tent">All Tent Sites</option>
                 </select>
