@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Image from 'next/image'
 import CampgroundMap from './components/CampgroundMap'
 import { supabase } from '@/lib/supabase'
@@ -36,6 +36,7 @@ export default function HomePage() {
   const [seasonEnd, setSeasonEnd] = useState('')
   const [settings, setSettings] = useState<any>(null)
   const [siteTypes, setSiteTypes] = useState<string[]>([])
+  const selectedSiteRef = useRef<HTMLDivElement>(null)
 
   const today = new Date().toISOString().split('T')[0]
 
@@ -48,6 +49,11 @@ export default function HomePage() {
       }
     })
   }, [])
+  useEffect(() => {
+    if (selectedSite && selectedSiteRef.current) {
+      selectedSiteRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [selectedSite])
 
   async function handleSearch() {
     if (!arrival || !departure) { alert('Please select both arrival and departure dates.'); return }
@@ -248,7 +254,8 @@ export default function HomePage() {
                   <div key={site.id}
                     onClick={() => site.meets_min_stay && setSelectedSite(site)}
                     className={`rounded-2xl p-6 transition-all ${site.meets_min_stay ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'}`}
-                    style={{ backgroundColor: '#2B2B2B', outline: selectedSite?.id === site.id ? '2px solid var(--accent-color)' : 'none' }}>
+                    ref={selectedSite?.id === site.id ? selectedSiteRef : null}
+style={{ backgroundColor: '#2B2B2B', outline: selectedSite?.id === site.id ? '2px solid var(--accent-color)' : 'none' }}>
                     <div className="flex items-start justify-between mb-3">
                       <div>
                         <h3 className="text-white font-bold text-lg">
