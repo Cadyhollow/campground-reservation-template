@@ -57,3 +57,25 @@ body {
   color: #111111 !important;
   -webkit-text-fill-color: #111111 !important;
 }
+/* iOS Safari fixes */
+input[type="date"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 38px;
+}
+
+/* Prevent horizontal overflow on mobile */
+* {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+input, select, textarea {
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 0.5rem;
+  width: 100%;
+  box-sizing: border-box;
+}
