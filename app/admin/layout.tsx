@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import Image from 'next/image'
 
 const navigation = [
   { name: 'Dashboard', href: '/admin' },
@@ -32,9 +33,14 @@ export default function AdminLayout({
   const [settings, setSettings] = useState<any>(null)
 
   useEffect(() => {
-    supabase.from('settings').select('park_name').limit(1).single().then(({ data }) => {
-      if (data) setSettings(data)
-    })
+    supabase
+      .from('settings')
+      .select('park_name, logo_url, logo_shape')
+      .limit(1)
+      .single()
+      .then(({ data }) => {
+        if (data) setSettings(data)
+      })
   }, [])
 
   async function handleLogout() {
@@ -42,11 +48,29 @@ export default function AdminLayout({
     window.location.href = '/admin/login'
   }
 
+  const logoShapeClass =
+    settings?.logo_shape === 'circle' ? 'rounded-full' :
+    settings?.logo_shape === 'rounded' ? 'rounded-xl' :
+    settings?.logo_shape === 'square' ? 'rounded-none' :
+    'rounded-none'
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top bar for mobile */}
       <div className="lg:hidden bg-green-800 text-white px-4 py-3 flex items-center justify-between">
-        <span className="font-semibold text-lg">Admin</span>
+        {settings?.logo_url ? (
+          <div className={`w-10 h-10 overflow-hidden flex items-center justify-center ${logoShapeClass}`}>
+            <Image
+              src={settings.logo_url}
+              alt={settings?.park_name || 'Campground'}
+              width={40}
+              height={40}
+              className="object-contain w-full h-full"
+            />
+          </div>
+        ) : (
+          <span className="font-semibold text-lg">{settings?.park_name || 'Admin'}</span>
+        )}
         <button onClick={() => setSidebarOpen(!sidebarOpen)} className="text-white">
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
@@ -61,8 +85,20 @@ export default function AdminLayout({
           lg:relative lg:translate-x-0 lg:flex lg:flex-col
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
         `}>
-          <div className="hidden lg:block px-6 py-6 border-b border-green-700">
-            <h1 className="text-xl font-bold">{settings?.park_name || 'Campground'}</h1>
+          {/* Sidebar header with logo */}
+          <div className="hidden lg:flex flex-col items-center px-6 py-6 border-b border-green-700">
+            {settings?.logo_url && (
+              <div className={`w-20 h-20 overflow-hidden flex items-center justify-center mb-3 ${logoShapeClass}`}>
+                <Image
+                  src={settings.logo_url}
+                  alt={settings?.park_name || 'Campground'}
+                  width={80}
+                  height={80}
+                  className="object-contain w-full h-full"
+                />
+              </div>
+            )}
+            <h1 className="text-lg font-bold text-center">{settings?.park_name || 'Campground'}</h1>
             <p className="text-green-300 text-sm mt-1">Admin Dashboard</p>
           </div>
 

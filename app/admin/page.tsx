@@ -2,184 +2,163 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Image from 'next/image'
+import Link from 'next/link'
 
-export default function HomePage() {
-  const [settings, setSettings] = useState<any>({})
+export default function AdminDashboard() {
+  const [settings, setSettings] = useState<any>(null)
+  const [stats, setStats] = useState({
+    totalThisMonth: 0,
+    arrivalsToday: 0,
+    departuresToday: 0,
+    revenueThisMonth: 0,
+  })
+  const [recentReservations, setRecentReservations] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
   useEffect(() => {
-    supabase.from('settings').select('*').limit(1).single().then(({ data }) => { if (data) setSettings(data) })
+    fetchAll()
   }, [])
-  const [step, setStep] = useState(1)
-  const [arrival, setArrival] = useState('')
-  const [departure, setDeparture] = useState('')
-  const [adults, setAdults] = useState(2)
-  const [children, setChildren] = useState(0)
-  const [siteType, setSiteType] = useState('all')
 
-  const today = new Date().toISOString().split('T')[0]
+  async function fetchAll() {
+    const today = new Date().toISOString().split('T')[0]
+    const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
+    const lastOfMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0]
 
-  function handleSearch() {
-    if (!arrival || !departure) {
-      alert('Please select both arrival and departure dates.')
-      return
+    const [{ data: settingsData }, { data: resData }] = await Promise.all([
+      supabase.from('settings').select('*').limit(1).single(),
+      supabase.from('reservations')
+        .select('*, sites(site_number, site_type)')
+        .neq('status', 'cancelled')
+        .order('created_at', { ascending: false })
+        .limit(50),
+    ])
+
+    if (settingsData) setSettings(settingsData)
+
+    if (resData) {
+      const thisMonth = resData.filter((r: any) =>
+        r.arrival_date >= firstOfMonth && r.arrival_date <= lastOfMonth
+      )
+      const arrivalsToday = resData.filter((r: any) => r.arrival_date === today)
+      const departuresToday = resData.filter((r: any) => r.departure_date === today)
+      const revenue = thisMonth.reduce((sum: number, r: any) => sum + (r.amount_paid || 0), 0)
+
+      setStats({
+        totalThisMonth: thisMonth.length,
+        arrivalsToday: arrivalsToday.length,
+        departuresToday: departuresToday.length,
+        revenueThisMonth: revenue,
+      })
+      setRecentReservations(resData.slice(0, 8))
     }
-    if (departure <= arrival) {
-      alert('Departure date must be after arrival date.')
-      return
-    }
-    setStep(2)
+
+    setLoading(false)
   }
 
+  const logoShapeClass =
+    settings?.logo_shape === 'circle' ? 'rounded-full' :
+    settings?.logo_shape === 'rounded' ? 'rounded-xl' :
+    settings?.logo_shape === 'square' ? 'rounded-none' :
+    'rounded-none'
+
+  const siteTypeLabel = (type: string) =>
+    ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
+
+  const statusColor = (status: string) =>
+    ({ confirmed: 'bg-green-100 text-green-800', manual: 'bg-purple-100 text-purple-800', pending: 'bg-yellow-100 text-yellow-800' }[status] || 'bg-gray-100 text-gray-800')
+
+  if (loading) return (
+    <div className="flex items-center justify-center h-64">
+      <p className="text-gray-500">Loading dashboard...</p>
+    </div>
+  )
+
   return (
-    <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
+    <div className="p-6 max-w-5xl mx-auto">
 
-      {/* Hero Section */}
-      <div className="flex flex-col items-center justify-center px-4 py-16 text-center"
-        style={{ backgroundColor: '#2B2B2B' }}>
-        <div className="mb-6">
-          <Image
-            src={settings?.logo_url || '/images/logo.png'}
-            alt={settings?.park_name || 'Campground Logo'}
-            width={160}
-            height={160}
-            className="rounded-full mx-auto"
-            style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }}
-            priority
-          />
-        </div>
-        <h1 className="text-3xl font-bold text-white mb-2">Welcome to {settings?.park_name || 'Our Campground'}</h1>
-        <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{settings?.park_location || 'Location'}</p>
-        <p className="text-gray-400 mb-8 max-w-md">
-          {settings?.park_tagline || "Book your perfect campsite, cabin, or tent site today."}
-        </p>
-
-        {/* Search Box */}
-        <div className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl p-6">
-          <h2 className="text-xl font-bold text-gray-900 mb-5">Check Availability</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Arrival Date</label>
-              <input
-                type="date"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                min={today}
-                value={arrival}
-                onChange={e => {
-                  setArrival(e.target.value)
-                  if (departure && departure <= e.target.value) setDeparture('')
-                }}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Departure Date</label>
-              <input
-                type="date"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                min={arrival || today}
-                value={departure}
-                onChange={e => setDeparture(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Guests</label>
-              <div className="flex gap-2">
-                <div className="flex-1">
-                  <input
-                    type="number"
-                    min={1}
-                    max={20}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                    placeholder="Adults"
-                    value={adults}
-                    onChange={e => setAdults(parseInt(e.target.value))}
-                  />
-                  <p className="text-xs text-gray-400 mt-0.5 text-center">Adults</p>
-                </div>
-                <div className="flex-1">
-                  <input
-                    type="number"
-                    min={0}
-                    max={20}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                    placeholder="Children"
-                    value={children}
-                    onChange={e => setChildren(parseInt(e.target.value))}
-                  />
-                  <p className="text-xs text-gray-400 mt-0.5 text-center">Children</p>
-                </div>
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Site Type</label>
-              <select
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                value={siteType}
-                onChange={e => setSiteType(e.target.value)}
-              >
-                <option value="all">All Types</option>
-                <option value="rv_site">RV Sites</option>
-                <option value="cabin">Cabins</option>
-                <option value="tent">Tent Sites</option>
-              </select>
-            </div>
+      {/* Park header */}
+      <div className="flex items-center gap-4 mb-8">
+        {settings?.logo_url && (
+          <div className={`w-16 h-16 overflow-hidden flex items-center justify-center shrink-0 ${logoShapeClass}`}>
+            <Image
+              src={settings.logo_url}
+              alt={settings?.park_name || 'Campground'}
+              width={64}
+              height={64}
+              className="object-contain w-full h-full"
+              priority
+            />
           </div>
-          <button
-            onClick={handleSearch}
-            className="w-full py-3 rounded-xl text-white font-semibold text-lg transition-colors"
-            style={{ backgroundColor: 'var(--accent-color)' }}
-            onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-            onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}
-          >
-            Search Available Sites
-          </button>
+        )}
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">{settings?.park_name || 'Campground'}</h1>
+          <p className="text-sm text-gray-500">{settings?.park_location || ''} · Admin Dashboard</p>
         </div>
       </div>
 
-      {/* Why Book With Us */}
-      {step === 1 && (
-        <div className="max-w-5xl mx-auto px-4 py-16 grid grid-cols-1 md:grid-cols-3 gap-8 text-center">
-          {[
-            { icon: '🏕️', title: 'RV Sites', desc: 'Full hookup and water & electric sites available with 30 and 30/50 amp service.' },
-            { icon: '🛖', title: 'Cozy Cabins', desc: 'Three unique cabins for a comfortable glamping experience in the woods.' },
-            { icon: '⛺', title: 'Tent Sites', desc: 'Back to nature tent camping with easy access to all park amenities.' },
-          ].map(item => (
-            <div key={item.title} className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
-              <div className="text-4xl mb-3">{item.icon}</div>
-              <h3 className="text-white font-bold text-lg mb-2">{item.title}</h3>
-              <p className="text-gray-400 text-sm">{item.desc}</p>
-            </div>
+      {/* Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
+          <p className="text-xs text-gray-500 mb-1">Arrivals Today</p>
+          <p className="text-3xl font-bold text-gray-900">{stats.arrivalsToday}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
+          <p className="text-xs text-gray-500 mb-1">Departures Today</p>
+          <p className="text-3xl font-bold text-gray-900">{stats.departuresToday}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
+          <p className="text-xs text-gray-500 mb-1">Reservations This Month</p>
+          <p className="text-3xl font-bold text-gray-900">{stats.totalThisMonth}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
+          <p className="text-xs text-gray-500 mb-1">Revenue This Month</p>
+          <p className="text-3xl font-bold text-gray-900">${(stats.revenueThisMonth / 100).toLocaleString('en-US', { minimumFractionDigits: 0 })}</p>
+        </div>
+      </div>
+
+      {/* Quick links */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+        {[
+          { label: 'New Booking', href: '/admin/manual-booking', icon: '➕' },
+          { label: 'Calendar', href: '/admin/calendar', icon: '📅' },
+          { label: 'Reservations', href: '/admin/reservations', icon: '📋' },
+          { label: 'Settings', href: '/admin/settings', icon: '⚙️' },
+        ].map(link => (
+          <Link key={link.href} href={link.href}
+            className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm text-center hover:border-gray-300 transition-colors">
+            <div className="text-2xl mb-1">{link.icon}</div>
+            <p className="text-sm font-medium text-gray-700">{link.label}</p>
+          </Link>
+        ))}
+      </div>
+
+      {/* Recent reservations */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h2 className="text-base font-semibold text-gray-900">Recent Reservations</h2>
+          <Link href="/admin/reservations" className="text-sm text-green-700 hover:underline">View all →</Link>
+        </div>
+        <div className="divide-y divide-gray-50">
+          {recentReservations.length === 0 ? (
+            <p className="text-gray-400 text-sm text-center py-8">No reservations yet.</p>
+          ) : recentReservations.map(r => (
+            <Link key={r.id} href={`/admin/reservations?id=${r.id}`}
+              className="flex items-center justify-between px-6 py-3 hover:bg-gray-50 transition-colors">
+              <div>
+                <p className="text-sm font-medium text-gray-900">{r.guest_name}</p>
+                <p className="text-xs text-gray-500">{siteTypeLabel(r.sites?.site_type)} {r.sites?.site_number} · {r.arrival_date} → {r.departure_date}</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className={`text-xs px-2 py-1 rounded-full font-medium ${statusColor(r.status)}`}>
+                  {r.status.charAt(0).toUpperCase() + r.status.slice(1)}
+                </span>
+                <span className="text-sm font-medium text-gray-700">${(r.amount_paid / 100).toFixed(0)}</span>
+              </div>
+            </Link>
           ))}
         </div>
-      )}
-
-      {/* Results placeholder */}
-      {step === 2 && (
-        <div className="max-w-5xl mx-auto px-4 py-12">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h2 className="text-2xl font-bold text-white">Available Sites</h2>
-              <p className="text-gray-400 text-sm mt-1">
-                {arrival} → {departure} · {adults} adult{adults !== 1 ? 's' : ''}{children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}
-              </p>
-            </div>
-            <button
-              onClick={() => setStep(1)}
-              className="text-sm px-4 py-2 rounded-lg"
-              style={{ backgroundColor: '#2B2B2B', color: 'var(--accent-color)' }}
-            >
-              ← Change Dates
-            </button>
-          </div>
-          <div className="rounded-2xl p-8 text-center" style={{ backgroundColor: '#2B2B2B' }}>
-            <p className="text-gray-400">Loading available sites...</p>
-            <p className="text-gray-500 text-sm mt-2">We'll connect this to your real availability next!</p>
-          </div>
-        </div>
-      )}
-
-      {/* Footer */}
-      <div className="text-center py-8 text-gray-600 text-sm">
-        © 2026 {settings?.park_name || 'Campground'} · {settings?.park_location || 'Location'}
       </div>
-    </main>
+
+    </div>
   )
 }

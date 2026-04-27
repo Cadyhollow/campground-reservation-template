@@ -154,21 +154,26 @@ export default function CalendarPage() {
 
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1)
 
+  // Only show legend items for site types that actually exist in this park's sites
+  const activeSiteTypes = [...new Set(sites.map(s => s.site_type))]
+
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-4 md:p-6 overflow-x-hidden">
+
+      {/* Header */}
+      <div className="flex flex-col gap-3 mb-6 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Reservation Calendar</h2>
           <p className="text-sm text-gray-500 mt-1">Monthly overview of all active reservations</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button onClick={goToToday} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50">
             Today
           </button>
           <button onClick={prevMonth} className="px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50">
             ←
           </button>
-          <span className="text-lg font-semibold text-gray-900 min-w-48 text-center">{monthName}</span>
+          <span className="text-base font-semibold text-gray-900 min-w-36 text-center">{monthName}</span>
           <button onClick={nextMonth} className="px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50">
             →
           </button>
@@ -201,31 +206,37 @@ export default function CalendarPage() {
         </button>
       </div>
 
-      {/* Legend */}
-      <div className="flex items-center gap-4 mb-4">
-        {Object.entries(SITE_TYPE_COLORS).map(([type, colors]) => (
-          <div key={type} className="flex items-center gap-1.5">
-            <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: colors.bg, border: '1px solid ' + colors.border }}/>
-            <span className="text-xs text-gray-500">{siteTypeLabel(type)}</span>
-          </div>
-        ))}
-        <div className="flex items-center gap-1.5 ml-4">
-          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: STATUS_COLORS.confirmed }}/>
+      {/* Legend — only show active site types + status indicators */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 mb-4">
+        {activeSiteTypes.map(type => {
+          const colors = SITE_TYPE_COLORS[type]
+          if (!colors) return null
+          return (
+            <div key={type} className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: colors.bg, border: '1px solid ' + colors.border }} />
+              <span className="text-xs text-gray-500">{siteTypeLabel(type)}</span>
+            </div>
+          )
+        })}
+        <div className="w-px h-4 bg-gray-200 mx-1" />
+        <div className="flex items-center gap-1.5">
+          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: STATUS_COLORS.confirmed }} />
           <span className="text-xs text-gray-500">Confirmed</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: STATUS_COLORS.manual }}/>
+          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: STATUS_COLORS.manual }} />
           <span className="text-xs text-gray-500">Manual</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: STATUS_COLORS.pending }}/>
+          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: STATUS_COLORS.pending }} />
           <span className="text-xs text-gray-500">Pending</span>
         </div>
       </div>
 
+      {/* Calendar View */}
       {activeTab === 'calendar' && (
         <div className="flex gap-6">
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <div className="grid grid-cols-7 mb-1">
               {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
                 <div key={d} className="text-center text-xs font-semibold text-gray-500 py-2">{d}</div>
@@ -234,7 +245,7 @@ export default function CalendarPage() {
 
             <div className="grid grid-cols-7 gap-1">
               {Array.from({ length: firstDayOfMonth }).map((_, i) => (
-                <div key={'empty-' + i} className="min-h-28 bg-gray-50 rounded-lg opacity-40"/>
+                <div key={'empty-' + i} className="min-h-24 bg-gray-50 rounded-lg opacity-40" />
               ))}
 
               {Array.from({ length: daysInMonth }).map((_, i) => {
@@ -245,12 +256,12 @@ export default function CalendarPage() {
                 return (
                   <div
                     key={day}
-                    className="min-h-28 bg-white rounded-lg border border-gray-100 p-1.5 hover:border-gray-300 transition-colors"
+                    className="min-h-24 bg-white rounded-lg border border-gray-100 p-1 hover:border-gray-300 transition-colors"
                     style={{ outline: todayFlag ? '2px solid var(--accent-color)' : 'none' }}
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span
-                        className="text-sm font-semibold w-6 h-6 flex items-center justify-center rounded-full"
+                        className="text-xs font-semibold w-5 h-5 flex items-center justify-center rounded-full"
                         style={{ backgroundColor: todayFlag ? 'var(--accent-color)' : 'transparent', color: todayFlag ? 'white' : '#374151' }}
                       >
                         {day}
@@ -268,7 +279,7 @@ export default function CalendarPage() {
                           <button
                             key={r.id}
                             onClick={() => setSelected(selected?.id === r.id ? null : r)}
-                            className="w-full text-left px-1.5 py-0.5 rounded text-xs font-medium truncate transition-opacity hover:opacity-80"
+                            className="w-full text-left px-1 py-0.5 rounded text-xs font-medium truncate transition-opacity hover:opacity-80"
                             style={{
                               backgroundColor: colors.bg,
                               color: colors.text,
@@ -285,7 +296,7 @@ export default function CalendarPage() {
                           onClick={(e) => { e.stopPropagation(); toggleDay(day) }}
                           className="text-xs text-blue-400 hover:text-blue-600 pl-1 w-full text-left"
                         >
-                          {expandedDays.has(day) ? '▲ Show less' : '+' + (dayReservations.length - 3) + ' more'}
+                          {expandedDays.has(day) ? '▲ less' : '+' + (dayReservations.length - 3) + ' more'}
                         </button>
                       )}
                     </div>
@@ -294,8 +305,9 @@ export default function CalendarPage() {
               })}
             </div>
 
+            {/* Stats */}
             <div className="mt-4 p-4 bg-white rounded-xl border border-gray-100">
-              <div className="flex items-center gap-8">
+              <div className="flex flex-wrap items-center gap-6">
                 <div>
                   <p className="text-xs text-gray-500">Total reservations</p>
                   <p className="text-xl font-bold text-gray-900">{reservations.length}</p>
@@ -318,74 +330,44 @@ export default function CalendarPage() {
             </div>
           </div>
 
+          {/* Detail Panel */}
           {selected && (
-            <div className="w-80 shrink-0">
+            <div className="w-72 shrink-0">
               <div className="bg-white rounded-xl border border-gray-100 p-5 sticky top-6">
                 <div className="flex items-start justify-between mb-4">
                   <div>
                     <h3 className="font-bold text-gray-900 text-lg">{selected.guest_name}</h3>
                     <p className="text-sm text-gray-500">{'#' + selected.id.slice(0, 8).toUpperCase()}</p>
                   </div>
-                  <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600 text-lg font-medium">
-                    ×
-                  </button>
+                  <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600 text-lg font-medium">×</button>
                 </div>
-
                 <div className="mb-4">
-                  <span
-                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium text-white"
-                    style={{ backgroundColor: STATUS_COLORS[selected.status] || '#6b7280' }}
-                  >
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium text-white"
+                    style={{ backgroundColor: STATUS_COLORS[selected.status] || '#6b7280' }}>
                     {selected.status.charAt(0).toUpperCase() + selected.status.slice(1)}
                   </span>
                 </div>
-
                 <div className="space-y-3 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Site</span>
-                    <span className="font-medium text-gray-900">{siteTypeLabel(selected.sites?.site_type)} {selected.sites?.site_number}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Arrival</span>
-                    <span className="font-medium text-gray-900">{selected.arrival_date}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Departure</span>
-                    <span className="font-medium text-gray-900">{selected.departure_date}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Guests</span>
-                    <span className="font-medium text-gray-900">{selected.num_adults} adults, {selected.num_children} children</span>
-                  </div>
+                  <div className="flex justify-between"><span className="text-gray-500">Site</span><span className="font-medium text-gray-900">{siteTypeLabel(selected.sites?.site_type)} {selected.sites?.site_number}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Arrival</span><span className="font-medium text-gray-900">{selected.arrival_date}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Departure</span><span className="font-medium text-gray-900">{selected.departure_date}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Guests</span><span className="font-medium text-gray-900">{selected.num_adults} adults, {selected.num_children} children</span></div>
                   <div className="border-t border-gray-100 pt-3">
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Total</span>
-                      <span className="font-medium text-gray-900">{'$' + (selected.total_price / 100).toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between mt-1">
-                      <span className="text-gray-500">Paid</span>
+                    <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-medium text-gray-900">{'$' + (selected.total_price / 100).toFixed(2)}</span></div>
+                    <div className="flex justify-between mt-1"><span className="text-gray-500">Paid</span>
                       <span className="font-medium" style={{ color: selected.amount_paid >= selected.total_price ? '#16a34a' : '#d97706' }}>
                         {'$' + (selected.amount_paid / 100).toFixed(2)}
                       </span>
                     </div>
                   </div>
                   <div className="border-t border-gray-100 pt-3">
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Email</span>
-                      <span className="font-medium text-gray-900 text-right truncate max-w-40">{selected.guest_email}</span>
-                    </div>
-                    <div className="flex justify-between mt-1">
-                      <span className="text-gray-500">Phone</span>
-                      <span className="font-medium text-gray-900">{selected.guest_phone || '—'}</span>
-                    </div>
+                    <div className="flex justify-between"><span className="text-gray-500">Email</span><span className="font-medium text-gray-900 text-right truncate max-w-36">{selected.guest_email}</span></div>
+                    <div className="flex justify-between mt-1"><span className="text-gray-500">Phone</span><span className="font-medium text-gray-900">{selected.guest_phone || '—'}</span></div>
                   </div>
                 </div>
-
-                
-                  <a href={'/admin/reservations?id=' + selected.id}
+                <a href={'/admin/reservations?id=' + selected.id}
                   className="mt-4 w-full block text-center py-2 rounded-lg text-sm font-medium text-white"
-                  style={{ backgroundColor: 'var(--accent-color)' }}
-                >
+                  style={{ backgroundColor: 'var(--accent-color)' }}>
                   View Full Reservation
                 </a>
               </div>
@@ -394,10 +376,11 @@ export default function CalendarPage() {
         </div>
       )}
 
+      {/* Site View */}
       {activeTab === 'sites' && (
         <div className="flex gap-6">
-          <div className="flex-1 overflow-x-auto">
-            <table className="w-full border-collapse" style={{ minWidth: daysInMonth * 36 + 120 + 'px' }}>
+          <div className="flex-1 min-w-0 overflow-x-auto">
+            <table className="border-collapse" style={{ minWidth: daysInMonth * 36 + 120 + 'px' }}>
               <thead>
                 <tr>
                   <th className="sticky left-0 bg-white z-10 text-left text-xs font-semibold text-gray-500 py-2 pr-3 w-28 border-b border-gray-100">
@@ -419,10 +402,8 @@ export default function CalendarPage() {
                   <tr key={site.id} className="hover:bg-gray-50">
                     <td className="sticky left-0 bg-white z-10 text-xs font-medium text-gray-700 py-1 pr-3 border-b border-gray-50 hover:bg-gray-50">
                       <span className="inline-flex items-center gap-1">
-                        <span
-                          className="w-2 h-2 rounded-full shrink-0"
-                          style={{ backgroundColor: SITE_TYPE_COLORS[site.site_type]?.border || '#ccc' }}
-                        />
+                        <span className="w-2 h-2 rounded-full shrink-0"
+                          style={{ backgroundColor: SITE_TYPE_COLORS[site.site_type]?.border || '#ccc' }} />
                         {siteTypeLabel(site.site_type)} {site.site_number}
                       </span>
                     </td>
@@ -431,11 +412,8 @@ export default function CalendarPage() {
                       const colors = res ? (SITE_TYPE_COLORS[site.site_type] || SITE_TYPE_COLORS.rv_site) : null
                       const arrival = res ? isArrivalDay(res, day) : false
                       return (
-                        <td
-                          key={day}
-                          className="border-b border-gray-50 p-0.5 text-center"
-                          style={{ outline: isToday(day) ? '1px solid var(--accent-color)30' : 'none' }}
-                        >
+                        <td key={day} className="border-b border-gray-50 p-0.5 text-center"
+                          style={{ outline: isToday(day) ? '1px solid var(--accent-color)30' : 'none' }}>
                           {res && colors ? (
                             <button
                               onClick={() => setSelected(selected?.id === res.id ? null : res)}
@@ -459,74 +437,44 @@ export default function CalendarPage() {
             </table>
           </div>
 
+          {/* Detail Panel */}
           {selected && (
-            <div className="w-80 shrink-0">
+            <div className="w-72 shrink-0">
               <div className="bg-white rounded-xl border border-gray-100 p-5 sticky top-6">
                 <div className="flex items-start justify-between mb-4">
                   <div>
                     <h3 className="font-bold text-gray-900 text-lg">{selected.guest_name}</h3>
                     <p className="text-sm text-gray-500">{'#' + selected.id.slice(0, 8).toUpperCase()}</p>
                   </div>
-                  <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600 text-lg font-medium">
-                    ×
-                  </button>
+                  <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600 text-lg font-medium">×</button>
                 </div>
-
                 <div className="mb-4">
-                  <span
-                    className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium text-white"
-                    style={{ backgroundColor: STATUS_COLORS[selected.status] || '#6b7280' }}
-                  >
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium text-white"
+                    style={{ backgroundColor: STATUS_COLORS[selected.status] || '#6b7280' }}>
                     {selected.status.charAt(0).toUpperCase() + selected.status.slice(1)}
                   </span>
                 </div>
-
                 <div className="space-y-3 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Site</span>
-                    <span className="font-medium text-gray-900">{siteTypeLabel(selected.sites?.site_type)} {selected.sites?.site_number}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Arrival</span>
-                    <span className="font-medium text-gray-900">{selected.arrival_date}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Departure</span>
-                    <span className="font-medium text-gray-900">{selected.departure_date}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Guests</span>
-                    <span className="font-medium text-gray-900">{selected.num_adults} adults, {selected.num_children} children</span>
-                  </div>
+                  <div className="flex justify-between"><span className="text-gray-500">Site</span><span className="font-medium text-gray-900">{siteTypeLabel(selected.sites?.site_type)} {selected.sites?.site_number}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Arrival</span><span className="font-medium text-gray-900">{selected.arrival_date}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Departure</span><span className="font-medium text-gray-900">{selected.departure_date}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">Guests</span><span className="font-medium text-gray-900">{selected.num_adults} adults, {selected.num_children} children</span></div>
                   <div className="border-t border-gray-100 pt-3">
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Total</span>
-                      <span className="font-medium text-gray-900">{'$' + (selected.total_price / 100).toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between mt-1">
-                      <span className="text-gray-500">Paid</span>
+                    <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-medium text-gray-900">{'$' + (selected.total_price / 100).toFixed(2)}</span></div>
+                    <div className="flex justify-between mt-1"><span className="text-gray-500">Paid</span>
                       <span className="font-medium" style={{ color: selected.amount_paid >= selected.total_price ? '#16a34a' : '#d97706' }}>
                         {'$' + (selected.amount_paid / 100).toFixed(2)}
                       </span>
                     </div>
                   </div>
                   <div className="border-t border-gray-100 pt-3">
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Email</span>
-                      <span className="font-medium text-gray-900 text-right truncate max-w-40">{selected.guest_email}</span>
-                    </div>
-                    <div className="flex justify-between mt-1">
-                      <span className="text-gray-500">Phone</span>
-                      <span className="font-medium text-gray-900">{selected.guest_phone || '—'}</span>
-                    </div>
+                    <div className="flex justify-between"><span className="text-gray-500">Email</span><span className="font-medium text-gray-900 text-right truncate max-w-36">{selected.guest_email}</span></div>
+                    <div className="flex justify-between mt-1"><span className="text-gray-500">Phone</span><span className="font-medium text-gray-900">{selected.guest_phone || '—'}</span></div>
                   </div>
                 </div>
-
-                
-                  <a href={'/admin/reservations?id=' + selected.id}
+                <a href={'/admin/reservations?id=' + selected.id}
                   className="mt-4 w-full block text-center py-2 rounded-lg text-sm font-medium text-white"
-                  style={{ backgroundColor: 'var(--accent-color)' }}
-                >
+                  style={{ backgroundColor: 'var(--accent-color)' }}>
                   View Full Reservation
                 </a>
               </div>

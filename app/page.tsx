@@ -49,6 +49,7 @@ export default function HomePage() {
       }
     })
   }, [])
+
   useEffect(() => {
     if (selectedSite && selectedSiteRef.current) {
       selectedSiteRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -106,31 +107,36 @@ export default function HomePage() {
     treehouse: { icon: '🌲', label: 'Treehouses', desc: 'Unique treehouse accommodations nestled among the treetops.' },
   }
 
+  // Determine logo container shape classes
+  const logoShapeClass =
+    settings?.logo_shape === 'circle' ? 'w-32 h-32 rounded-full' :
+    settings?.logo_shape === 'rounded' ? 'w-32 h-32 rounded-xl' :
+    settings?.logo_shape === 'square' ? 'w-32 h-32 rounded-none' :
+    'w-40 h-24'
+
   return (
     <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
 
       {/* Hero Section */}
-      <div className="flex flex-col items-center justify-center px-4 py-16 text-center"
+      <div className="flex flex-col items-center justify-center px-4 py-12 text-center"
         style={{ backgroundColor: '#2B2B2B' }}>
 
-        <div className={`mb-6 overflow-hidden flex items-center justify-center ${
-          settings?.logo_shape === 'circle' ? 'w-40 h-40 rounded-full' :
-          settings?.logo_shape === 'rounded' ? 'w-40 h-40 rounded-xl' :
-          settings?.logo_shape === 'square' ? 'w-40 h-40 rounded-none' :
-          'w-40 h-24'
-        }`}>
-          <Image
-            src={settings?.logo_url || '/images/logo.png'}
-            alt={settings?.park_name || 'Campground'}
-            width={160}
-            height={160}
-            className="object-contain w-full h-full"
-            priority
-          />
-        </div>
+        {/* Logo — only render if a URL exists */}
+        {settings?.logo_url && (
+          <div className={`mb-6 overflow-hidden flex items-center justify-center ${logoShapeClass}`}>
+            <Image
+              src={settings.logo_url}
+              alt={settings?.park_name || 'Campground'}
+              width={160}
+              height={160}
+              className="object-contain w-full h-full"
+              priority
+            />
+          </div>
+        )}
 
         <h1 className="text-3xl font-bold text-white mb-2">Welcome to {settings?.park_name || 'Our Campground'}</h1>
-        <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{settings?.park_location || 'Location'}</p>
+        <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{settings?.park_location || ''}</p>
         <p className="text-gray-400 mb-8 max-w-md">
           {settings?.park_tagline || "Book your perfect campsite, cabin, or tent site today."}
         </p>
@@ -242,10 +248,11 @@ export default function HomePage() {
                     Click a site on the map to select it — <span className="text-gray-400">grey = not available for selected dates</span>
                   </h3>
                   <CampgroundMap
-                    onSiteSelect={(site) => setSelectedSite(site as any)}
-                    arrival={arrival}
-                    departure={departure}
-                    bookedSiteIds={sites.filter(s => s.meets_min_stay === false).map(s => s.id)}
+                    onSelectSite={(site) => setSelectedSite(site as any)}
+                    sites={sites}
+                    availableSiteIds={sites.filter(s => s.meets_min_stay !== false).map(s => s.id)}
+                    selectedSiteId={selectedSite?.id}
+                    nights={selectedSite?.nights || 0}
                   />
                 </div>
               )}
@@ -255,7 +262,7 @@ export default function HomePage() {
                     onClick={() => site.meets_min_stay && setSelectedSite(site)}
                     className={`rounded-2xl p-6 transition-all ${site.meets_min_stay ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'}`}
                     ref={selectedSite?.id === site.id ? selectedSiteRef : null}
-style={{ backgroundColor: '#2B2B2B', outline: selectedSite?.id === site.id ? '2px solid var(--accent-color)' : 'none' }}>
+                    style={{ backgroundColor: '#2B2B2B', outline: selectedSite?.id === site.id ? '2px solid var(--accent-color)' : 'none' }}>
                     <div className="flex items-start justify-between mb-3">
                       <div>
                         <h3 className="text-white font-bold text-lg">
@@ -308,7 +315,7 @@ style={{ backgroundColor: '#2B2B2B', outline: selectedSite?.id === site.id ? '2p
 
       {/* Footer */}
       <div className="text-center py-8 text-gray-600 text-sm">
-        © 2026 {settings?.park_name || 'Campground'} · {settings?.park_location || 'Location'}
+        © 2026 {settings?.park_name || 'Campground'} · {settings?.park_location || ''}
       </div>
     </main>
   )

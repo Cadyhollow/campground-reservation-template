@@ -23,6 +23,7 @@ const defaultSettings = {
   base_occupancy_adults: 2,
   base_occupancy_children: 2,
   cancellation_policy: '',
+  confirmation_message: '',
   accent_color: '#2D6A4F',
   show_site_map: false,
   admin_password: '',
@@ -63,6 +64,7 @@ export default function SettingsPage() {
         base_occupancy_adults: data.base_occupancy_adults || 2,
         base_occupancy_children: data.base_occupancy_children || 2,
         cancellation_policy: data.cancellation_policy || '',
+        confirmation_message: data.confirmation_message || '',
         accent_color: data.accent_color || '#2D6A4F',
         show_site_map: data.show_site_map || false,
         admin_password: '',
@@ -78,13 +80,11 @@ export default function SettingsPage() {
     const file = e.target.files?.[0]
     if (!file) return
 
-    // Validate file type
     if (!file.type.startsWith('image/')) {
       toast.error('Please upload an image file.')
       return
     }
 
-    // Validate file size (max 2MB)
     if (file.size > 2 * 1024 * 1024) {
       toast.error('Image must be smaller than 2MB.')
       return
@@ -92,11 +92,9 @@ export default function SettingsPage() {
 
     setUploadingLogo(true)
 
-    // Create a unique filename
     const fileExt = file.name.split('.').pop()
     const fileName = `logo-${Date.now()}.${fileExt}`
 
-    // Upload to Supabase Storage
     const { error: uploadError } = await supabase.storage
       .from('logos')
       .upload(fileName, file, { upsert: true })
@@ -107,14 +105,12 @@ export default function SettingsPage() {
       return
     }
 
-    // Get the public URL
     const { data: urlData } = supabase.storage
       .from('logos')
       .getPublicUrl(fileName)
 
     const publicUrl = urlData.publicUrl
 
-    // Save the URL to settings
     const { error: updateError } = await supabase
       .from('settings')
       .update({ logo_url: publicUrl })
@@ -150,6 +146,7 @@ export default function SettingsPage() {
       base_occupancy_adults: form.base_occupancy_adults,
       base_occupancy_children: form.base_occupancy_children,
       cancellation_policy: form.cancellation_policy,
+      confirmation_message: form.confirmation_message,
       accent_color: form.accent_color,
       show_site_map: form.show_site_map,
       ...(form.admin_password ? { admin_password: form.admin_password } : {}),
@@ -188,64 +185,65 @@ export default function SettingsPage() {
       <div className="space-y-6">
 
         {/* Logo Upload */}
-<div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-  <h3 className="text-lg font-semibold text-gray-900 mb-4">Logo</h3>
-  <div className="flex items-center gap-6 mb-4">
-    <div className={`w-24 h-24 overflow-hidden border border-gray-200 flex items-center justify-center bg-gray-50 flex-shrink-0 ${
-      form.logo_shape === 'circle' ? 'rounded-full' :
-      form.logo_shape === 'rounded' ? 'rounded-xl' :
-      form.logo_shape === 'square' ? 'rounded-none' :
-      'rounded-none bg-transparent border-dashed'
-    }`}>
-      {form.logo_url ? (
-        <Image
-          src={form.logo_url}
-          alt="Campground logo"
-          width={96}
-          height={96}
-          className={`${form.logo_shape === 'original' ? 'object-contain w-full h-full' : 'object-contain w-full h-full p-1'}`}
-        />
-      ) : (
-        <span className="text-gray-400 text-xs text-center px-2">No logo uploaded</span>
-      )}
-    </div>
-    <div className="flex-1">
-      <input
-        type="file"
-        accept="image/*"
-        ref={fileInputRef}
-        onChange={handleLogoUpload}
-        className="hidden"
-      />
-      <button
-        onClick={() => fileInputRef.current?.click()}
-        disabled={uploadingLogo}
-        className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50"
-      >
-        {uploadingLogo ? 'Uploading...' : 'Upload New Logo'}
-      </button>
-      <p className="text-xs text-gray-400 mt-2">PNG, JPG or SVG. Max 2MB.</p>
-      {form.logo_url && (
-        <p className="text-xs text-green-600 mt-1">✓ Logo uploaded</p>
-      )}
-    </div>
-  </div>
-  <div>
-    <label className="block text-sm font-medium text-gray-700 mb-1">Logo Display Shape</label>
-    <select
-      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-      value={form.logo_shape}
-      onChange={e => setForm({ ...form, logo_shape: e.target.value })}
-    >
-      <option value="circle">Circle — round crop (best for circular logos)</option>
-      <option value="rounded">Rounded Square — soft corners</option>
-      <option value="square">Square — sharp corners</option>
-      <option value="original">Original — no crop, transparent background</option>
-    </select>
-    <p className="text-xs text-gray-400 mt-1">Choose how your logo appears on the booking site.</p>
-  </div>
-</div>
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Logo</h3>
+          <div className="flex items-center gap-6 mb-4">
+            <div className={`w-24 h-24 overflow-hidden border border-gray-200 flex items-center justify-center bg-gray-50 flex-shrink-0 ${
+              form.logo_shape === 'circle' ? 'rounded-full' :
+              form.logo_shape === 'rounded' ? 'rounded-xl' :
+              form.logo_shape === 'square' ? 'rounded-none' :
+              'rounded-none bg-transparent border-dashed'
+            }`}>
+              {form.logo_url ? (
+                <Image
+                  src={form.logo_url}
+                  alt="Campground logo"
+                  width={96}
+                  height={96}
+                  className={`${form.logo_shape === 'original' ? 'object-contain w-full h-full' : 'object-contain w-full h-full p-1'}`}
+                />
+              ) : (
+                <span className="text-gray-400 text-xs text-center px-2">No logo uploaded</span>
+              )}
+            </div>
+            <div className="flex-1">
+              <input
+                type="file"
+                accept="image/*"
+                ref={fileInputRef}
+                onChange={handleLogoUpload}
+                className="hidden"
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingLogo}
+                className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50"
+              >
+                {uploadingLogo ? 'Uploading...' : 'Upload New Logo'}
+              </button>
+              <p className="text-xs text-gray-400 mt-2">PNG, JPG or SVG. Max 2MB.</p>
+              {form.logo_url && (
+                <p className="text-xs text-green-600 mt-1">✓ Logo uploaded</p>
+              )}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Logo Display Shape</label>
+            <select
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+              value={form.logo_shape}
+              onChange={e => setForm({ ...form, logo_shape: e.target.value })}
+            >
+              <option value="circle">Circle — round crop (best for circular logos)</option>
+              <option value="rounded">Rounded Square — soft corners</option>
+              <option value="square">Square — sharp corners</option>
+              <option value="original">Original — no crop, transparent background</option>
+            </select>
+            <p className="text-xs text-gray-400 mt-1">Choose how your logo appears on the booking site.</p>
+          </div>
+        </div>
 
+        {/* Park Information */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Park Information</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -261,6 +259,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        {/* Booking Rules */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Booking Rules</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -274,6 +273,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        {/* Season Dates */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-2">Season Dates</h3>
           <p className="text-sm text-gray-500 mb-4">Customers will see a closed message if they search dates outside your season.</p>
@@ -284,27 +284,62 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        {/* Confirmation Email Message */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-1">Confirmation Email Message</h3>
+          <p className="text-sm text-gray-500 mb-4">
+            This message appears in the <strong>Important Information</strong> section of every customer confirmation email.
+            Separate paragraphs with a blank line. You can include directions, check-in instructions, rules, or anything else guests need to know before they arrive.
+          </p>
+          <textarea
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-sans leading-relaxed"
+            rows={12}
+            placeholder={`Example:\n\nCheck-in is at 2:00 PM and check-out is at 12:00 PM. Please contact us if you need a different time.\n\nWhen towing a camper, please enter from the NORTH entrance on Cady Hollow Road.\n\nPlease stop at the camp store when you arrive to receive your gate key. A $10 refundable deposit is required.`}
+            value={form.confirmation_message}
+            onChange={e => setForm({ ...form, confirmation_message: e.target.value })}
+          />
+          <p className="text-xs text-gray-400 mt-2">
+            💡 Tip: Leave a blank line between paragraphs and each one will appear as its own paragraph in the email.
+          </p>
+        </div>
+
+        {/* Cancellation Policy */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Cancellation Policy</h3>
-          <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" rows={4} value={form.cancellation_policy} onChange={e => setForm({ ...form, cancellation_policy: e.target.value })} />
+          <textarea
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+            rows={4}
+            value={form.cancellation_policy}
+            onChange={e => setForm({ ...form, cancellation_policy: e.target.value })}
+          />
         </div>
+
       </div>
 
+      {/* Change Admin Password */}
       <div className="border-t border-gray-200 pt-6 mt-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Change Admin Password</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
-            <input type="password" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="Enter new password" value={form.admin_password || ''} onChange={e => setForm({ ...form, admin_password: e.target.value })} />
+            <input
+              type="password"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+              placeholder="Enter new password"
+              value={form.admin_password || ''}
+              onChange={e => setForm({ ...form, admin_password: e.target.value })}
+            />
           </div>
         </div>
         <p className="text-xs text-gray-400 mt-2">Leave blank to keep current password.</p>
       </div>
+
       <div className="mt-6 flex justify-end">
         <button onClick={handleSave} disabled={saving} className="bg-green-700 text-white px-8 py-3 rounded-lg font-medium hover:bg-green-800 disabled:opacity-50">
           {saving ? 'Saving...' : 'Save Settings'}
         </button>
       </div>
+
     </div>
   )
 }
