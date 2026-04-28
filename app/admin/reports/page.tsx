@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
 
 type Reservation = {
   id: string
@@ -20,7 +19,7 @@ type AddonRevenue = {
   addons: { name: string }
 }
 
-const COLORS = ['#4A90D9', '#C4873C', '#2D5A27', '#9B59B6', '#E74C3C']
+const COLORS = ['#12c9e5', '#C4873C', '#2D6A4F', '#9B59B6', '#E74C3C']
 
 export default function ReportsPage() {
   const [reservations, setReservations] = useState<Reservation[]>([])
@@ -30,15 +29,12 @@ export default function ReportsPage() {
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState('')
 
-  useEffect(() => {
-    fetchData()
-  }, [dateRange])
+  useEffect(() => { fetchData() }, [dateRange])
 
   async function fetchData() {
     setLoading(true)
     const now = new Date()
     let startDate = ''
-
     if (dateRange === 'custom' && customStart && customEnd) {
       startDate = customStart
     } else if (dateRange === 'this_month') {
@@ -77,64 +73,160 @@ export default function ReportsPage() {
       }, 0) / reservations.length
     : 0
 
-  // Monthly revenue chart data
-  const monthlyData: { [key: string]: { month: string; accommodation: number; addons: number } } = {}
+  // Monthly revenue
+  const monthlyMap: { [key: string]: { label: string; value: number } } = {}
   reservations.forEach(r => {
-    const month = r.arrival_date.substring(0, 7)
+    const key = r.arrival_date.substring(0, 7)
     const label = new Date(r.arrival_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
-    if (!monthlyData[month]) monthlyData[month] = { month: label, accommodation: 0, addons: 0 }
-    monthlyData[month].accommodation += (r.total_price || 0) / 100
+    if (!monthlyMap[key]) monthlyMap[key] = { label, value: 0 }
+    monthlyMap[key].value += (r.total_price || 0) / 100
   })
-  const chartData = Object.values(monthlyData)
+  const monthlyData = Object.values(monthlyMap)
 
   // Revenue by site type
-  const siteTypeRevenue: { [key: string]: number } = {}
+  const siteTypeMap: { [key: string]: number } = {}
   reservations.forEach(r => {
     const type = (r.sites as any)?.site_type || 'unknown'
-    const typeMap: {[key: string]: string} = { rv_site: 'RV Sites', cabin: 'Cabins', tent: 'Tent Sites' }
-    const label = typeMap[type] || type
-    siteTypeRevenue[label] = (siteTypeRevenue[label] || 0) + ((r.total_price || 0) / 100)
+    const label = ({ rv_site: 'RV Sites', cabin: 'Cabins', tent: 'Tent Sites' } as any)[type] || type
+    siteTypeMap[label] = (siteTypeMap[label] || 0) + ((r.total_price || 0) / 100)
   })
-  const pieData = Object.entries(siteTypeRevenue).map(([name, value]) => ({ name, value }))
+  const siteTypeData = Object.entries(siteTypeMap).map(([name, value]) => ({ name, value }))
 
   // Top sites
-  const siteRevenue: { [key: string]: { name: string; revenue: number; bookings: number } } = {}
+  const siteMap: { [key: string]: { name: string; revenue: number; bookings: number } } = {}
   reservations.forEach(r => {
-    const siteNum = (r.sites as any)?.site_number || 'Unknown'
-    if (!siteRevenue[siteNum]) siteRevenue[siteNum] = { name: siteNum, revenue: 0, bookings: 0 }
-    siteRevenue[siteNum].revenue += (r.total_price || 0) / 100
-    siteRevenue[siteNum].bookings += 1
+    const n = (r.sites as any)?.site_number || 'Unknown'
+    if (!siteMap[n]) siteMap[n] = { name: n, revenue: 0, bookings: 0 }
+    siteMap[n].revenue += (r.total_price || 0) / 100
+    siteMap[n].bookings += 1
   })
-  const topSites = Object.values(siteRevenue).sort((a, b) => b.revenue - a.revenue).slice(0, 5)
+  const topSites = Object.values(siteMap).sort((a, b) => b.revenue - a.revenue).slice(0, 5)
+
+  // Native SVG Bar Chart — no external library
+  function BarChart({ data }: { data: { label: string; value: number }[] }) {
+    if (data.length === 0) return <p className="text-gray-400 text-center py-8">No data for selected period</p>
+    const max = Math.max(...data.map(d => d.value), 1)
+    const chartH = 180
+    const barW = 32
+    const gap = 8
+    const leftPad = 48
+    const totalW = leftPad + data.length * (barW + gap) + 16
+
+    return (
+      <div style={{ width: '100%', overflowX: 'auto' }}>
+        <svg width={totalW} height={chartH + 40} style={{ display: 'block' }}>
+          {[0, 0.5, 1].map((pct, i) => {
+            const y = 8 + (1 - pct) * chartH
+            const val = max * pct
+            return (
+              <g key={i}>
+                <line x1={leftPad - 4} y1={y} x2={totalW - 8} y2={y} stroke="#e5e7eb" strokeWidth={1} />
+                <text x={leftPad - 6} y={y + 4} textAnchor="end" fontSize={10} fill="#9CA3AF">
+                  ${val >= 1000 ? (val / 1000).toFixed(1) + 'k' : val.toFixed(0)}
+                </text>
+              </g>
+            )
+          })}
+          {data.map((d, i) => {
+            const barH = Math.max(3, (d.value / max) * chartH)
+            const x = leftPad + i * (barW + gap)
+            const y = 8 + chartH - barH
+            return (
+              <g key={i}>
+                <rect x={x} y={y} width={barW} height={barH} fill="var(--accent-color)" rx={4} />
+                <text x={x + barW / 2} y={chartH + 22} textAnchor="middle" fontSize={10} fill="#6B7280">{d.label}</text>
+                <text x={x + barW / 2} y={y - 4} textAnchor="middle" fontSize={9} fill="#374151">
+                  ${d.value >= 1000 ? (d.value / 1000).toFixed(1) + 'k' : d.value.toFixed(0)}
+                </text>
+              </g>
+            )
+          })}
+        </svg>
+      </div>
+    )
+  }
+
+  // Native SVG Donut Chart
+  function DonutChart({ data }: { data: { name: string; value: number }[] }) {
+    if (data.length === 0) return <p className="text-gray-400 text-center py-8">No data</p>
+    const total = data.reduce((s, d) => s + d.value, 0)
+    const cx = 80, cy = 80, r = 65, inner = 38
+    let angle = -Math.PI / 2
+
+    const slices = data.map((d, i) => {
+      const sweep = (d.value / total) * 2 * Math.PI
+      const x1 = cx + r * Math.cos(angle)
+      const y1 = cy + r * Math.sin(angle)
+      angle += sweep
+      const x2 = cx + r * Math.cos(angle)
+      const y2 = cy + r * Math.sin(angle)
+      const ix1 = cx + inner * Math.cos(angle - sweep)
+      const iy1 = cy + inner * Math.sin(angle - sweep)
+      const ix2 = cx + inner * Math.cos(angle)
+      const iy2 = cy + inner * Math.sin(angle)
+      const large = sweep > Math.PI ? 1 : 0
+      return {
+        path: `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} L ${ix2} ${iy2} A ${inner} ${inner} 0 ${large} 0 ${ix1} ${iy1} Z`,
+        color: COLORS[i % COLORS.length],
+        ...d,
+      }
+    })
+
+    return (
+      <div className="flex flex-col sm:flex-row items-center gap-6">
+        <svg width={160} height={160} style={{ flexShrink: 0 }}>
+          {slices.map((s, i) => <path key={i} d={s.path} fill={s.color} />)}
+          <text x={cx} y={cy - 4} textAnchor="middle" fontSize={11} fill="#374151" fontWeight="bold">Total</text>
+          <text x={cx} y={cy + 12} textAnchor="middle" fontSize={11} fill="#6B7280">
+            ${total >= 1000 ? (total / 1000).toFixed(1) + 'k' : total.toFixed(0)}
+          </text>
+        </svg>
+        <div className="space-y-2 flex-1 w-full">
+          {slices.map((s, i) => (
+            <div key={i} className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: s.color }} />
+                <span className="text-sm text-gray-700 truncate">{s.name}</span>
+              </div>
+              <span className="text-sm font-medium text-gray-900 shrink-0">
+                ${s.value.toFixed(0)} ({((s.value / total) * 100).toFixed(0)}%)
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
 
   if (loading) return <div className="p-6 text-gray-500">Loading reports...</div>
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <div className="flex justify-between items-center mb-6">
+    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+
+      {/* Header */}
+      <div className="flex flex-col gap-3 mb-6 md:flex-row md:items-center md:justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Reports</h1>
-        <select
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm"
-          value={dateRange}
-          onChange={e => setDateRange(e.target.value)}>
-          <option value="this_month">This Month</option>
-          <option value="last_month">Last Month</option>
-          <option value="this_year">This Year</option>
-          <option value="last_year">Last Year</option>
-          <option value="custom">Custom Range</option>
-        </select>
-        {dateRange === 'custom' && (
-          <div className="flex gap-2 items-center">
-            <input type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={customStart} onChange={e => setCustomStart(e.target.value)} />
-            <span className="text-gray-400">to</span>
-            <input type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={customEnd} onChange={e => setCustomEnd(e.target.value)} />
-            <button onClick={fetchData} className="px-3 py-2 rounded-lg text-white text-sm" style={{backgroundColor: 'var(--accent-color)'}}>Go</button>
-          </div>
-        )}
+        <div className="flex flex-wrap gap-2 items-center">
+          <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={dateRange} onChange={e => setDateRange(e.target.value)}>
+            <option value="this_month">This Month</option>
+            <option value="last_month">Last Month</option>
+            <option value="this_year">This Year</option>
+            <option value="last_year">Last Year</option>
+            <option value="custom">Custom Range</option>
+          </select>
+          {dateRange === 'custom' && (
+            <>
+              <input type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={customStart} onChange={e => setCustomStart(e.target.value)} />
+              <span className="text-gray-400">to</span>
+              <input type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" value={customEnd} onChange={e => setCustomEnd(e.target.value)} />
+              <button onClick={fetchData} className="px-3 py-2 rounded-lg text-white text-sm" style={{ backgroundColor: 'var(--accent-color)' }}>Go</button>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Quick Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+      {/* Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-8">
         {[
           { label: 'Total Revenue', value: '$' + (totalRevenue + totalAddons).toFixed(2), sub: 'incl. add-ons' },
           { label: 'Accommodation', value: '$' + totalRevenue.toFixed(2), sub: 'excl. add-ons' },
@@ -143,52 +235,28 @@ export default function ReportsPage() {
           { label: 'Avg Stay', value: avgStay.toFixed(1) + ' nights', sub: 'per booking' },
         ].map((stat, i) => (
           <div key={i} className="bg-white rounded-2xl border border-gray-200 p-4">
-            <p className="text-sm text-gray-500">{stat.label}</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{stat.value}</p>
+            <p className="text-xs text-gray-500">{stat.label}</p>
+            <p className="text-xl font-bold text-gray-900 mt-1">{stat.value}</p>
             <p className="text-xs text-gray-400 mt-1">{stat.sub}</p>
           </div>
         ))}
       </div>
 
-      {/* Monthly Revenue Chart */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-6">
+      {/* Monthly Revenue */}
+      <div className="bg-white rounded-2xl border border-gray-200 p-4 md:p-6 mb-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Monthly Revenue</h2>
-        {chartData.length === 0 ? (
-          <p className="text-gray-400 text-center py-8">No data for selected period</p>
-        ) : (
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-              <YAxis tickFormatter={v => '$' + v.toFixed(0)} tick={{ fontSize: 12 }} />
-              <Tooltip formatter={(value: any) => '$' + Number(value).toFixed(2)} />
-              <Legend />
-              <Bar dataKey="accommodation" name="Accommodation" fill="var(--accent-color)" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        )}
+        <BarChart data={monthlyData} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-        {/* Revenue by Site Type */}
-        <div className="bg-white rounded-2xl border border-gray-200 p-6">
+        {/* Donut */}
+        <div className="bg-white rounded-2xl border border-gray-200 p-4 md:p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Revenue by Site Type</h2>
-          {pieData.length === 0 ? (
-            <p className="text-gray-400 text-center py-8">No data</p>
-          ) : (
-            <ResponsiveContainer width="100%" height={250}>
-              <PieChart>
-                <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}>
-                  {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                </Pie>
-                <Tooltip formatter={(value: any) => '$' + Number(value).toFixed(2)} />
-              </PieChart>
-            </ResponsiveContainer>
-          )}
+          <DonutChart data={siteTypeData} />
         </div>
 
         {/* Top Sites */}
-        <div className="bg-white rounded-2xl border border-gray-200 p-6">
+        <div className="bg-white rounded-2xl border border-gray-200 p-4 md:p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Top Earning Sites</h2>
           {topSites.length === 0 ? (
             <p className="text-gray-400 text-center py-8">No data</p>
@@ -211,11 +279,11 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      {/* Recent Reservations */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-6">
+      {/* Table */}
+      <div className="bg-white rounded-2xl border border-gray-200 p-4 md:p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Reservations</h2>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm" style={{ minWidth: '480px' }}>
             <thead>
               <tr className="border-b border-gray-100">
                 <th className="text-left py-2 text-gray-500 font-medium">Site</th>
