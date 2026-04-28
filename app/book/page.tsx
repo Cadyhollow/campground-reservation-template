@@ -13,16 +13,6 @@ type Addon = {
   is_early_checkin: boolean
 }
 
-const WAIVER_TEXT = `CADY HOLLOW CAMPGROUND LIABILITY WAIVER
-
-In consideration of myself and all persons entering under my supervision including visitors, the undersigned hereby waive, release and forever discharge Campground, its owners, affiliates, managers, members, agents, attorneys, employees, staff, volunteers, heirs, executors, administrators, representatives, predecessors, successors and assigns from any claims resulting from physical or personal injury, pain, suffering, illness, disfigurement, temporary or permanent disability, loss or death, and any property damage that may occur caused by fire, theft, vandalism, water or land-related accidents, natural events or any other occurrences or mishaps.
-
-We are here of our free will, and entirely at our own risk. I acknowledge that camping has many hazards and that there are risks that cannot be eliminated, particularly in a wilderness environment. We understand that these injuries or outcomes may arise by our own or others' negligence or conditions on the premises or the conditions or our use of amenities offered at the premises or related to travel to and from the premises. Nonetheless, we assume all related risks, both known and unknown. Campground is not responsible for errors, omissions, acts or failures to act of any party or entity conducting a specific event or activity. I fully understand that this is a release of liability and I agree to voluntarily give up or waive any right that I otherwise have to bring legal action against Campground or its owners, for any personal injury or property damage whatsoever for negligence on the part of Campground or its owners, agents and employees. This waiver and release of liability shall remain in effect for the duration of my presence at the premises.
-
-We further agree to indemnify, defend, and hold harmless The Owners and Campground, against any and all claims, suits or actions of any kind whatsoever for liability, damages, compensation or otherwise brought by me or anyone on my behalf, including attorney's fees and any related costs.
-
-I acknowledge that children must be supervised at all times. No child may swim in the pool without an adult parent or guardian present. There is no lifeguard on duty and the pool goes up to 9 feet in depth. Pool is open from Memorial Day to Labor Day and 11-7 daily.`
-
 function BookingForm() {
   const searchParams = useSearchParams()
   const cardRef = useRef<any>(null)
@@ -45,23 +35,8 @@ function BookingForm() {
   const [cancellationPolicy, setCancellationPolicy] = useState<any>(null)
   const [waiverSigned, setWaiverSigned] = useState(false)
   const [waiverChecked, setWaiverChecked] = useState(false)
-  const [feesBreakdown, setFeesBreakdown] = useState<{ name: string; amount: number }[]>([])
-
-  useEffect(() => {
-    supabase.from("fees").select("*").eq("is_active", true).then(({ data }) => {
-      if (data && site.total_price) {
-        const basePrice = site.total_price / 100
-        const breakdown = data
-          .filter(f => f.applies_to === "all" || f.applies_to === site.site_type)
-          .map(f => ({
-            name: f.name,
-            amount: f.type === "percentage" ? parseFloat((basePrice * f.amount / 100).toFixed(2)) : parseFloat(f.amount.toFixed(2))
-          }))
-        setFeesBreakdown(breakdown)
-      }
-    })
-  }, [])
   const [hasSignature, setHasSignature] = useState(false)
+  const [settings, setSettings] = useState<any>(null)
 
   const site = {
     id: searchParams.get('siteId') || '',
@@ -80,9 +55,14 @@ function BookingForm() {
   const adults = parseInt(searchParams.get('adults') || '2')
   const children = parseInt(searchParams.get('children') || '0')
 
-  useEffect(() => { fetchAddons() }, [])
+  useEffect(() => { fetchAddons(); fetchSettings() }, [])
   useEffect(() => { if (step >= 3 && !squareLoaded) loadSquare() }, [step])
   useEffect(() => { if (arrival) fetchCancellationPolicy() }, [arrival])
+
+  async function fetchSettings() {
+    const { data } = await supabase.from('settings').select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text').limit(1).single()
+    if (data) setSettings(data)
+  }
 
   async function fetchAddons() {
     const { data } = await supabase.from('addons').select('*').eq('is_active', true).order('display_order')
@@ -116,6 +96,10 @@ function BookingForm() {
     }
     document.head.appendChild(script)
   }
+
+  // Waiver text with [CAMPGROUND NAME] replaced
+  const waiverText = (settings?.waiver_text || '').replace(/\[CAMPGROUND NAME\]/g, settings?.park_name || 'the campground')
+  const waiverEnabled = settings?.waiver_enabled !== false
 
   // Signature canvas handlers
   function startDrawing(e: any) {
@@ -162,6 +146,16 @@ function BookingForm() {
     setStep(3)
   }
 
+  // If no waiver required, skip waiver step
+  function proceedFromAddons() {
+    if (!waiverEnabled) {
+      setWaiverSigned(true)
+      setStep(3)
+    } else {
+      // stay on step 2 to show waiver
+    }
+  }
+
   async function checkDiscount() {
     if (!discountCode) return
     setCheckingDiscount(true)
@@ -204,7 +198,6 @@ function BookingForm() {
   }
 
   async function handlePayment(paymentType: 'deposit' | 'full') {
-    if (!waiverSigned) { alert('Please sign the liability waiver before paying.'); return }
     if (!cardRef.current) { setPaymentError('Payment form not ready. Please wait a moment and try again.'); return }
     setPaymentLoading(true)
     setPaymentError('')
@@ -222,7 +215,7 @@ function BookingForm() {
           return { id, quantity, price: addon?.price || 0 }
         })
 
-      const signatureData = signatureCanvasRef.current?.toDataURL() || ''
+      const signatureData = waiverEnabled ? (signatureCanvasRef.current?.toDataURL() || '') : ''
 
       const response = await fetch('/api/payment', {
         method: 'POST',
@@ -240,7 +233,7 @@ function BookingForm() {
           discountCode: discountResult?.code || null,
           discountAmount, extraGuestFee, addonTotal,
           nights: site.nights,
-          waiverSigned: true,
+          waiverSigned: waiverEnabled ? true : false,
           signatureData,
         }),
       })
@@ -254,13 +247,23 @@ function BookingForm() {
     }
   }
 
+  // Logo display
+  const logoShapeClass =
+    settings?.logo_shape === 'circle' ? 'rounded-full' :
+    settings?.logo_shape === 'rounded' ? 'rounded-xl' :
+    settings?.logo_shape === 'square' ? 'rounded-none' : 'rounded-none'
+
   return (
     <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
       {/* Header */}
       <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: '#2B2B2B' }}>
-        <Image src="/images/logo.png" alt="Campground Logo" width={48} height={48} className="rounded-full" style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }} />
+        {settings?.logo_url && (
+          <div className={`w-12 h-12 overflow-hidden flex items-center justify-center shrink-0 ${logoShapeClass}`}>
+            <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={48} height={48} className="object-contain w-full h-full" />
+          </div>
+        )}
         <div>
-          <h1 className="text-white font-bold">Campground</h1>
+          <h1 className="text-white font-bold">{settings?.park_name || 'Campground'}</h1>
           <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Complete your reservation</p>
         </div>
       </div>
@@ -285,7 +288,7 @@ function BookingForm() {
                   <label className="block text-sm font-medium text-gray-300 mb-1">Phone Number *</label>
                   <input className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="(555) 555-5555" type="tel" value={form.guest_phone} onChange={e => setForm({ ...form, guest_phone: e.target.value })} />
                 </div>
-                <button onClick={validateAndContinue} className="w-full py-3 rounded-xl text-white font-semibold transition-colors mt-2" style={{ backgroundColor: 'var(--accent-color)' }} onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')} onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}>
+                <button onClick={validateAndContinue} className="w-full py-3 rounded-xl text-white font-semibold transition-colors mt-2" style={{ backgroundColor: 'var(--accent-color)' }}>
                   Continue to Add-Ons →
                 </button>
               </div>
@@ -299,7 +302,7 @@ function BookingForm() {
             )}
           </div>
 
-          {/* Step 2 - Add-Ons & Waiver */}
+          {/* Step 2 - Add-Ons, Discount & Waiver */}
           {step >= 2 && (
             <div className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
               <h2 className="text-white font-bold text-lg mb-4">2. Add-Ons (Optional)</h2>
@@ -335,18 +338,16 @@ function BookingForm() {
                 {discountResult && <p className="text-green-400 text-sm mt-2">✓ {discountResult.discount_type === 'percent' ? `${discountResult.discount_value}% discount applied!` : `$${(discountResult.discount_value / 100).toFixed(2)} discount applied!`}</p>}
               </div>
 
-              {/* Liability Waiver */}
-              {!waiverSigned ? (
+              {/* Waiver — only shown if enabled and not yet signed */}
+              {waiverEnabled && !waiverSigned && waiverText && (
                 <div className="pt-4 border-t border-gray-700">
                   <h3 className="text-white font-bold text-lg mb-3">3. Liability Waiver</h3>
                   <p className="text-gray-400 text-sm mb-3">Please read and sign the following waiver before proceeding to payment.</p>
-                  
-                  {/* Waiver Text */}
+
                   <div className="bg-gray-800 rounded-lg p-4 mb-4 h-48 overflow-y-auto">
-                    <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{WAIVER_TEXT}</p>
+                    <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{waiverText}</p>
                   </div>
 
-                  {/* Signature Canvas */}
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <label className="text-sm font-medium text-gray-300">Sign below:</label>
@@ -369,31 +370,30 @@ function BookingForm() {
                     {!hasSignature && <p className="text-gray-500 text-xs mt-1">Draw your signature above using your mouse or finger</p>}
                   </div>
 
-                  {/* Agreement Checkbox */}
                   <div className="flex items-start gap-3 mb-4">
-                    <input
-                      type="checkbox"
-                      id="waiver_agree"
-                      checked={waiverChecked}
-                      onChange={e => setWaiverChecked(e.target.checked)}
-                      className="w-4 h-4 mt-0.5 accent-teal-500"
-                    />
+                    <input type="checkbox" id="waiver_agree" checked={waiverChecked} onChange={e => setWaiverChecked(e.target.checked)} className="w-4 h-4 mt-0.5 accent-teal-500" />
                     <label htmlFor="waiver_agree" className="text-gray-300 text-sm">
-                      I have read, understand, and agree to the Campground Liability Waiver above. I acknowledge that my electronic signature is legally binding.
+                      I have read, understand, and agree to the {settings?.park_name || 'Campground'} Liability Waiver above. I acknowledge that my electronic signature is legally binding.
                     </label>
                   </div>
 
-                  <button
-                    onClick={acceptWaiver}
-                    className="w-full py-3 rounded-xl text-white font-semibold transition-colors"
-                    style={{ backgroundColor: 'var(--accent-color)' }}
-                    onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-                    onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}
-                  >
+                  <button onClick={acceptWaiver} className="w-full py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>
                     Accept Waiver & Continue to Payment →
                   </button>
                 </div>
-              ) : (
+              )}
+
+              {/* No waiver — show continue button */}
+              {(!waiverEnabled || !waiverText) && !waiverSigned && (
+                <div className="pt-4 border-t border-gray-700">
+                  <button onClick={proceedFromAddons} className="w-full py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>
+                    Continue to Payment →
+                  </button>
+                </div>
+              )}
+
+              {/* Waiver already signed */}
+              {waiverEnabled && waiverSigned && (
                 <div className="pt-4 border-t border-gray-700">
                   <p className="text-green-400 font-medium">✓ Liability waiver signed</p>
                   <button onClick={() => { setWaiverSigned(false); setStep(2) }} className="text-xs mt-1" style={{ color: 'var(--accent-color)' }}>Re-sign</button>
@@ -405,9 +405,8 @@ function BookingForm() {
           {/* Step 3 - Payment */}
           {step >= 3 && waiverSigned && (
             <div className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
-              <h2 className="text-white font-bold text-lg mb-4">4. Payment</h2>
+              <h2 className="text-white font-bold text-lg mb-4">{waiverEnabled ? '4. Payment' : '3. Payment'}</h2>
 
-              {/* Price Summary */}
               <div className="mb-6 space-y-2 text-sm">
                 <div className="flex justify-between text-gray-300">
                   <span>{siteTypeLabel(site.site_type)} {site.site_number} × {site.nights} nights</span>
@@ -416,18 +415,11 @@ function BookingForm() {
                 {extraGuestFee > 0 && <div className="flex justify-between text-gray-300"><span>Extra guest fees</span><span>${(extraGuestFee / 100).toFixed(2)}</span></div>}
                 {addonTotal > 0 && <div className="flex justify-between text-gray-300"><span>Add-ons</span><span>${(addonTotal / 100).toFixed(2)}</span></div>}
                 {discountAmount > 0 && <div className="flex justify-between text-green-400"><span>Discount ({discountResult.code})</span><span>-${(discountAmount / 100).toFixed(2)}</span></div>}
-                {feesBreakdown.map((fee, i) => (
-                  <div key={i} className="flex justify-between text-gray-300">
-                    <span>{fee.name}</span>
-                    <span>${fee.amount.toFixed(2)}</span>
-                  </div>
-                ))}
                 <div className="border-t border-gray-700 pt-2 flex justify-between text-white font-bold">
                   <span>Total</span><span>${(total / 100).toFixed(2)}</span>
                 </div>
               </div>
 
-              {/* Cancellation Policy */}
               <div className="rounded-lg p-4 bg-gray-800 mb-6">
                 <p className="text-gray-300 text-xs leading-relaxed">
                   <span className="text-white font-medium">Cancellation Policy: </span>
@@ -437,16 +429,18 @@ function BookingForm() {
                   <p className="text-yellow-400 text-xs mt-2 font-medium">⚠ Deposit is non-refundable for these dates.</p>
                 )}
               </div>
-              {/* Important Notes */}
-<div className="rounded-lg p-4 bg-gray-800 mb-6 space-y-2">
-  <p className="text-gray-300 text-xs leading-relaxed">
-    <span className="text-white font-medium">ℹ️ Site Selection: </span>
-    Site choice is not guaranteed — we will do our best to honor your selection.
-  </p>
 
-</div>
+              <div className="rounded-lg p-4 bg-gray-800 mb-6 space-y-2">
+                <p className="text-gray-300 text-xs leading-relaxed">
+                  <span className="text-white font-medium">ℹ️ Site Selection: </span>
+                  Site choice is not guaranteed — we will do our best to honor your selection.
+                </p>
+                <p className="text-gray-300 text-xs leading-relaxed">
+                  <span className="text-white font-medium">ℹ️ Pricing: </span>
+                  All prices include taxes and fees — no surprises at checkout.
+                </p>
+              </div>
 
-              {/* Square Card Form */}
               <div className="mb-6">
                 <h3 className="text-white font-medium mb-3">Card Details</h3>
                 <div id="square-card-container" className="rounded-lg overflow-hidden" style={{ minHeight: '89px' }} />
@@ -455,7 +449,6 @@ function BookingForm() {
 
               {paymentError && <div className="rounded-lg p-4 bg-red-900 mb-4"><p className="text-red-300 text-sm">{paymentError}</p></div>}
 
-              {/* Payment Buttons */}
               <div className="space-y-3">
                 <h3 className="text-white font-medium">Choose Payment Option</h3>
                 <button
@@ -471,8 +464,6 @@ function BookingForm() {
                   disabled={paymentLoading || !squareLoaded}
                   className="w-full py-3 rounded-xl text-white font-semibold transition-colors disabled:opacity-50"
                   style={{ backgroundColor: 'var(--accent-color)' }}
-                  onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-                  onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}
                   onClick={() => handlePayment('full')}
                 >
                   {paymentLoading && selectedPaymentType === 'full' ? 'Processing...' : `Pay in Full — $${(total / 100).toFixed(2)}`}
@@ -482,7 +473,7 @@ function BookingForm() {
           )}
         </div>
 
-        {/* Booking Summary Sidebar */}
+        {/* Sidebar */}
         <div className="lg:col-span-1">
           <div className="rounded-2xl p-6 sticky top-6" style={{ backgroundColor: '#2B2B2B' }}>
             <h3 className="text-white font-bold mb-4">Booking Summary</h3>
