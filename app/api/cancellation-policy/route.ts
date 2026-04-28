@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing arrival date' }, { status: 400 })
   }
 
+  // Check for a date-specific cancellation rule first
   const { data: rules } = await supabase
     .from('cancellation_rules')
     .select('*')
@@ -24,17 +25,25 @@ export async function GET(request: NextRequest) {
 
   const rule = rules && rules.length > 0 ? rules[0] : null
 
-  if (!rule) {
-    return NextResponse.json({
-      policy: {
-        name: 'Standard Policy',
-        deposit_refundable: true,
-        refund_percent: 90,
-        cancellation_deadline_days: 7,
-        policy_text: 'Cancellations made 7 or more days before arrival will receive a 90% refund. A 10% booking fee is retained on all cancellations. Cancellations made less than 7 days before arrival are non-refundable.',
-      }
-    })
+  // If a specific rule exists, return it
+  if (rule) {
+    return NextResponse.json({ policy: rule })
   }
 
-  return NextResponse.json({ policy: rule })
+  // Otherwise fall back to the cancellation_policy from settings
+  const { data: settings } = await supabase
+    .from('settings')
+    .select('cancellation_policy')
+    .limit(1)
+    .single()
+
+  return NextResponse.json({
+    policy: {
+      name: 'Standard Policy',
+      deposit_refundable: true,
+      refund_percent: null,
+      cancellation_deadline_days: null,
+      policy_text: settings?.cancellation_policy || 'Please contact us for cancellation information.',
+    }
+  })
 }
