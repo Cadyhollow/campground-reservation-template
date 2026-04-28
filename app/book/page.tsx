@@ -430,16 +430,7 @@ function BookingForm() {
                 )}
               </div>
 
-              <div className="rounded-lg p-4 bg-gray-800 mb-6 space-y-2">
-                <p className="text-gray-300 text-xs leading-relaxed">
-                  <span className="text-white font-medium">ℹ️ Site Selection: </span>
-                  Site choice is not guaranteed — we will do our best to honor your selection.
-                </p>
-                <p className="text-gray-300 text-xs leading-relaxed">
-                  <span className="text-white font-medium">ℹ️ Pricing: </span>
-                  All prices include taxes and fees — no surprises at checkout.
-                </p>
-              </div>
+              
 
               <div className="mb-6">
                 <h3 className="text-white font-medium mb-3">Card Details</h3>
