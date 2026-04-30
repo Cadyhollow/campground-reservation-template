@@ -1,6 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { exchangeCodeForTokens, saveSquareConnection } from '@/lib/square-oauth'
 
+async function fetchSquareLocationId(accessToken: string): Promise<string | null> {
+  try {
+    const response = await fetch('https://connect.squareup.com/v2/locations', {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Square-Version': '2024-01-18',
+      },
+    })
+    const data = await response.json()
+    if (data.locations && data.locations.length > 0) {
+      return data.locations[0].id
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
   const code = searchParams.get('code')
@@ -29,12 +47,16 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    // Auto-fetch the location ID so we don't have to do it manually
+    const locationId = await fetchSquareLocationId(tokens.access_token)
+
     await saveSquareConnection(
       state,
       tokens.access_token,
       tokens.refresh_token,
       tokens.merchant_id,
-      tokens.expires_at
+      tokens.expires_at,
+      locationId
     )
 
     return NextResponse.redirect(
