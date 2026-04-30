@@ -42,7 +42,8 @@ export async function saveSquareConnection(
   accessToken: string,
   refreshToken: string,
   merchantId: string,
-  expiresAt: string
+  expiresAt: string,
+  locationId?: string | null
 ) {
   const { error } = await supabase
     .from('square_connections')
@@ -52,6 +53,7 @@ export async function saveSquareConnection(
       refresh_token: refreshToken,
       merchant_id: merchantId,
       token_expires_at: expiresAt,
+      ...(locationId ? { location_id: locationId } : {}),
       updated_at: new Date().toISOString(),
     }, { onConflict: 'campground_id' })
 
