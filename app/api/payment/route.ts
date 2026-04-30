@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getSquareConnection } from '@/lib/square-oauth'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -31,6 +32,21 @@ export async function POST(request: NextRequest) {
       nights,
     } = body
 
+    // Look up this campground's Square connection
+    const campgroundId = process.env.CAMPGROUND_ID || 'default'
+    const squareConnection = await getSquareConnection(campgroundId)
+
+    // Fall back to env variable if no OAuth connection found
+    const accessToken = squareConnection?.access_token || process.env.SQUARE_ACCESS_TOKEN
+    const locationId = squareConnection?.location_id || process.env.SQUARE_LOCATION_ID
+
+    if (!accessToken) {
+      return NextResponse.json(
+        { error: 'Payment system not configured. Please contact the campground.' },
+        { status: 500 }
+      )
+    }
+
     // Double-check availability before charging
     const { data: existingReservations } = await supabase
       .from('reservations')
@@ -56,12 +72,12 @@ export async function POST(request: NextRequest) {
 
     // Process payment with Square REST API
     const squareResponse = await fetch(
-     `https://connect.squareup.com/v2/payments`,
+      `https://connect.squareup.com/v2/payments`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
+          'Authorization': `Bearer ${accessToken}`,
           'Square-Version': '2024-01-18',
         },
         body: JSON.stringify({
@@ -71,7 +87,7 @@ export async function POST(request: NextRequest) {
             amount: amountToPay,
             currency: 'USD',
           },
-          location_id: process.env.SQUARE_LOCATION_ID,
+          location_id: locationId,
           buyer_email_address: guestEmail,
           note: `Campground Reservation`,
         }),
