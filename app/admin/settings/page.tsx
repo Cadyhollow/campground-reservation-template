@@ -291,6 +291,19 @@ export default function SettingsPage() {
 
       </div>
 
+      {/* Square Payments */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Square Payments</h3>
+              <p className="text-sm text-gray-500 mt-1">Connect your Square account to accept payments from guests.</p>
+            </div>
+            <a href="/admin/settings/square" className="bg-black text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors">
+              Manage Connection
+            </a>
+          </div>
+        </div>
+      
       {/* Admin Password */}
       <div className="border-t border-gray-200 pt-6 mt-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Change Admin Password</h2>
