@@ -141,6 +141,26 @@ CREATE TABLE IF NOT EXISTS fees (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   name text NOT NULL,
   type text NOT NULL CHECK (type IN ('percentage', 'flat')),
+
+  -- Square OAuth connections (one row per campground)
+create table square_connections (
+  id uuid primary key default gen_random_uuid(),
+  campground_id text not null unique,
+  access_token text not null,
+  refresh_token text not null,
+  token_expires_at timestamptz,
+  merchant_id text,
+  location_id text,
+  connected_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+alter table square_connections enable row level security;
+
+create policy "Service role only"
+  on square_connections
+  for all
+  using (false);
   amount numeric NOT NULL,
   applies_to text DEFAULT 'all',
   is_active boolean DEFAULT true,
