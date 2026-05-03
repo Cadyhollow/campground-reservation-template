@@ -1,4 +1,3 @@
-
 import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
@@ -35,6 +34,10 @@ export async function POST(request: NextRequest) {
       amountPaid,
       paymentType,
       confirmationNumber,
+      addonDetails = [],       // [{ name, quantity, price }]
+      extraGuestFee = 0,
+      discountAmount = 0,
+      discountCode = null,
     } = body
 
     const settings = await getSettings()
@@ -57,6 +60,39 @@ export async function POST(request: NextRequest) {
       ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
 
     const balanceDue = totalPrice - amountPaid
+
+    // ── Build itemized add-ons rows (shared by both emails) ──────────────────
+    const hasAddons = addonDetails && addonDetails.length > 0
+    const hasExtraGuests = extraGuestFee > 0
+    const hasDiscount = discountAmount > 0
+
+    // For customer email (dark theme)
+    const addonRowsDark = hasAddons
+      ? addonDetails.map((a: any) =>
+          `<tr>
+            <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">
+              ${a.name}${a.quantity > 1 ? ` ×${a.quantity}` : ''}
+            </td>
+            <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">
+              $${((a.price * a.quantity) / 100).toFixed(2)}
+            </td>
+          </tr>`
+        ).join('')
+      : ''
+
+    // For staff email (light theme)
+    const addonRowsLight = hasAddons
+      ? addonDetails.map((a: any) =>
+          `<tr>
+            <td style="padding:4px 0;color:#6B7280;font-size:13px;">
+              Add-on: ${a.name}${a.quantity > 1 ? ` ×${a.quantity}` : ''}
+            </td>
+            <td style="padding:4px 0;font-size:13px;">
+              $${((a.price * a.quantity) / 100).toFixed(2)}
+            </td>
+          </tr>`
+        ).join('')
+      : ''
 
     // ── Customer confirmation email ──────────────────────────────────────────
     await resend.emails.send({
@@ -120,19 +156,33 @@ export async function POST(request: NextRequest) {
               <h3 style="color:#ffffff;margin:0 0 16px;font-size:18px;">Payment Summary</h3>
               <table style="width:100%;border-collapse:collapse;">
                 <tr>
-                  <td style="padding:8px 0;color:#9CA3AF;font-size:14px;">Total Cost</td>
-                  <td style="padding:8px 0;color:#ffffff;font-size:14px;text-align:right;">$${(totalPrice / 100).toFixed(2)}</td>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Site charges (${nights} night${nights !== 1 ? 's' : ''})</td>
+                  <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${((totalPrice - extraGuestFee - (hasAddons ? addonDetails.reduce((s: number, a: any) => s + a.price * a.quantity, 0) : 0) + discountAmount) / 100).toFixed(2)}</td>
+                </tr>
+                ${hasExtraGuests ? `
+                <tr>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Extra guest fees</td>
+                  <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(extraGuestFee / 100).toFixed(2)}</td>
+                </tr>` : ''}
+                ${addonRowsDark}
+                ${hasDiscount ? `
+                <tr>
+                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;">Discount${discountCode ? ` (${discountCode})` : ''}</td>
+                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">-$${(discountAmount / 100).toFixed(2)}</td>
+                </tr>` : ''}
+                <tr style="border-top:1px solid #374151;">
+                  <td style="padding:8px 0 6px;color:#ffffff;font-size:15px;font-weight:bold;">Total</td>
+                  <td style="padding:8px 0 6px;color:#ffffff;font-size:15px;font-weight:bold;text-align:right;">$${(totalPrice / 100).toFixed(2)}</td>
                 </tr>
                 <tr>
-                  <td style="padding:8px 0;color:#4ADE80;font-size:14px;">Paid Today</td>
-                  <td style="padding:8px 0;color:#4ADE80;font-size:14px;text-align:right;">$${(amountPaid / 100).toFixed(2)}</td>
+                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;">Paid Today</td>
+                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">$${(amountPaid / 100).toFixed(2)}</td>
                 </tr>
                 ${balanceDue > 0 ? `
                 <tr>
-                  <td style="padding:8px 0;color:#FBBF24;font-size:14px;border-top:1px solid #374151;">Balance Due at Check-in</td>
-                  <td style="padding:8px 0;color:#FBBF24;font-size:14px;text-align:right;border-top:1px solid #374151;">$${(balanceDue / 100).toFixed(2)}</td>
-                </tr>
-                ` : ''}
+                  <td style="padding:6px 0;color:#FBBF24;font-size:14px;">Balance Due at Check-in</td>
+                  <td style="padding:6px 0;color:#FBBF24;font-size:14px;text-align:right;">$${(balanceDue / 100).toFixed(2)}</td>
+                </tr>` : ''}
               </table>
             </div>
 
@@ -172,14 +222,17 @@ export async function POST(request: NextRequest) {
             <h2 style="color:#166534;margin:0 0 16px;">New Reservation Received!</h2>
             <table style="width:100%;border-collapse:collapse;">
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Guest</td><td style="padding:6px 0;font-size:14px;font-weight:bold;">${guestName}</td></tr>
-              <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Email</td><td style="padding:6px 0;font-size:14px;">${guestEmail}</td></tr>
+              <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Email</td><td style="padding:6px 0;font-size:14px;"><a href="mailto:${guestEmail}">${guestEmail}</a></td></tr>
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Site</td><td style="padding:6px 0;font-size:14px;">${siteTypeLabel(siteType)} ${siteNumber}</td></tr>
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Arrival</td><td style="padding:6px 0;font-size:14px;">${arrival}</td></tr>
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Departure</td><td style="padding:6px 0;font-size:14px;">${departure}</td></tr>
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Nights</td><td style="padding:6px 0;font-size:14px;">${nights}</td></tr>
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Guests</td><td style="padding:6px 0;font-size:14px;">${adults} adults, ${children} children</td></tr>
+              ${hasExtraGuests ? `<tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Extra guest fees</td><td style="padding:6px 0;font-size:14px;">$${(extraGuestFee / 100).toFixed(2)}</td></tr>` : ''}
+              ${addonRowsLight}
+              ${hasDiscount ? `<tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Discount${discountCode ? ` (${discountCode})` : ''}</td><td style="padding:6px 0;font-size:14px;color:#166534;">-$${(discountAmount / 100).toFixed(2)}</td></tr>` : ''}
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Paid</td><td style="padding:6px 0;font-size:14px;color:#166534;font-weight:bold;">$${(amountPaid / 100).toFixed(2)} (${paymentType === 'deposit' ? 'Deposit' : paymentType === 'unpaid' ? 'Pay on Arrival' : 'Full Payment'})</td></tr>
-              <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Total</td><td style="padding:6px 0;font-size:14px;">$${(totalPrice / 100).toFixed(2)}</td></tr>
+              <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Total</td><td style="padding:6px 0;font-size:14px;font-weight:bold;">$${(totalPrice / 100).toFixed(2)}</td></tr>
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Confirmation #</td><td style="padding:6px 0;font-size:14px;">${confirmationNumber}</td></tr>
             </table>
           </div>
