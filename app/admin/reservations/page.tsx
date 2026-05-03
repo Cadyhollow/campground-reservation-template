@@ -4,6 +4,12 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast, { Toaster } from 'react-hot-toast'
 
+type Addon = {
+  name: string
+  quantity: number
+  price_at_booking: number
+}
+
 type Reservation = {
   id: string
   guest_name: string
@@ -29,6 +35,7 @@ export default function ReservationsPage() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [selected, setSelected] = useState<Reservation | null>(null)
+  const [selectedAddons, setSelectedAddons] = useState<Addon[]>([])
   const [notes, setNotes] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
 
@@ -43,6 +50,30 @@ export default function ReservationsPage() {
       .order('arrival_date', { ascending: false })
     setReservations(data || [])
     setLoading(false)
+  }
+
+  async function fetchAddons(reservationId: string) {
+    const { data } = await supabase
+      .from('reservation_addons')
+      .select('quantity, price_at_booking, addons(name)')
+      .eq('reservation_id', reservationId)
+    if (data) {
+      setSelectedAddons(
+        data.map((row: any) => ({
+          name: row.addons?.name || 'Add-on',
+          quantity: row.quantity,
+          price_at_booking: row.price_at_booking,
+        }))
+      )
+    } else {
+      setSelectedAddons([])
+    }
+  }
+
+  function selectReservation(res: Reservation) {
+    setSelected(res)
+    setNotes(res.notes || '')
+    fetchAddons(res.id)
   }
 
   async function handleCancel(res: Reservation) {
@@ -126,7 +157,7 @@ export default function ReservationsPage() {
             filtered.map(res => (
               <div
                 key={res.id}
-                onClick={() => { setSelected(res); setNotes(res.notes || '') }}
+                onClick={() => selectReservation(res)}
                 className={`px-6 py-4 cursor-pointer hover:bg-gray-50 transition-colors ${selected?.id === res.id ? 'bg-green-50 border-l-4 border-green-600' : ''}`}
               >
                 <div className="flex items-center justify-between">
@@ -180,6 +211,26 @@ export default function ReservationsPage() {
                 <p className="text-gray-500">Guests</p>
                 <p className="font-medium text-gray-900">{selected.num_adults} adults · {selected.num_children} children</p>
               </div>
+
+              {/* Add-ons — shown when present */}
+              {selectedAddons.length > 0 && (
+                <div>
+                  <p className="text-gray-500 mb-1">Add-ons Purchased</p>
+                  <div className="bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 space-y-1">
+                    {selectedAddons.map((addon, i) => (
+                      <div key={i} className="flex justify-between text-gray-800">
+                        <span className="font-medium">
+                          {addon.name}{addon.quantity > 1 ? ` ×${addon.quantity}` : ''}
+                        </span>
+                        <span className="text-gray-600">
+                          ${((addon.price_at_booking * addon.quantity) / 100).toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <p className="text-gray-500">Payment</p>
                 <p className="font-medium text-gray-900">
