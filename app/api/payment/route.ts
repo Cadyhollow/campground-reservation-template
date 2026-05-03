@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { getSquareConnection } from '@/lib/square-oauth'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -30,22 +29,9 @@ export async function POST(request: NextRequest) {
       extraGuestFee,
       addonTotal,
       nights,
+      waiverSigned,
+      signatureData,
     } = body
-
-    // Look up this campground's Square connection
-    const campgroundId = process.env.CAMPGROUND_ID || 'default'
-    const squareConnection = await getSquareConnection(campgroundId)
-
-    // Fall back to env variable if no OAuth connection found
-    const accessToken = squareConnection?.access_token || process.env.SQUARE_ACCESS_TOKEN
-    const locationId = squareConnection?.location_id || process.env.SQUARE_LOCATION_ID
-
-    if (!accessToken) {
-      return NextResponse.json(
-        { error: 'Payment system not configured. Please contact the campground.' },
-        { status: 500 }
-      )
-    }
 
     // Double-check availability before charging
     const { data: existingReservations } = await supabase
@@ -72,12 +58,12 @@ export async function POST(request: NextRequest) {
 
     // Process payment with Square REST API
     const squareResponse = await fetch(
-      `https://connect.squareup.com/v2/payments`,
+     `https://connect.squareup.com/v2/payments`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`,
+          'Authorization': `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
           'Square-Version': '2024-01-18',
         },
         body: JSON.stringify({
@@ -87,7 +73,7 @@ export async function POST(request: NextRequest) {
             amount: amountToPay,
             currency: 'USD',
           },
-          location_id: locationId,
+          location_id: process.env.SQUARE_LOCATION_ID,
           buyer_email_address: guestEmail,
           note: `Campground Reservation`,
         }),
@@ -127,7 +113,7 @@ export async function POST(request: NextRequest) {
         amount_paid: amountToPay,
         payment_type: paymentType,
         square_payment_id: squarePaymentId,
-        waiver_signed: false,
+        waiver_signed: waiverSigned || false,
       })
       .select()
       .single()
@@ -159,6 +145,23 @@ export async function POST(request: NextRequest) {
         .update({ times_used: supabase.rpc('increment_discount_usage', { code: discountCode }) })
     }
 
+    // Look up full addon names for emails
+    let addonDetails: { name: string; quantity: number; price: number }[] = []
+    if (addonItems && addonItems.length > 0) {
+      const addonIds = addonItems.map((a: any) => a.id)
+      const { data: addonRows } = await supabase
+        .from('addons')
+        .select('id, name')
+        .in('id', addonIds)
+      if (addonRows) {
+        addonDetails = addonItems.map((item: any) => ({
+          name: addonRows.find((r: any) => r.id === item.id)?.name || 'Add-on',
+          quantity: item.quantity,
+          price: item.price,
+        }))
+      }
+    }
+
     // Send confirmation emails
     try {
       await fetch(`${request.nextUrl.origin}/api/email`, {
@@ -178,6 +181,10 @@ export async function POST(request: NextRequest) {
           amountPaid: amountToPay,
           paymentType,
           confirmationNumber: reservation.id.slice(0, 8).toUpperCase(),
+          addonDetails,         // ← now included
+          extraGuestFee,        // ← now included
+          discountAmount,       // ← now included
+          discountCode: discountCode || null,
         }),
       })
     } catch (e) {
