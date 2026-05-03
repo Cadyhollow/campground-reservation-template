@@ -17,7 +17,8 @@ const defaultSettings = {
   logo_shape: 'circle',
   check_in_time: '2:00 PM',
   check_out_time: '12:00 PM',
-  same_day_cutoff_time: '11:00 am',
+  same_day_cutoff_time: '11:00 AM',
+  same_day_cutoff_message: 'Same-day reservations are not available online. Please call us to book.',
   extra_adult_fee: '',
   extra_child_fee: '',
   base_occupancy_adults: 2,
@@ -61,6 +62,7 @@ export default function SettingsPage() {
         check_in_time: data.check_in_time || '2:00 PM',
         check_out_time: data.check_out_time || '12:00 PM',
         same_day_cutoff_time: data.same_day_cutoff_time || '11:00 AM',
+        same_day_cutoff_message: data.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us to book.',
         extra_adult_fee: (data.extra_adult_fee / 100).toString(),
         extra_child_fee: (data.extra_child_fee / 100).toString(),
         base_occupancy_adults: data.base_occupancy_adults || 2,
@@ -113,6 +115,7 @@ export default function SettingsPage() {
       check_in_time: form.check_in_time,
       check_out_time: form.check_out_time,
       same_day_cutoff_time: form.same_day_cutoff_time,
+      same_day_cutoff_message: form.same_day_cutoff_message,
       extra_adult_fee: Math.round(parseFloat(form.extra_adult_fee) * 100),
       extra_child_fee: Math.round(parseFloat(form.extra_child_fee) * 100),
       base_occupancy_adults: form.base_occupancy_adults,
@@ -199,13 +202,33 @@ export default function SettingsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Park Name</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_name} onChange={e => setForm({ ...form, park_name: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Tagline</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_tagline} onChange={e => setForm({ ...form, park_tagline: e.target.value })} /></div>
-            <div><label className="block text-sm font-medium text-gray-700 mb-1">Location</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Port Allegany, PA" value={form.park_location} onChange={e => setForm({ ...form, park_location: e.target.value })} /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Location</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Coudersport, PA" value={form.park_location} onChange={e => setForm({ ...form, park_location: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Email</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" type="email" value={form.park_email} onChange={e => setForm({ ...form, park_email: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Phone</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_phone} onChange={e => setForm({ ...form, park_phone: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Address</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_address} onChange={e => setForm({ ...form, park_address: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Website</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_website} onChange={e => setForm({ ...form, park_website: e.target.value })} /></div>
-            <div><label className="block text-sm font-medium text-gray-700 mb-1">Show Site Map</label><div className="flex items-center gap-3"><input type="checkbox" checked={form.show_site_map} onChange={e => setForm({ ...form, show_site_map: e.target.checked })} className="w-5 h-5 rounded" /><span className="text-sm text-gray-600">{form.show_site_map ? 'Map is visible to guests' : 'List view shown to guests'}</span></div></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Brand Color</label><div className="flex items-center gap-3"><input type="color" className="w-12 h-10 rounded border border-gray-200 cursor-pointer" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /><input className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /></div></div>
+          </div>
+
+          {/* Site Map Toggle — full-width row so it's always visible */}
+          <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-700">Show Site Map</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {form.show_site_map ? 'Guests see the interactive map when browsing sites.' : 'Guests see a list view when browsing sites.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, show_site_map: !form.show_site_map })}
+              className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-6"
+              style={{ backgroundColor: form.show_site_map ? '#15803d' : '#d1d5db' }}
+            >
+              <span
+                className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
+                style={{ transform: form.show_site_map ? 'translateX(28px)' : 'translateX(0px)' }}
+              />
+            </button>
           </div>
         </div>
 
@@ -215,7 +238,16 @@ export default function SettingsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Check-In Time</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.check_in_time} onChange={e => setForm({ ...form, check_in_time: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Check-Out Time</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.check_out_time} onChange={e => setForm({ ...form, check_out_time: e.target.value })} /></div>
-            <div><label className="block text-sm font-medium text-gray-700 mb-1">Same-Day Booking Cutoff</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. 11:00 AM" value={form.same_day_cutoff_time} onChange={e => setForm({ ...form, same_day_cutoff_time: e.target.value })} /></div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Same-Day Booking Cutoff</label>
+              <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. 11:00 AM (leave blank to allow all day)" value={form.same_day_cutoff_time} onChange={e => setForm({ ...form, same_day_cutoff_time: e.target.value })} />
+              <p className="text-xs text-gray-400 mt-1">Leave blank to allow same-day bookings at any time.</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Same-Day Cutoff Message</label>
+              <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Please call for same-day reservations." value={form.same_day_cutoff_message} onChange={e => setForm({ ...form, same_day_cutoff_message: e.target.value })} />
+              <p className="text-xs text-gray-400 mt-1">Shown to guests when same-day booking is blocked.</p>
+            </div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Base Occupancy — Adults</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.base_occupancy_adults} onChange={e => setForm({ ...form, base_occupancy_adults: parseInt(e.target.value) })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Base Occupancy — Children</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.base_occupancy_children} onChange={e => setForm({ ...form, base_occupancy_children: parseInt(e.target.value) })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Extra Adult Fee ($/night)</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.extra_adult_fee} onChange={e => setForm({ ...form, extra_adult_fee: e.target.value })} /></div>
@@ -291,19 +323,6 @@ export default function SettingsPage() {
 
       </div>
 
-      {/* Square Payments */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900">Square Payments</h3>
-              <p className="text-sm text-gray-500 mt-1">Connect your Square account to accept payments from guests.</p>
-            </div>
-            <a href="/admin/settings/square" className="bg-black text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors">
-              Manage Connection
-            </a>
-          </div>
-        </div>
-      
       {/* Admin Password */}
       <div className="border-t border-gray-200 pt-6 mt-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Change Admin Password</h2>
