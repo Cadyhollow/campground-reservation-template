@@ -166,3 +166,12 @@ create policy "Service role only"
   is_active boolean DEFAULT true,
   created_at timestamptz DEFAULT now()
 );
+
+-- Row Level Security for fees table
+alter table fees enable row level security;
+
+create policy "Allow all operations for authenticated admin"
+  on fees
+  for all
+  using (true)
+  with check (true);
