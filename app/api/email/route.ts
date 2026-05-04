@@ -11,7 +11,7 @@ async function getSettings() {
   )
   const { data } = await supabase
     .from('settings')
-    .select('park_name, park_location, park_email, park_phone, confirmation_message')
+    .select('park_name, park_location, park_email, park_phone, confirmation_message, sender_name, sender_email, reply_to_email')
     .limit(1)
     .single()
   return data
@@ -42,11 +42,12 @@ export async function POST(request: NextRequest) {
 
     const settings = await getSettings()
     const campgroundName = settings?.park_name || 'Campground'
-    const campgroundLocation = settings?.park_location || ''
-    const contactEmail = settings?.park_email || process.env.RESEND_FROM_EMAIL || 'reservations@example.com'
-    const contactPhone = settings?.park_phone || ''
-    const fromEmail = process.env.RESEND_FROM_EMAIL || 'reservations@example.com'
-    const replyToEmail = settings?.park_email || process.env.RESEND_FROM_EMAIL || 'info@example.com'
+const campgroundLocation = settings?.park_location || ''
+const contactEmail = settings?.park_email || 'reservations@bookings.com'
+const contactPhone = settings?.park_phone || ''
+const senderName = settings?.sender_name || campgroundName
+const fromEmail = settings?.sender_email || process.env.RESEND_FROM_EMAIL || 'bookings@campgroundreservations.com'
+const replyToEmail = settings?.reply_to_email || settings?.park_email || process.env.RESEND_FROM_EMAIL || 'bookings@campgroundreservations.com'
 
     // Convert confirmation_message newlines into HTML paragraphs
     const rawMessage = settings?.confirmation_message || ''
@@ -96,7 +97,7 @@ export async function POST(request: NextRequest) {
 
     // ── Customer confirmation email ──────────────────────────────────────────
     await resend.emails.send({
-      from: `${campgroundName} <${fromEmail}>`,
+      from: `${senderName} <${fromEmail}>`,
       replyTo: replyToEmail,
       to: guestEmail,
       subject: `Reservation Confirmed — ${siteTypeLabel(siteType)} ${siteNumber} · ${arrival}`,
@@ -210,7 +211,7 @@ export async function POST(request: NextRequest) {
 
     // ── Staff notification email ─────────────────────────────────────────────
     await resend.emails.send({
-      from: `${campgroundName} <${fromEmail}>`,
+      from: `${senderName} <${fromEmail}>`,
       replyTo: replyToEmail,
       to: contactEmail,
       subject: `New Reservation — ${siteTypeLabel(siteType)} ${siteNumber} · ${arrival}`,
