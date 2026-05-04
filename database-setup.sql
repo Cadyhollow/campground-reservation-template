@@ -39,7 +39,10 @@ CREATE TABLE IF NOT EXISTS settings (
   closed_season_message text DEFAULT '',
   accent_color text DEFAULT '#3DBDD4',
   liability_waiver_text text DEFAULT '',
-  show_site_map boolean DEFAULT false
+  show_site_map boolean DEFAULT false,
+  sender_name text,
+  sender_email text,
+  reply_to_email text,
 );
 
 -- Reservations table
