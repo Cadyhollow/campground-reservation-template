@@ -14,8 +14,18 @@ type Site = {
   is_available: boolean
 }
 
+type Addon = {
+  id: string
+  name: string
+  description: string
+  price: number
+  is_active: boolean
+}
+
 export default function ManualBookingPage() {
   const [sites, setSites] = useState<Site[]>([])
+  const [addons, setAddons] = useState<Addon[]>([])
+  const [selectedAddons, setSelectedAddons] = useState<{ [id: string]: number }>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [fees, setFees] = useState<{name:string,type:string,amount:number,applies_to:string}[]>([])
@@ -33,7 +43,7 @@ export default function ManualBookingPage() {
     notes: '',
   })
 
-  useEffect(() => { fetchSites() }, [])
+  useEffect(() => { fetchSites(); fetchAddons() }, [])
 
   async function fetchSites() {
     const { data } = await supabase
@@ -43,6 +53,15 @@ export default function ManualBookingPage() {
       .order('display_order')
     setSites(data || [])
     setLoading(false)
+  }
+
+  async function fetchAddons() {
+    const { data } = await supabase
+      .from('addons')
+      .select('*')
+      .eq('is_active', true)
+      .order('display_order')
+    setAddons(data || [])
   }
 
   const selectedSite = sites.find(s => s.id === form.site_id)
@@ -55,9 +74,19 @@ export default function ManualBookingPage() {
   const extraAdults = Math.max(0, form.num_adults - 2)
   const extraChildren = Math.max(0, form.num_children - 2)
   const extraGuestFee = (extraAdults * 1000 + extraChildren * 500) * nights
-  const applicableFees = selectedSite ? fees.filter(f => f.applies_to === 'all' || f.applies_to === selectedSite.site_type) : []
+  const applicableFees = selectedSite ? fees.filter(f => {
+  if (f.applies_to === 'all') return true
+  const targets = f.applies_to.split(',').map((s: string) => s.trim())
+  return targets.includes(selectedSite.site_type) || targets.includes('addons')
+}) : []
   const feesTotal = applicableFees.reduce((sum, f) => sum + (f.type === 'percentage' ? (baseTotal / 100) * f.amount / 100 : f.amount) * 100, 0)
-  const total = baseTotal + extraGuestFee + feesTotal
+
+  const addonTotal = Object.entries(selectedAddons).reduce((sum, [id, qty]) => {
+    const addon = addons.find(a => a.id === id)
+    return sum + (addon ? addon.price * qty : 0)
+  }, 0)
+
+  const total = baseTotal + extraGuestFee + feesTotal + addonTotal
 
   // Fetch fees on load
   if (fees.length === 0) { supabase.from('fees').select('*').eq('is_active', true).then(({data}) => { if (data) setFees(data) }) }
@@ -79,6 +108,13 @@ export default function ManualBookingPage() {
     setSaving(true)
     const amountPaid = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0
 
+    const addonItems = Object.entries(selectedAddons)
+      .filter(([_, qty]) => qty > 0)
+      .map(([id, quantity]) => {
+        const addon = addons.find(a => a.id === id)
+        return { id, quantity, price: addon?.price || 0 }
+      })
+
     const response = await fetch('/api/manual-booking', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -93,10 +129,12 @@ export default function ManualBookingPage() {
         guest_phone: form.guest_phone,
         base_nightly_rate: selectedSite?.base_rate || 0,
         extra_guest_fee_total: extraGuestFee,
+        addons_total: addonTotal,
         total_price: total,
         amount_paid: amountPaid,
         payment_type: form.payment_type,
         notes: form.notes,
+        addonItems,
       }),
     })
 
@@ -107,6 +145,13 @@ export default function ManualBookingPage() {
       setSaving(false)
       return
     }
+
+    // Build addon details for email
+    const addonDetails = addonItems.map(item => ({
+      name: addons.find(a => a.id === item.id)?.name || 'Add-on',
+      quantity: item.quantity,
+      price: item.price,
+    }))
 
     // Send confirmation email
     try {
@@ -127,6 +172,8 @@ export default function ManualBookingPage() {
           amountPaid: amountPaid,
           paymentType: form.payment_type,
           confirmationNumber: data.confirmationNumber,
+          addonDetails,
+          extraGuestFee,
         }),
       })
     } catch (e) {
@@ -148,6 +195,7 @@ export default function ManualBookingPage() {
       amount_paid: '',
       notes: '',
     })
+    setSelectedAddons({})
   }
 
   return (
@@ -221,6 +269,35 @@ export default function ManualBookingPage() {
               </div>
             </div>
           </div>
+
+          {/* Add-Ons */}
+          {addons.length > 0 && (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Add-Ons (Optional)</h3>
+              <div className="space-y-3">
+                {addons.map(addon => (
+                  <div key={addon.id} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-100">
+                    <div>
+                      <p className="font-medium text-gray-900 text-sm">{addon.name}</p>
+                      {addon.description && <p className="text-gray-500 text-xs">{addon.description}</p>}
+                      <p className="text-green-700 text-sm mt-0.5">${(addon.price / 100).toFixed(2)}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setSelectedAddons(prev => ({ ...prev, [addon.id]: Math.max(0, (prev[addon.id] || 0) - 1) }))}
+                        className="w-8 h-8 rounded-full bg-gray-200 text-gray-700 font-bold hover:bg-gray-300"
+                      >-</button>
+                      <span className="w-6 text-center font-medium text-gray-900">{selectedAddons[addon.id] || 0}</span>
+                      <button
+                        onClick={() => setSelectedAddons(prev => ({ ...prev, [addon.id]: (prev[addon.id] || 0) + 1 }))}
+                        className="w-8 h-8 rounded-full bg-green-700 text-white font-bold hover:bg-green-800"
+                      >+</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Guest Info */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
@@ -343,6 +420,16 @@ export default function ManualBookingPage() {
                       <span>${(extraGuestFee / 100).toFixed(2)}</span>
                     </div>
                   )}
+                  {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
+                    const addon = addons.find(a => a.id === id)
+                    if (!addon) return null
+                    return (
+                      <div key={id} className="flex justify-between text-gray-600">
+                        <span>{addon.name}{qty > 1 ? ` ×${qty}` : ''}</span>
+                        <span>${((addon.price * qty) / 100).toFixed(2)}</span>
+                      </div>
+                    )
+                  })}
                   {applicableFees.map((fee, i) => (
                     <div key={i} className="flex justify-between text-gray-600">
                       <span>{fee.name}</span>
