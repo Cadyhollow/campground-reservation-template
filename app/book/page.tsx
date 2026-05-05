@@ -13,11 +13,18 @@ type Addon = {
   is_early_checkin: boolean
 }
 
-// ── Parses time strings like "11:00 AM", "2:00 PM", "14:00" → { hours, minutes } in 24h
+type Fee = {
+  id: string
+  name: string
+  type: 'percentage' | 'flat'
+  amount: number
+  applies_to: string
+  is_active: boolean
+}
+
 function parseTime(timeStr: string): { hours: number; minutes: number } | null {
   if (!timeStr) return null
   const clean = timeStr.trim().toUpperCase()
-  // Try 12h format: "11:00 AM", "2:00 PM"
   const match12 = clean.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/)
   if (match12) {
     let hours = parseInt(match12[1])
@@ -27,7 +34,6 @@ function parseTime(timeStr: string): { hours: number; minutes: number } | null {
     if (period === 'AM' && hours === 12) hours = 0
     return { hours, minutes }
   }
-  // Try 24h format: "14:00"
   const match24 = clean.match(/^(\d{1,2}):(\d{2})$/)
   if (match24) {
     return { hours: parseInt(match24[1]), minutes: parseInt(match24[2]) }
@@ -43,6 +49,7 @@ function BookingForm() {
   const isDrawing = useRef(false)
 
   const [addons, setAddons] = useState<Addon[]>([])
+  const [fees, setFees] = useState<Fee[]>([])
   const [selectedAddons, setSelectedAddons] = useState<{ [id: string]: number }>({})
   const [discountCode, setDiscountCode] = useState('')
   const [discountResult, setDiscountResult] = useState<any>(null)
@@ -59,8 +66,6 @@ function BookingForm() {
   const [waiverChecked, setWaiverChecked] = useState(false)
   const [hasSignature, setHasSignature] = useState(false)
   const [settings, setSettings] = useState<any>(null)
-
-  // Same-day cutoff state
   const [sameDayBlocked, setSameDayBlocked] = useState(false)
   const [sameDayMessage, setSameDayMessage] = useState('')
 
@@ -81,7 +86,7 @@ function BookingForm() {
   const adults = parseInt(searchParams.get('adults') || '2')
   const children = parseInt(searchParams.get('children') || '0')
 
-  useEffect(() => { fetchAddons(); fetchSettings() }, [])
+  useEffect(() => { fetchAddons(); fetchSettings(); fetchFees() }, [])
   useEffect(() => { if (step >= 3 && !squareLoaded) loadSquare() }, [step])
   useEffect(() => { if (arrival) fetchCancellationPolicy() }, [arrival])
 
@@ -97,29 +102,26 @@ function BookingForm() {
     }
   }
 
-  // ── Same-day cutoff check ────────────────────────────────────────────────
+  async function fetchFees() {
+    const { data } = await supabase
+      .from('fees')
+      .select('*')
+      .eq('is_active', true)
+    setFees(data || [])
+  }
+
   function checkSameDayCutoff(settingsData: any, arrivalDate: string) {
     if (!arrivalDate || !settingsData?.same_day_cutoff_time) return
-
-    // Is the arrival date today?
     const today = new Date()
     const todayStr = today.toISOString().split('T')[0]
-    if (arrivalDate !== todayStr) return  // not today, no restriction
-
+    if (arrivalDate !== todayStr) return
     const cutoff = parseTime(settingsData.same_day_cutoff_time)
-    if (!cutoff) return  // couldn't parse time, don't block
-
-    const currentHours = today.getHours()
-    const currentMinutes = today.getMinutes()
-    const currentTotalMinutes = currentHours * 60 + currentMinutes
+    if (!cutoff) return
+    const currentTotalMinutes = today.getHours() * 60 + today.getMinutes()
     const cutoffTotalMinutes = cutoff.hours * 60 + cutoff.minutes
-
     if (currentTotalMinutes >= cutoffTotalMinutes) {
       setSameDayBlocked(true)
-      setSameDayMessage(
-        settingsData.same_day_cutoff_message ||
-        'Same-day reservations are not available online. Please call us.'
-      )
+      setSameDayMessage(settingsData.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us.')
     }
   }
 
@@ -144,7 +146,7 @@ function BookingForm() {
       try {
         const payments = (window as any).Square.payments(
           process.env.NEXT_PUBLIC_SQUARE_APP_ID!,
-          process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!
+          'L42H3PRBWB5CJ'
         )
         squareRef.current = payments
         const card = await payments.card()
@@ -156,11 +158,9 @@ function BookingForm() {
     document.head.appendChild(script)
   }
 
-  // Waiver text with [CAMPGROUND NAME] replaced
   const waiverText = (settings?.waiver_text || '').replace(/\[CAMPGROUND NAME\]/g, settings?.park_name || 'the campground')
   const waiverEnabled = settings?.waiver_enabled !== false
 
-  // Signature canvas handlers
   function startDrawing(e: any) {
     isDrawing.current = true
     const canvas = signatureCanvasRef.current!
@@ -235,13 +235,44 @@ function BookingForm() {
   const extraAdults = Math.max(0, adults - 2)
   const extraChildren = Math.max(0, children - 2)
   const extraGuestFee = (extraAdults * 1000 + extraChildren * 500) * site.nights
+
+  // ── Fee calculation ──────────────────────────────────────────────────────
+  function feeAppliesToSite(fee: Fee): boolean {
+    if (fee.applies_to === 'all') return true
+    const targets = fee.applies_to.split(',').map(s => s.trim())
+    return targets.includes(site.site_type)
+  }
+
+  function feeAppliesToAddons(fee: Fee): boolean {
+    if (fee.applies_to === 'all') return true
+    const targets = fee.applies_to.split(',').map(s => s.trim())
+    return targets.includes('addons')
+  }
+
+  function calculateFeeAmount(fee: Fee): number {
+    let base = 0
+    if (feeAppliesToSite(fee)) base += site.total_price + extraGuestFee
+    if (feeAppliesToAddons(fee)) base += addonTotal
+    if (base === 0) return 0
+    if (fee.type === 'percentage') return Math.round(base * fee.amount / 100)
+    return fee.amount * 100 // flat fee stored in dollars, convert to cents
+  }
+
+  const feeBreakdown = fees.map(fee => ({
+    ...fee,
+    calculatedAmount: calculateFeeAmount(fee),
+  })).filter(fee => fee.calculatedAmount > 0)
+
+  const feesTotal = feeBreakdown.reduce((sum, fee) => sum + fee.calculatedAmount, 0)
+  // ────────────────────────────────────────────────────────────────────────
+
   const subtotal = site.total_price + extraGuestFee + addonTotal
   const discountAmount = discountResult
     ? discountResult.discount_type === 'percent'
       ? Math.round(subtotal * discountResult.discount_value / 100)
       : discountResult.discount_value
     : 0
-  const total = Math.max(0, subtotal - discountAmount)
+  const total = Math.max(0, subtotal + feesTotal - discountAmount)
   const deposit = site.nightly_rate
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
@@ -288,8 +319,9 @@ function BookingForm() {
           amountToPay, paymentType, addonItems,
           discountCode: discountResult?.code || null,
           discountAmount, extraGuestFee, addonTotal,
+          feesTotal,
           nights: site.nights,
-          waiverSigned: waiverEnabled ? true : false,
+          waiverSigned: waiverSigned,
           signatureData,
         }),
       })
@@ -308,7 +340,6 @@ function BookingForm() {
     settings?.logo_shape === 'rounded' ? 'rounded-xl' :
     settings?.logo_shape === 'square' ? 'rounded-none' : 'rounded-none'
 
-  // ── If same-day booking is blocked, show a friendly wall instead of the form
   if (sameDayBlocked) {
     return (
       <main className="min-h-screen flex flex-col" style={{ backgroundColor: '#1C1C1C' }}>
@@ -328,13 +359,7 @@ function BookingForm() {
             <div className="text-5xl mb-4">📞</div>
             <h2 className="text-white text-2xl font-bold mb-3">Same-Day Reservations</h2>
             <p className="text-gray-300 text-base leading-relaxed">{sameDayMessage}</p>
-            <button
-              onClick={() => window.history.back()}
-              className="mt-8 px-6 py-3 rounded-xl text-white font-semibold transition-colors"
-              style={{ backgroundColor: 'var(--accent-color)' }}
-            >
-              ← Go Back
-            </button>
+            <button onClick={() => window.history.back()} className="mt-8 px-6 py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>← Go Back</button>
           </div>
         </div>
       </main>
@@ -501,7 +526,22 @@ function BookingForm() {
                   <span>${(site.total_price / 100).toFixed(2)}</span>
                 </div>
                 {extraGuestFee > 0 && <div className="flex justify-between text-gray-300"><span>Extra guest fees</span><span>${(extraGuestFee / 100).toFixed(2)}</span></div>}
-                {addonTotal > 0 && <div className="flex justify-between text-gray-300"><span>Add-ons</span><span>${(addonTotal / 100).toFixed(2)}</span></div>}
+               {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
+  const addon = addons.find(a => a.id === id)
+  if (!addon) return null
+  return (
+    <div key={id} className="flex justify-between">
+      <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
+      <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
+    </div>
+  )
+})}
+                {feeBreakdown.map(fee => (
+                  <div key={fee.id} className="flex justify-between text-gray-300">
+                    <span>{fee.name}</span>
+                    <span>${(fee.calculatedAmount / 100).toFixed(2)}</span>
+                  </div>
+                ))}
                 {discountAmount > 0 && <div className="flex justify-between text-green-400"><span>Discount ({discountResult.code})</span><span>-${(discountAmount / 100).toFixed(2)}</span></div>}
                 <div className="border-t border-gray-700 pt-2 flex justify-between text-white font-bold">
                   <span>Total</span><span>${(total / 100).toFixed(2)}</span>
@@ -557,6 +597,28 @@ function BookingForm() {
               <div><p className="text-gray-400">Guests</p><p className="text-white font-medium">{adults} adult{adults !== 1 ? 's' : ''}{children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}</p></div>
               <div><p className="text-gray-400">Duration</p><p className="text-white font-medium">{site.nights} night{site.nights !== 1 ? 's' : ''}</p></div>
               <div className="border-t border-gray-700 pt-3"><p className="text-gray-400">Rate</p><p className="text-white font-medium">${(site.nightly_rate / 100).toFixed(2)}/night</p></div>
+              {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
+  const addon = addons.find(a => a.id === id)
+  if (!addon) return null
+  return (
+    <div key={id} className="flex justify-between">
+      <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
+      <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
+    </div>
+  )
+})}
+              {feeBreakdown.map(fee => (
+                <div key={fee.id} className="flex justify-between">
+                  <p className="text-gray-400">{fee.name}</p>
+                  <p className="text-white font-medium">${(fee.calculatedAmount / 100).toFixed(2)}</p>
+                </div>
+              ))}
+              {discountAmount > 0 && (
+                <div className="flex justify-between">
+                  <p className="text-green-400">Discount</p>
+                  <p className="text-green-400 font-medium">-${(discountAmount / 100).toFixed(2)}</p>
+                </div>
+              )}
               <div className="border-t border-gray-700 pt-3">
                 <div className="flex justify-between">
                   <p className="text-white font-bold">Total</p>
