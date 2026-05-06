@@ -89,6 +89,7 @@ export default function HomePage() {
         const cutoffMinutes = hours * 60 + minutes
         if (currentMinutes >= cutoffMinutes) {
           setSameDayBlock(settings.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us.')
+          setStep(2)
           return
         }
       }
