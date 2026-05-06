@@ -390,7 +390,20 @@ export default function HomePage() {
                     Click a site on the map to select it — <span className="text-gray-400">grey = not available for selected dates</span>
                   </h3>
                   <CampgroundMap
-                    onSelectSite={(site) => setSelectedSite(site as any)}
+                    onSelectSite={(site) => {
+  const s = site as any
+  setSelectedSite(s)
+  const catIds = siteCategories[s.id]
+  if (catIds && catIds.length > 0) {
+    setOpenCategories(prev => {
+      const next = new Set(prev)
+      catIds.forEach((id: number) => next.add(id))
+      return next
+    })
+  } else {
+    setOpenCategories(prev => new Set(prev).add('uncategorized'))
+  }
+}}
                     sites={sites}
                     availableSiteIds={sites.filter(s => s.meets_min_stay !== false).map(s => s.id)}
                     selectedSiteId={selectedSite?.id}
