@@ -18,6 +18,13 @@ type Site = {
   min_stay: number
   meets_min_stay: boolean
   description: string
+  photo_url: string | null
+  photo_url_2: string | null
+}
+
+type Category = {
+  id: number
+  name: string
 }
 
 export default function HomePage() {
@@ -37,6 +44,10 @@ export default function HomePage() {
   const [settings, setSettings] = useState<any>(null)
   const [siteTypes, setSiteTypes] = useState<string[]>([])
   const [sameDayBlock, setSameDayBlock] = useState<string | null>(null)
+  const [categories, setCategories] = useState<Category[]>([])
+  const [siteCategories, setSiteCategories] = useState<Record<string, number[]>>({})
+  const [openCategories, setOpenCategories] = useState<Set<number | 'uncategorized'>>(new Set())
+  const [expandedPhotoSiteId, setExpandedPhotoSiteId] = useState<string | null>(null)
   const selectedSiteRef = useRef<HTMLDivElement>(null)
 
   const today = new Date().toISOString().split('T')[0]
@@ -48,6 +59,9 @@ export default function HomePage() {
         const types = [...new Set(data.map((s: any) => s.site_type))]
         setSiteTypes(types)
       }
+    })
+    supabase.from('categories').select('*').order('name').then(({ data }) => {
+      setCategories(data || [])
     })
   }, [])
 
@@ -61,10 +75,9 @@ export default function HomePage() {
     if (!arrival || !departure) { alert('Please select both arrival and departure dates.'); return }
     if (departure <= arrival) { alert('Departure date must be after arrival date.'); return }
 
-    // Same-day cutoff check
     if (settings?.same_day_cutoff_time && arrival === today) {
       const clean = settings.same_day_cutoff_time.trim().toUpperCase()
-      const match = clean.replace(/:\d{2}(\s|$)/, '$1').trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/)
+      const match = clean.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/)
       if (match) {
         let hours = parseInt(match[1])
         const minutes = parseInt(match[2])
@@ -76,7 +89,6 @@ export default function HomePage() {
         const cutoffMinutes = hours * 60 + minutes
         if (currentMinutes >= cutoffMinutes) {
           setSameDayBlock(settings.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us.')
-          setStep(2)
           return
         }
       }
@@ -85,19 +97,46 @@ export default function HomePage() {
     setLoading(true)
     setStep(2)
     setSelectedSite(null)
+    setOpenCategories(new Set())
+
     const res = await fetch(`/api/availability?arrival=${arrival}&departure=${departure}&siteType=${siteType}`)
     const data = await res.json()
-    setSites(data.sites || [])
+    const fetchedSites: Site[] = data.sites || []
+    setSites(fetchedSites)
     setIsClosed(data.closed || false)
     setClosedMessage(data.closedMessage || '')
     setSeasonStart(data.seasonStart || '')
     setSeasonEnd(data.seasonEnd || '')
+
+    // Fetch site_categories for these sites
+    if (fetchedSites.length > 0) {
+      const siteIds = fetchedSites.map(s => s.id)
+      const { data: sc } = await supabase
+        .from('site_categories')
+        .select('*')
+        .in('site_id', siteIds)
+      if (sc) {
+        const map: Record<string, number[]> = {}
+        sc.forEach((row: any) => {
+          if (!map[row.site_id]) map[row.site_id] = []
+          map[row.site_id].push(row.category_id)
+        })
+        setSiteCategories(map)
+      }
+    }
+
     setLoading(false)
   }
 
+  function toggleCategory(id: number | 'uncategorized') {
+    setOpenCategories(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) { next.delete(id) } else { next.add(id) }
+      return next
+    })
+  }
+
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
-  const hookupLabel = (h: string) => ({ full: 'Full Hookup', water_electric: 'Water & Electric', none: 'None' }[h] || h)
-  const ampLabel = (a: string) => ({ '30amp': '30 Amp', '30_50amp': '30/50 Amp', none: '' }[a] || '')
 
   function handleContinue() {
     if (!selectedSite) return
@@ -111,8 +150,7 @@ export default function HomePage() {
       nightlyRate: selectedSite.nightly_rate.toString(),
       totalPrice: selectedSite.total_price.toString(),
       nights: selectedSite.nights.toString(),
-      arrival,
-      departure,
+      arrival, departure,
       adults: adults.toString(),
       children: children.toString(),
     })
@@ -136,31 +174,110 @@ export default function HomePage() {
     settings?.logo_shape === 'square' ? 'w-32 h-32 rounded-none' :
     'w-40 h-24'
 
-  return (
-    <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
+  // Group sites by category
+  function groupSitesByCategory() {
+    const groups: { id: number | 'uncategorized'; name: string; sites: Site[] }[] = []
 
-      {/* Hero Section */}
-      <div className="flex flex-col items-center justify-center px-4 py-12 text-center"
-        style={{ backgroundColor: '#2B2B2B' }}>
+    if (categories.length === 0) return [{ id: 'uncategorized' as const, name: '', sites }]
 
-        {settings?.logo_url && (
-          <div className={`mb-6 overflow-hidden flex items-center justify-center ${logoShapeClass}`}>
+    categories.forEach(cat => {
+      const catSites = sites.filter(s => siteCategories[s.id]?.includes(cat.id))
+      if (catSites.length > 0) {
+        groups.push({ id: cat.id, name: cat.name, sites: catSites })
+      }
+    })
+
+    const uncategorized = sites.filter(s => !siteCategories[s.id] || siteCategories[s.id].length === 0)
+    if (uncategorized.length > 0) {
+      groups.push({ id: 'uncategorized', name: 'Other Sites', sites: uncategorized })
+    }
+
+    return groups
+  }
+
+  function renderSiteCard(site: Site) {
+    const isSelected = selectedSite?.id === site.id
+    const isExpanded = expandedPhotoSiteId === site.id
+    return (
+      <div key={site.id}
+        ref={isSelected ? selectedSiteRef : null}
+        className={`rounded-2xl overflow-hidden transition-all ${site.meets_min_stay ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'}`}
+        style={{ backgroundColor: '#2B2B2B', outline: isSelected ? '2px solid var(--accent-color)' : 'none' }}
+        onClick={() => site.meets_min_stay && setSelectedSite(site)}
+      >
+        {/* Main photo */}
+        {site.photo_url && (
+          <div className="relative w-full h-40 overflow-hidden">
             <Image
-              src={settings.logo_url}
-              alt={settings?.park_name || 'Campground'}
-              width={160}
-              height={160}
-              className="object-contain w-full h-full"
-              priority
+              src={site.photo_url}
+              alt={`Site ${site.site_number}`}
+              fill
+              className="object-cover"
+            />
+            {site.photo_url_2 && (
+              <button
+                onClick={e => { e.stopPropagation(); setExpandedPhotoSiteId(isExpanded ? null : site.id) }}
+                className="absolute bottom-2 right-2 bg-black bg-opacity-60 text-white text-xs px-2 py-1 rounded-full font-medium"
+              >
+                {isExpanded ? 'Hide interior ▲' : 'See interior ▼'}
+              </button>
+            )}
+          </div>
+        )}
+        {/* Second photo */}
+        {site.photo_url_2 && isExpanded && (
+          <div className="relative w-full h-40 overflow-hidden border-t border-gray-700">
+            <Image
+              src={site.photo_url_2}
+              alt={`Site ${site.site_number} interior`}
+              fill
+              className="object-cover"
             />
           </div>
         )}
+        <div className="p-6">
+          <div className="flex items-start justify-between mb-3">
+            <div>
+              <h3 className="text-white font-bold text-lg">
+                {siteTypeLabel(site.site_type)} {site.site_number}
+              </h3>
+              <p className="text-sm" style={{ color: 'var(--accent-color)' }}>
+                {site.site_type === 'rv_site' && `${site.amp_service === '30amp' ? '30 Amp' : '30/50 Amp'} · ${site.hookups === 'full' ? 'Full Hookup' : 'Water & Electric'}`}
+                {site.site_type === 'cabin' && 'Private Cabin'}
+                {site.site_type === 'tent' && 'Tent Site'}
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-white font-bold text-xl">${(site.nightly_rate / 100).toFixed(0)}<span className="text-sm font-normal text-gray-400">/night</span></p>
+              <p className="text-sm text-gray-400">${(site.total_price / 100).toFixed(0)} total</p>
+            </div>
+          </div>
+          {site.max_rv_length && <p className="text-gray-400 text-sm mb-2">Max RV length: {site.max_rv_length}ft</p>}
+          {site.description && <p className="text-gray-400 text-sm mb-2">{site.description}</p>}
+          {!site.meets_min_stay && <p className="text-yellow-400 text-sm mt-2">Minimum {site.min_stay} nights required for this site</p>}
+          {site.meets_min_stay && isSelected && (
+            <div className="mt-3 pt-3 border-t border-gray-600">
+              <p className="text-sm font-medium" style={{ color: 'var(--accent-color)' }}>Selected — scroll down to continue</p>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
 
+  return (
+    <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
+
+      {/* Hero */}
+      <div className="flex flex-col items-center justify-center px-4 py-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+        {settings?.logo_url && (
+          <div className={`mb-6 overflow-hidden flex items-center justify-center ${logoShapeClass}`}>
+            <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={160} height={160} className="object-contain w-full h-full" priority />
+          </div>
+        )}
         <h1 className="text-3xl font-bold text-white mb-2">Welcome to {settings?.park_name || 'Our Campground'}</h1>
         <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{settings?.park_location || ''}</p>
-        <p className="text-gray-400 mb-8 max-w-md">
-          {settings?.park_tagline || "Book your perfect campsite, cabin, or tent site today."}
-        </p>
+        <p className="text-gray-400 mb-8 max-w-md">{settings?.park_tagline || 'Book your perfect campsite, cabin, or tent site today.'}</p>
 
         {/* Search Box */}
         <div className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl p-6">
@@ -180,13 +297,11 @@ export default function HomePage() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Guests</label>
               <div className="flex gap-2">
                 <div className="flex-1">
-                  <input type="number" min={1} max={20} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={adults}
-                    onChange={e => setAdults(parseInt(e.target.value))} />
+                  <input type="number" min={1} max={20} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={adults} onChange={e => setAdults(parseInt(e.target.value))} />
                   <p className="text-xs text-gray-400 mt-0.5 text-center">Adults</p>
                 </div>
                 <div className="flex-1">
-                  <input type="number" min={0} max={20} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={children}
-                    onChange={e => setChildren(parseInt(e.target.value))} />
+                  <input type="number" min={0} max={20} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={children} onChange={e => setChildren(parseInt(e.target.value))} />
                   <p className="text-xs text-gray-400 mt-0.5 text-center">Children</p>
                 </div>
               </div>
@@ -238,7 +353,7 @@ export default function HomePage() {
                 {children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}
               </p>
             </div>
-            <button onClick={() => { setStep(1); setSelectedSite(null); setSameDayBlock(null) }}
+            <button onClick={() => { setStep(1); setSelectedSite(null) }}
               className="text-sm px-4 py-2 rounded-lg"
               style={{ backgroundColor: '#2B2B2B', color: 'var(--accent-color)' }}>
               ← Change Dates
@@ -283,40 +398,43 @@ export default function HomePage() {
                   />
                 </div>
               )}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {sites.map(site => (
-                  <div key={site.id}
-                    onClick={() => site.meets_min_stay && setSelectedSite(site)}
-                    className={`rounded-2xl p-6 transition-all ${site.meets_min_stay ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'}`}
-                    ref={selectedSite?.id === site.id ? selectedSiteRef : null}
-                    style={{ backgroundColor: '#2B2B2B', outline: selectedSite?.id === site.id ? '2px solid var(--accent-color)' : 'none' }}>
-                    <div className="flex items-start justify-between mb-3">
-                      <div>
-                        <h3 className="text-white font-bold text-lg">
-                          {site.site_type === 'rv_site' ? 'RV Site' : site.site_type === 'cabin' ? 'Cabin' : 'Tent Site'} {site.site_number}
-                        </h3>
-                        <p className="text-sm" style={{ color: 'var(--accent-color)' }}>
-                          {site.site_type === 'rv_site' && `${site.amp_service === '30amp' ? '30 Amp' : '30/50 Amp'} · ${site.hookups === 'full' ? 'Full Hookup' : 'Water & Electric'}`}
-                          {site.site_type === 'cabin' && 'Private Cabin'}
-                          {site.site_type === 'tent' && 'Tent Site'}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-white font-bold text-xl">${(site.nightly_rate / 100).toFixed(0)}<span className="text-sm font-normal text-gray-400">/night</span></p>
-                        <p className="text-sm text-gray-400">${(site.total_price / 100).toFixed(0)} total</p>
-                      </div>
+
+              {/* Category Accordion */}
+              {categories.length > 0 ? (
+                <div className="space-y-3">
+                  {groupSitesByCategory().map(group => (
+                    <div key={group.id} className="rounded-2xl overflow-hidden" style={{ backgroundColor: '#2B2B2B' }}>
+                      {/* Accordion Header */}
+                      <button
+                        onClick={() => toggleCategory(group.id)}
+                        className="w-full flex items-center justify-between px-6 py-4 text-left hover:opacity-80 transition-opacity"
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="text-white font-bold text-lg">
+                            {group.id === 'uncategorized' ? '🏕️' : '🏷️'} {group.name || 'All Sites'}
+                          </span>
+                          <span className="text-sm px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: 'rgba(var(--accent-rgb, 56,189,196), 0.15)', color: 'var(--accent-color)' }}>
+                            {group.sites.length} site{group.sites.length !== 1 ? 's' : ''} available
+                          </span>
+                        </div>
+                        <span className="text-gray-400 text-xl">{openCategories.has(group.id) ? '▲' : '▼'}</span>
+                      </button>
+
+                      {/* Accordion Content */}
+                      {openCategories.has(group.id) && (
+                        <div className="px-4 pb-4 grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-gray-700">
+                          {group.sites.map(site => renderSiteCard(site))}
+                        </div>
+                      )}
                     </div>
-                    {site.max_rv_length && <p className="text-gray-400 text-sm mb-2">Max RV length: {site.max_rv_length}ft</p>}
-                    {site.description && <p className="text-gray-400 text-sm mb-2">{site.description}</p>}
-                    {!site.meets_min_stay && <p className="text-yellow-400 text-sm mt-2">Minimum {site.min_stay} nights required for this site</p>}
-                    {site.meets_min_stay && selectedSite?.id === site.id && (
-                      <div className="mt-3 pt-3 border-t border-gray-600">
-                        <p className="text-sm font-medium" style={{ color: 'var(--accent-color)' }}>Selected — scroll down to continue</p>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              ) : (
+                // No categories — show flat grid as before
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {sites.map(site => renderSiteCard(site))}
+                </div>
+              )}
             </>
           )}
 

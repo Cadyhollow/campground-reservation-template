@@ -6,22 +6,28 @@ import { usePathname } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import Image from 'next/image'
 
-const navigation = [
-  { name: 'Dashboard', href: '/admin' },
-  { name: 'Reservations', href: '/admin/reservations' },
-  { name: 'Calendar', href: '/admin/calendar' },
-  { name: 'Manual Booking', href: '/admin/manual-booking' },
-  { name: 'Sites', href: '/admin/sites' },
-  { name: 'Pricing Rules', href: '/admin/pricing' },
-  { name: 'Min. Stay Rules', href: '/admin/min-stay' },
-  { name: 'Cancellation Rules', href: '/admin/cancellation-rules' },
-  { name: 'Add-Ons', href: '/admin/addons' },
-  { name: 'Taxes & Fees', href: '/admin/fees' },
-  { name: 'Reports', href: '/admin/reports' },
-  { name: 'Discounts', href: '/admin/discounts' },
-  { name: 'Blocked Dates', href: '/admin/blocked-dates' },
-  { name: 'Settings', href: '/admin/settings' },
+const baseNavigation = [
+  { name: 'Dashboard', href: '/admin', plan: 'trailhead' },
+  { name: 'Reservations', href: '/admin/reservations', plan: 'trailhead' },
+  { name: 'Calendar', href: '/admin/calendar', plan: 'trailhead' },
+  { name: 'Manual Booking', href: '/admin/manual-booking', plan: 'trailhead' },
+  { name: 'Sites', href: '/admin/sites', plan: 'trailhead' },
+  { name: 'Pricing Rules', href: '/admin/pricing', plan: 'trailhead' },
+  { name: 'Min. Stay Rules', href: '/admin/min-stay', plan: 'trailhead' },
+  { name: 'Cancellation Rules', href: '/admin/cancellation-rules', plan: 'trailhead' },
+  { name: 'Add-Ons', href: '/admin/addons', plan: 'trailhead' },
+  { name: 'Taxes & Fees', href: '/admin/fees', plan: 'trailhead' },
+  { name: 'Discounts', href: '/admin/discounts', plan: 'trailhead' },
+  { name: 'Blocked Dates', href: '/admin/blocked-dates', plan: 'trailhead' },
+  { name: 'Reports', href: '/admin/reports', plan: 'ridgeline' },
+  { name: 'Settings', href: '/admin/settings', plan: 'trailhead' },
 ]
+
+const planLevel = (plan: string) => {
+  if (plan === 'summit') return 3
+  if (plan === 'ridgeline') return 2
+  return 1 // trailhead
+}
 
 export default function AdminLayout({
   children,
@@ -31,15 +37,19 @@ export default function AdminLayout({
   const pathname = usePathname()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [settings, setSettings] = useState<any>(null)
+  const [plan, setPlan] = useState('trailhead')
 
   useEffect(() => {
     supabase
       .from('settings')
-      .select('park_name, logo_url, logo_shape')
+      .select('park_name, logo_url, logo_shape, plan')
       .limit(1)
       .single()
       .then(({ data }) => {
-        if (data) setSettings(data)
+        if (data) {
+          setSettings(data)
+          setPlan(data.plan || 'trailhead')
+        }
       })
   }, [])
 
@@ -53,6 +63,8 @@ export default function AdminLayout({
     settings?.logo_shape === 'rounded' ? 'rounded-xl' :
     settings?.logo_shape === 'square' ? 'rounded-none' :
     'rounded-none'
+
+  const navigation = baseNavigation.filter(item => planLevel(plan) >= planLevel(item.plan))
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -85,7 +97,7 @@ export default function AdminLayout({
           lg:relative lg:translate-x-0 lg:flex lg:flex-col
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
         `}>
-          {/* Sidebar header with logo */}
+          {/* Sidebar header */}
           <div className="hidden lg:flex flex-col items-center px-6 py-6 border-b border-green-700">
             {settings?.logo_url && (
               <div className={`w-20 h-20 overflow-hidden flex items-center justify-center mb-3 ${logoShapeClass}`}>
