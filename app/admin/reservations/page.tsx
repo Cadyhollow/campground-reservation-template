@@ -72,11 +72,13 @@ function ReservationsPageInner() {
   })
   const [editAddons, setEditAddons] = useState<{ [id: string]: number }>({})
   const [saving, setSaving] = useState(false)
+  const [fees, setFees] = useState<{name:string,type:string,amount:number,applies_to:string}[]>([])
 
   useEffect(() => {
     fetchReservations()
     fetchAllSites()
     fetchAvailableAddons()
+    fetchFees()
   }, [])
 
   // Auto-select reservation from URL param (e.g. from calendar)
@@ -111,6 +113,11 @@ function ReservationsPageInner() {
   async function fetchAvailableAddons() {
     const { data } = await supabase.from('addons').select('*').eq('is_active', true).order('display_order')
     setAvailableAddons(data || [])
+  }
+
+  async function fetchFees() {
+    const { data } = await supabase.from('fees').select('*').eq('is_active', true)
+    setFees(data || [])
   }
 
   async function fetchBookedSites(arrival: string, departure: string, excludeReservationId: string) {
@@ -194,7 +201,14 @@ function ReservationsPageInner() {
       const addon = availableAddons.find(a => a.id === id)
       return sum + (addon ? addon.price * qty : 0)
     }, 0)
-    const newTotal = basePrice + addonTotal
+    const applicableFees = site ? fees.filter(f => {
+      if (f.applies_to === 'all') return true
+      const targets = f.applies_to.split(',').map(s => s.trim())
+      return targets.includes(site.site_type)
+    }) : []
+    const feesTotal = applicableFees.reduce((sum, f) =>
+      sum + (f.type === 'percentage' ? (basePrice / 100) * f.amount / 100 : f.amount) * 100, 0)
+    const newTotal = basePrice + addonTotal + feesTotal
 
     const oldSite = selected.sites
     const auditNote = `[Edited ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] Was: ${oldSite ? `Site ${oldSite.site_number}` : 'unknown site'}, ${selected.arrival_date} → ${selected.departure_date}, ${selected.num_adults} adults, ${selected.num_children} children`
@@ -284,7 +298,14 @@ function ReservationsPageInner() {
     const addon = availableAddons.find(a => a.id === id)
     return sum + (addon ? addon.price * qty : 0)
   }, 0)
-  const editTotal = editBasePrice + editAddonTotal
+  const editApplicableFees = editSite ? fees.filter(f => {
+    if (f.applies_to === 'all') return true
+    const targets = f.applies_to.split(',').map(s => s.trim())
+    return targets.includes(editSite.site_type)
+  }) : []
+  const editFeesTotal = editApplicableFees.reduce((sum, f) =>
+    sum + (f.type === 'percentage' ? (editBasePrice / 100) * f.amount / 100 : f.amount) * 100, 0)
+  const editTotal = editBasePrice + editAddonTotal + editFeesTotal
 
   const today = new Date().toISOString().split('T')[0]
 
@@ -356,8 +377,8 @@ function ReservationsPageInner() {
         </div>
 
         {/* Detail / Edit Panel */}
-        {selected && (
-          <div className="w-96 bg-white rounded-xl shadow-sm border border-gray-100 p-6 h-fit sticky top-6">
+       {selected && (
+          <div className="w-96 bg-white rounded-xl shadow-sm border border-gray-100 p-6 sticky top-6 max-h-[calc(100vh-6rem)] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900">
                 {editing ? 'Edit Reservation' : 'Reservation Details'}
@@ -561,6 +582,12 @@ function ReservationsPageInner() {
                         <span>${(editAddonTotal / 100).toFixed(2)}</span>
                       </div>
                     )}
+                    {editApplicableFees.map((fee, i) => (
+                      <div key={i} className="flex justify-between text-sm text-gray-600 mt-1">
+                        <span>{fee.name}</span>
+                        <span>${(fee.type === 'percentage' ? (editBasePrice / 100) * fee.amount / 100 : fee.amount / 100).toFixed(2)}</span>
+                      </div>
+                    ))}
                     <div className="flex justify-between font-bold text-gray-900 border-t border-green-200 pt-2 mt-2">
                       <span>New Total</span>
                       <span>${(editTotal / 100).toFixed(2)}</span>

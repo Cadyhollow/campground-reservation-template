@@ -22,13 +22,22 @@ type Addon = {
   is_active: boolean
 }
 
+type Fee = {
+  name: string
+  type: string
+  amount: number
+  applies_to: string
+}
+
 export default function ManualBookingPage() {
   const [sites, setSites] = useState<Site[]>([])
   const [addons, setAddons] = useState<Addon[]>([])
   const [selectedAddons, setSelectedAddons] = useState<{ [id: string]: number }>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [fees, setFees] = useState<{name:string,type:string,amount:number,applies_to:string}[]>([])
+  const [fees, setFees] = useState<Fee[]>([])
+  const [enabledFees, setEnabledFees] = useState<{ [name: string]: boolean }>({})
+  const [priceOverride, setPriceOverride] = useState('')
   const [form, setForm] = useState({
     site_id: '',
     arrival_date: '',
@@ -43,25 +52,33 @@ export default function ManualBookingPage() {
     notes: '',
   })
 
-  useEffect(() => { fetchSites(); fetchAddons() }, [])
+  useEffect(() => { fetchSites(); fetchAddons(); fetchFees() }, [])
 
   async function fetchSites() {
-    const { data } = await supabase
-      .from('sites')
-      .select('*')
-      .eq('is_available', true)
-      .order('display_order')
+    const { data } = await supabase.from('sites').select('*').eq('is_available', true).order('display_order')
     setSites(data || [])
     setLoading(false)
   }
 
   async function fetchAddons() {
-    const { data } = await supabase
-      .from('addons')
-      .select('*')
-      .eq('is_active', true)
-      .order('display_order')
+    const { data } = await supabase.from('addons').select('*').eq('is_active', true).order('display_order')
     setAddons(data || [])
+  }
+
+  async function fetchFees() {
+    const { data } = await supabase.from('fees').select('*').eq('is_active', true)
+    if (data) {
+      setFees(data)
+      // Default all fees to enabled
+      const defaults: { [name: string]: boolean } = {}
+      data.forEach(f => { defaults[f.name] = true })
+      setEnabledFees(defaults)
+    }
+  }
+
+  function toggleFee(name: string) {
+    setEnabledFees(prev => ({ ...prev, [name]: !prev[name] }))
+    setPriceOverride('') // clear override when fees change
   }
 
   const selectedSite = sites.find(s => s.id === form.site_id)
@@ -74,22 +91,30 @@ export default function ManualBookingPage() {
   const extraAdults = Math.max(0, form.num_adults - 2)
   const extraChildren = Math.max(0, form.num_children - 2)
   const extraGuestFee = (extraAdults * 1000 + extraChildren * 500) * nights
+
   const applicableFees = selectedSite ? fees.filter(f => {
-  if (f.applies_to === 'all') return true
-  const targets = f.applies_to.split(',').map((s: string) => s.trim())
-  return targets.includes(selectedSite.site_type) || targets.includes('addons')
-}) : []
-  const feesTotal = applicableFees.reduce((sum, f) => sum + (f.type === 'percentage' ? (baseTotal / 100) * f.amount / 100 : f.amount) * 100, 0)
+    if (f.applies_to === 'all') return true
+    const targets = f.applies_to.split(',').map(s => s.trim())
+    return targets.includes(selectedSite.site_type)
+  }) : []
+
+  const enabledApplicableFees = applicableFees.filter(f => enabledFees[f.name])
+
+  const feesTotal = enabledApplicableFees.reduce((sum, f) =>
+    sum + (f.type === 'percentage' ? (baseTotal / 100) * f.amount / 100 : f.amount) * 100, 0)
 
   const addonTotal = Object.entries(selectedAddons).reduce((sum, [id, qty]) => {
     const addon = addons.find(a => a.id === id)
     return sum + (addon ? addon.price * qty : 0)
   }, 0)
 
-  const total = baseTotal + extraGuestFee + feesTotal + addonTotal
+  const calculatedTotal = baseTotal + extraGuestFee + feesTotal + addonTotal
+  const total = priceOverride !== '' ? Math.round(parseFloat(priceOverride) * 100) : calculatedTotal
 
-  // Fetch fees on load
-  if (fees.length === 0) { supabase.from('fees').select('*').eq('is_active', true).then(({data}) => { if (data) setFees(data) }) }
+  // Deposit = first night base rate + proportional fees (no add-ons)
+  const firstNightBase = selectedSite ? selectedSite.base_rate : 0
+  const proportionalFees = nights > 0 ? Math.round(feesTotal / nights) : 0
+  const depositAmount = firstNightBase + proportionalFees
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site', yurt: 'Yurt', tiny_home: 'Tiny Home', lodge: 'Lodge Room', glamping: 'Glamping', treehouse: 'Treehouse' }[type] || type)
   const hookupLabel = (h: string) => ({ full: 'Full Hookup', water_electric: 'Water & Electric', none: 'None' }[h] || h)
@@ -146,14 +171,12 @@ export default function ManualBookingPage() {
       return
     }
 
-    // Build addon details for email
     const addonDetails = addonItems.map(item => ({
       name: addons.find(a => a.id === item.id)?.name || 'Add-on',
       quantity: item.quantity,
       price: item.price,
     }))
 
-    // Send confirmation email
     try {
       await fetch('/api/email', {
         method: 'POST',
@@ -196,6 +219,7 @@ export default function ManualBookingPage() {
       notes: '',
     })
     setSelectedAddons({})
+    setPriceOverride('')
   }
 
   return (
@@ -215,11 +239,7 @@ export default function ManualBookingPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Site *</label>
-                <select
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  value={form.site_id}
-                  onChange={e => setForm({ ...form, site_id: e.target.value })}
-                >
+                <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.site_id} onChange={e => setForm({ ...form, site_id: e.target.value })}>
                   <option value="">Select a site...</option>
                   {sites.map(site => (
                     <option key={site.id} value={site.id}>
@@ -231,41 +251,20 @@ export default function ManualBookingPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Arrival Date *</label>
-                <input
-                  type="date"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  value={form.arrival_date}
-                  onChange={e => setForm({ ...form, arrival_date: e.target.value })}
-                />
+                <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.arrival_date} onChange={e => setForm({ ...form, arrival_date: e.target.value })} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Departure Date *</label>
-                <input
-                  type="date"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  value={form.departure_date}
-                  onChange={e => { if (form.arrival_date && e.target.value && e.target.value <= form.arrival_date) { toast.error('Departure must be after arrival date.'); return; } setForm({ ...form, departure_date: e.target.value }) }}
-                />
+                <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.departure_date}
+                  onChange={e => { if (form.arrival_date && e.target.value && e.target.value <= form.arrival_date) { toast.error('Departure must be after arrival date.'); return } setForm({ ...form, departure_date: e.target.value }) }} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Adults</label>
-                <input
-                  type="number"
-                  min="1"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  value={form.num_adults}
-                  onChange={e => setForm({ ...form, num_adults: parseInt(e.target.value) })}
-                />
+                <input type="number" min="1" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.num_adults} onChange={e => setForm({ ...form, num_adults: parseInt(e.target.value) })} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Children</label>
-                <input
-                  type="number"
-                  min="0"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  value={form.num_children}
-                  onChange={e => setForm({ ...form, num_children: parseInt(e.target.value) })}
-                />
+                <input type="number" min="0" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.num_children} onChange={e => setForm({ ...form, num_children: parseInt(e.target.value) })} />
               </div>
             </div>
           </div>
@@ -283,18 +282,55 @@ export default function ManualBookingPage() {
                       <p className="text-green-700 text-sm mt-0.5">${(addon.price / 100).toFixed(2)}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setSelectedAddons(prev => ({ ...prev, [addon.id]: Math.max(0, (prev[addon.id] || 0) - 1) }))}
-                        className="w-8 h-8 rounded-full bg-gray-200 text-gray-700 font-bold hover:bg-gray-300"
-                      >-</button>
+                      <button onClick={() => setSelectedAddons(prev => ({ ...prev, [addon.id]: Math.max(0, (prev[addon.id] || 0) - 1) }))}
+                        className="w-8 h-8 rounded-full bg-gray-200 text-gray-700 font-bold hover:bg-gray-300">-</button>
                       <span className="w-6 text-center font-medium text-gray-900">{selectedAddons[addon.id] || 0}</span>
-                      <button
-                        onClick={() => setSelectedAddons(prev => ({ ...prev, [addon.id]: (prev[addon.id] || 0) + 1 }))}
-                        className="w-8 h-8 rounded-full bg-green-700 text-white font-bold hover:bg-green-800"
-                      >+</button>
+                      <button onClick={() => setSelectedAddons(prev => ({ ...prev, [addon.id]: (prev[addon.id] || 0) + 1 }))}
+                        className="w-8 h-8 rounded-full bg-green-700 text-white font-bold hover:bg-green-800">+</button>
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Fees */}
+          {applicableFees.length > 0 && selectedSite && nights > 0 && (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">Taxes & Fees</h3>
+              <p className="text-xs text-gray-500 mb-4">Uncheck any fees that don't apply to this booking (e.g. cash payments).</p>
+              <div className="space-y-3">
+                {applicableFees.map((fee, i) => {
+                  const feeAmount = fee.type === 'percentage'
+                    ? (baseTotal / 100) * fee.amount / 100
+                    : fee.amount / 100
+                  return (
+                    <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-100">
+                    <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => toggleFee(fee.name)}
+                          className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                            (enabledFees[fee.name] ?? true)
+                              ? 'bg-green-700 border-green-700 text-white'
+                              : 'bg-white border-gray-300'
+                          }`}
+                        >
+                          {(enabledFees[fee.name] ?? true) && <span className="text-xs font-bold">✓</span>}
+                        </button>
+                        <div>
+                          <p className="font-medium text-gray-900 text-sm">{fee.name}</p>
+                          <p className="text-gray-500 text-xs">
+                            {fee.type === 'percentage' ? `${fee.amount}% of site total` : 'Flat fee'}
+                          </p>
+                        </div>
+                      </div>
+                      <p className={`text-sm font-medium ${enabledFees[fee.name] ? 'text-gray-900' : 'text-gray-300 line-through'}`}>
+                        ${feeAmount.toFixed(2)}
+                      </p>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
@@ -305,32 +341,15 @@ export default function ManualBookingPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
-                <input
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  placeholder="Jane Smith"
-                  value={form.guest_name}
-                  onChange={e => setForm({ ...form, guest_name: e.target.value })}
-                />
+                <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="Jane Smith" value={form.guest_name} onChange={e => setForm({ ...form, guest_name: e.target.value })} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
-                <input
-                  type="email"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  placeholder="jane@email.com"
-                  value={form.guest_email}
-                  onChange={e => setForm({ ...form, guest_email: e.target.value })}
-                />
+                <input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="jane@email.com" value={form.guest_email} onChange={e => setForm({ ...form, guest_email: e.target.value })} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
-                <input
-                  type="tel"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  placeholder="(555) 555-5555"
-                  value={form.guest_phone}
-                  onChange={e => setForm({ ...form, guest_phone: e.target.value })}
-                />
+                <input type="tel" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="(555) 555-5555" value={form.guest_phone} onChange={e => setForm({ ...form, guest_phone: e.target.value })} />
               </div>
             </div>
           </div>
@@ -341,11 +360,7 @@ export default function ManualBookingPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Payment Type</label>
-                <select
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  value={form.payment_type}
-                  onChange={e => setForm({ ...form, payment_type: e.target.value })}
-                >
+                <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.payment_type} onChange={e => setForm({ ...form, payment_type: e.target.value })}>
                   <option value="full">Paid in Full</option>
                   <option value="deposit">Deposit Only</option>
                   <option value="unpaid">Pay on Arrival</option>
@@ -353,32 +368,47 @@ export default function ManualBookingPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid ($)</label>
+                <input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="0.00" value={form.amount_paid} onChange={e => setForm({ ...form, amount_paid: e.target.value })} />
+                {form.payment_type === 'deposit' && depositAmount > 0 && (
+                  <p className="text-xs text-green-700 mt-1">
+                    Suggested deposit: ${(depositAmount / 100).toFixed(2)} (1 night + fees)
+                  </p>
+                )}
+                {form.payment_type === 'full' && total > 0 && (
+                  <p className="text-xs text-green-700 mt-1">
+                    Full amount: ${(total / 100).toFixed(2)}
+                  </p>
+                )}
+              </div>
+
+              {/* Price Override */}
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Override Total Price ($)
+                  <span className="ml-2 text-xs text-gray-400 font-normal">Optional — use for special deals or discounts</span>
+                </label>
                 <input
                   type="number"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  placeholder="0.00"
-                  value={form.amount_paid}
-                  onChange={e => setForm({ ...form, amount_paid: e.target.value })}
+                  placeholder={`Calculated: $${(calculatedTotal / 100).toFixed(2)}`}
+                  value={priceOverride}
+                  onChange={e => setPriceOverride(e.target.value)}
                 />
+                {priceOverride !== '' && (
+                  <button onClick={() => setPriceOverride('')} className="text-xs text-red-500 hover:text-red-700 mt-1">
+                    ✕ Clear override — revert to calculated total
+                  </button>
+                )}
               </div>
+
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Internal Notes</label>
-                <textarea
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  rows={3}
-                  placeholder="Any notes about this booking..."
-                  value={form.notes}
-                  onChange={e => setForm({ ...form, notes: e.target.value })}
-                />
+                <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" rows={3} placeholder="Any notes about this booking..." value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
               </div>
             </div>
           </div>
 
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="w-full py-3 rounded-xl text-white font-semibold bg-green-700 hover:bg-green-800 disabled:opacity-50 transition-colors"
-          >
+          <button onClick={handleSave} disabled={saving} className="w-full py-3 rounded-xl text-white font-semibold bg-green-700 hover:bg-green-800 disabled:opacity-50 transition-colors">
             {saving ? 'Saving...' : 'Create Reservation & Send Confirmation Email'}
           </button>
         </div>
@@ -393,9 +423,7 @@ export default function ManualBookingPage() {
               <div className="space-y-3 text-sm">
                 <div>
                   <p className="text-gray-500">Site</p>
-                  <p className="font-medium text-gray-900">
-                    {selectedSite ? `${siteTypeLabel(selectedSite.site_type)} ${selectedSite.site_number}` : '—'}
-                  </p>
+                  <p className="font-medium text-gray-900">{selectedSite ? `${siteTypeLabel(selectedSite.site_type)} ${selectedSite.site_number}` : '—'}</p>
                 </div>
                 <div>
                   <p className="text-gray-500">Dates</p>
@@ -430,16 +458,34 @@ export default function ManualBookingPage() {
                       </div>
                     )
                   })}
-                  {applicableFees.map((fee, i) => (
-                    <div key={i} className="flex justify-between text-gray-600">
-                      <span>{fee.name}</span>
-                      <span>${(fee.type === "percentage" ? (baseTotal / 100) * fee.amount / 100 : fee.amount).toFixed(2)}</span>
+                  {applicableFees.map((fee, i) => {
+                    const feeAmount = fee.type === 'percentage'
+                      ? (baseTotal / 100) * fee.amount / 100
+                      : fee.amount / 100
+                    const isEnabled = enabledFees[fee.name] ?? true
+                    return (
+                      <div key={i} className={`flex justify-between ${isEnabled ? 'text-gray-600' : 'text-gray-300 line-through'}`}>
+                        <span>{fee.name}</span>
+                        <span>${feeAmount.toFixed(2)}</span>
+                      </div>
+                    )
+                  })}
+                  {priceOverride !== '' && (
+                    <div className="flex justify-between text-amber-600 text-xs pt-1">
+                      <span>⚡ Price overridden</span>
+                      <span>was ${(calculatedTotal / 100).toFixed(2)}</span>
                     </div>
-                  ))}
+                  )}
                   <div className="flex justify-between font-bold text-gray-900 border-t border-gray-100 pt-2 mt-2">
                     <span>Total</span>
                     <span>${(total / 100).toFixed(2)}</span>
                   </div>
+                  {form.payment_type === 'deposit' && depositAmount > 0 && (
+                    <div className="flex justify-between text-green-700 text-xs pt-1">
+                      <span>Deposit due today</span>
+                      <span>${(depositAmount / 100).toFixed(2)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
