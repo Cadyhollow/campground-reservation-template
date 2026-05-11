@@ -68,27 +68,26 @@ export default function AdminDashboard() {
       setRecentReservations(resData.slice(0, 8))
     }
 
-    // Fetch add-ons for today's arrivals
     if (todayArrivals && todayArrivals.length > 0) {
       const ids = todayArrivals.map((r: any) => r.id)
-     const { data: addonData } = await supabase
-  .from('reservation_addons')
-  .select('reservation_id, addon_id, quantity')
-  .in('reservation_id', ids)
+      const { data: addonData } = await supabase
+        .from('reservation_addons')
+        .select('reservation_id, addon_id, quantity')
+        .in('reservation_id', ids)
 
-const addonIds = [...new Set(addonData?.map(r => r.addon_id) || [])]
-const { data: addonNames } = addonIds.length > 0
-  ? await supabase.from('addons').select('id, name').in('id', addonIds)
-  : { data: [] }
+      const addonIds = [...new Set(addonData?.map(r => r.addon_id) || [])]
+      const { data: addonNames } = addonIds.length > 0
+        ? await supabase.from('addons').select('id, name').in('id', addonIds)
+        : { data: [] }
 
-const nameMap: Record<string, string> = {}
-addonNames?.forEach((a: any) => { nameMap[a.id] = a.name })
+      const nameMap: Record<string, string> = {}
+      addonNames?.forEach((a: any) => { nameMap[a.id] = a.name })
 
-const addonMap: Record<string, { name: string; quantity: number }[]> = {}
-addonData?.forEach((row: any) => {
-  if (!addonMap[row.reservation_id]) addonMap[row.reservation_id] = []
-  addonMap[row.reservation_id].push({ name: nameMap[row.addon_id] || 'Add-on', quantity: row.quantity })
-})
+      const addonMap: Record<string, { name: string; quantity: number }[]> = {}
+      addonData?.forEach((row: any) => {
+        if (!addonMap[row.reservation_id]) addonMap[row.reservation_id] = []
+        addonMap[row.reservation_id].push({ name: nameMap[row.addon_id] || 'Add-on', quantity: row.quantity })
+      })
 
       setArrivalsToday(todayArrivals.map((r: any) => ({
         id: r.id,
@@ -102,6 +101,7 @@ addonData?.forEach((row: any) => {
         addons: addonMap[r.id] || [],
         checkedIn: r.checked_in || false,
       })))
+    }
 
     setLoading(false)
   }
@@ -226,7 +226,6 @@ addonData?.forEach((row: any) => {
                   className={`px-6 py-4 transition-colors ${guest.checkedIn ? 'bg-green-50' : 'bg-white'}`}
                 >
                   <div className="flex items-start gap-4">
-                    {/* Checkbox */}
                     <button
                       onClick={() => toggleCheckIn(guest.id)}
                       className={`mt-1 w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
@@ -238,7 +237,6 @@ addonData?.forEach((row: any) => {
                       {guest.checkedIn && <span className="text-xs">✓</span>}
                     </button>
 
-                    {/* Guest info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
                         <p className={`font-semibold text-gray-900 ${guest.checkedIn ? 'line-through text-gray-400' : ''}`}>
@@ -254,7 +252,6 @@ addonData?.forEach((row: any) => {
                         {guest.num_children > 0 ? `, ${guest.num_children} child${guest.num_children !== 1 ? 'ren' : ''}` : ''}
                       </p>
 
-                      {/* Payment row */}
                       <div className="flex items-center gap-3 mt-2">
                         {paidInFull ? (
                           <span className="inline-flex items-center gap-1 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
@@ -270,7 +267,6 @@ addonData?.forEach((row: any) => {
                         )}
                       </div>
 
-                      {/* Add-ons */}
                       {guest.addons.length > 0 && (
                         <div className="mt-2 flex flex-wrap gap-1">
                           {guest.addons.map((addon, i) => (
