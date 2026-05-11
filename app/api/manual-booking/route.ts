@@ -20,10 +20,12 @@ export async function POST(request: NextRequest) {
       guest_phone,
       base_nightly_rate,
       extra_guest_fee_total,
+      addons_total,
       total_price,
       amount_paid,
       payment_type,
       notes,
+      addonItems,
     } = body
 
     // Check availability
@@ -56,7 +58,7 @@ export async function POST(request: NextRequest) {
         guest_phone,
         base_nightly_rate,
         extra_guest_fee_total,
-        addons_total: 0,
+        addons_total: addons_total || 0,
         discount_amount: 0,
         total_price,
         amount_paid,
@@ -74,6 +76,23 @@ export async function POST(request: NextRequest) {
         { error: error.message },
         { status: 500 }
       )
+    }
+
+    // Save add-ons if any were selected
+    if (addonItems && addonItems.length > 0) {
+      const { error: addonError } = await supabase
+        .from('reservation_addons')
+        .insert(
+          addonItems.map((item: any) => ({
+            reservation_id: reservation.id,
+            addon_id: item.id,
+            quantity: item.quantity,
+            price_at_booking: item.price,
+          }))
+        )
+      if (addonError) {
+        console.error('Addon save error:', addonError)
+      }
     }
 
     return NextResponse.json({

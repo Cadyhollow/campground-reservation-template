@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import toast, { Toaster } from 'react-hot-toast'
 
@@ -45,7 +46,8 @@ type Reservation = {
   sites: { site_number: string; site_type: string } | null
 }
 
-export default function ReservationsPage() {
+function ReservationsPageInner() {
+  const searchParams = useSearchParams()
   const [reservations, setReservations] = useState<Reservation[]>([])
   const [allSites, setAllSites] = useState<Site[]>([])
   const [bookedSiteIds, setBookedSiteIds] = useState<Set<string>>(new Set())
@@ -71,14 +73,33 @@ export default function ReservationsPage() {
   const [editAddons, setEditAddons] = useState<{ [id: string]: number }>({})
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => { fetchReservations(); fetchAllSites(); fetchAvailableAddons() }, [])
+  useEffect(() => {
+    fetchReservations()
+    fetchAllSites()
+    fetchAvailableAddons()
+  }, [])
+
+  // Auto-select reservation from URL param (e.g. from calendar)
+  useEffect(() => {
+    const idFromUrl = searchParams.get('id')
+    if (idFromUrl && reservations.length > 0) {
+      const res = reservations.find(r => r.id === idFromUrl)
+      if (res) selectReservation(res)
+    }
+  }, [searchParams, reservations])
 
   async function fetchReservations() {
+    const today = new Date().toISOString().split('T')[0]
     const { data } = await supabase
       .from('reservations')
       .select('*, sites(site_number, site_type)')
-      .order('arrival_date', { ascending: false })
-    setReservations(data || [])
+      .order('arrival_date', { ascending: true })
+    if (data) {
+      // Sort: upcoming/today first, then past (descending)
+      const upcoming = data.filter(r => r.arrival_date >= today)
+      const past = data.filter(r => r.arrival_date < today).reverse()
+      setReservations([...upcoming, ...past])
+    }
     setLoading(false)
   }
 
@@ -104,25 +125,29 @@ export default function ReservationsPage() {
   }
 
   async function fetchAddons(reservationId: string) {
-    const { data } = await supabase
+    const { data: addonRows } = await supabase
       .from('reservation_addons')
-      .select('quantity, price_at_booking, addons(name)')
+      .select('quantity, price_at_booking, addon_id')
       .eq('reservation_id', reservationId)
-    if (data) {
-      setSelectedAddons(data.map((row: any) => ({
-        name: row.addons?.name || 'Add-on',
-        quantity: row.quantity,
-        price_at_booking: row.price_at_booking,
-      })))
-    } else {
-      setSelectedAddons([])
-    }
+
+    if (!addonRows || addonRows.length === 0) { setSelectedAddons([]); return }
+
+    const addonIds = addonRows.map(r => r.addon_id)
+    const { data: addonNames } = await supabase.from('addons').select('id, name').in('id', addonIds)
+    const nameMap: Record<string, string> = {}
+    addonNames?.forEach((a: any) => { nameMap[a.id] = a.name })
+
+    setSelectedAddons(addonRows.map((row: any) => ({
+      name: nameMap[row.addon_id] || 'Add-on',
+      quantity: row.quantity,
+      price_at_booking: row.price_at_booking,
+    })))
   }
 
   async function fetchAddonsForEdit(reservationId: string) {
     const { data } = await supabase
       .from('reservation_addons')
-      .select('quantity, addon_id, addons(name)')
+      .select('quantity, addon_id')
       .eq('reservation_id', reservationId)
     if (data) {
       const map: { [id: string]: number } = {}
@@ -171,13 +196,11 @@ export default function ReservationsPage() {
     }, 0)
     const newTotal = basePrice + addonTotal
 
-    // Build audit note
     const oldSite = selected.sites
     const auditNote = `[Edited ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] Was: ${oldSite ? `Site ${oldSite.site_number}` : 'unknown site'}, ${selected.arrival_date} → ${selected.departure_date}, ${selected.num_adults} adults, ${selected.num_children} children`
     const existingNotes = selected.notes || ''
     const updatedNotes = existingNotes ? `${existingNotes}\n${auditNote}` : auditNote
 
-    // Update reservation
     const { error } = await supabase.from('reservations').update({
       site_id: editForm.site_id,
       arrival_date: editForm.arrival_date,
@@ -191,7 +214,6 @@ export default function ReservationsPage() {
 
     if (error) { toast.error('Error saving changes.'); setSaving(false); return }
 
-    // Update add-ons: delete existing, insert new
     await supabase.from('reservation_addons').delete().eq('reservation_id', selected.id)
     const addonItems = Object.entries(editAddons).filter(([_, qty]) => qty > 0)
     if (addonItems.length > 0) {
@@ -208,7 +230,6 @@ export default function ReservationsPage() {
     setEditing(false)
     setNotes(updatedNotes)
     await fetchReservations()
-    // Refresh selected
     const { data } = await supabase.from('reservations').select('*, sites(site_number, site_type)').eq('id', selected.id).single()
     if (data) { setSelected(data); fetchAddons(data.id) }
   }
@@ -254,7 +275,6 @@ export default function ReservationsPage() {
     return Math.round((d.getTime() - a.getTime()) / (1000 * 60 * 60 * 24))
   }
 
-  // Recalculate price when edit dates/site change
   const editNights = editForm.arrival_date && editForm.departure_date
     ? Math.round((new Date(editForm.departure_date).getTime() - new Date(editForm.arrival_date).getTime()) / (1000 * 60 * 60 * 24))
     : 0
@@ -265,6 +285,8 @@ export default function ReservationsPage() {
     return sum + (addon ? addon.price * qty : 0)
   }, 0)
   const editTotal = editBasePrice + editAddonTotal
+
+  const today = new Date().toISOString().split('T')[0]
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -277,13 +299,15 @@ export default function ReservationsPage() {
       {/* Filters */}
       <div className="flex gap-3 mb-6">
         <input
-          className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"
-          placeholder="Search by name, email, or site..."
+          className="w-full border border-gray-200 rounded-lg px-4 py-2.5 text-sm"
+          style={{ minWidth: 0, flex: '1 1 auto' }}
+          placeholder="🔍  Search by name, email, or site number..."
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
         <select
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm"
+          className="border border-gray-200 rounded-lg px-4 py-2.5 text-sm shrink-0"
+          style={{ width: '180px' }}
           value={statusFilter}
           onChange={e => setStatusFilter(e.target.value)}
         >
@@ -303,28 +327,31 @@ export default function ReservationsPage() {
           ) : filtered.length === 0 ? (
             <div className="text-center py-12 text-gray-400">No reservations found.</div>
           ) : (
-            filtered.map(res => (
-              <div
-                key={res.id}
-                onClick={() => selectReservation(res)}
-                className={`px-6 py-4 cursor-pointer hover:bg-gray-50 transition-colors ${selected?.id === res.id ? 'bg-green-50 border-l-4 border-green-600' : ''}`}
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-semibold text-gray-900">{res.guest_name}</p>
-                    <p className="text-sm text-gray-500">
-                      {siteTypeLabel(res.sites?.site_type || '')} Site {res.sites?.site_number} · {res.arrival_date} → {res.departure_date} · {nights(res)} nights
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-semibold text-gray-900">${(res.total_price / 100).toFixed(2)}</p>
-                    <span className={`text-xs px-2 py-1 rounded-full ${statusColor(res.status)}`}>
-                      {res.status}
-                    </span>
+            filtered.map(res => {
+              const isPast = res.arrival_date < today
+              return (
+                <div
+                  key={res.id}
+                  onClick={() => selectReservation(res)}
+                  className={`px-6 py-4 cursor-pointer hover:bg-gray-50 transition-colors ${selected?.id === res.id ? 'bg-green-50 border-l-4 border-green-600' : ''} ${isPast ? 'opacity-60' : ''}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-semibold text-gray-900">{res.guest_name}</p>
+                      <p className="text-sm text-gray-500">
+                        {siteTypeLabel(res.sites?.site_type || '')} Site {res.sites?.site_number} · {res.arrival_date} → {res.departure_date} · {nights(res)} nights
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-semibold text-gray-900">${(res.total_price / 100).toFixed(2)}</p>
+                      <span className={`text-xs px-2 py-1 rounded-full ${statusColor(res.status)}`}>
+                        {res.status}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))
+              )
+            })
           )}
         </div>
 
@@ -339,7 +366,6 @@ export default function ReservationsPage() {
             </div>
 
             {!editing ? (
-              // — VIEW MODE —
               <div className="space-y-3 text-sm">
                 <div>
                   <p className="text-gray-500">Guest</p>
@@ -431,10 +457,7 @@ export default function ReservationsPage() {
                 )}
               </div>
             ) : (
-              // — EDIT MODE —
               <div className="space-y-4 text-sm">
-
-                {/* Site */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Site</label>
                   <select
@@ -461,61 +484,42 @@ export default function ReservationsPage() {
                   </select>
                 </div>
 
-                {/* Dates */}
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Arrival</label>
-                    <input
-                      type="date"
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                    <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                       value={editForm.arrival_date}
                       onChange={e => {
                         setEditForm({ ...editForm, arrival_date: e.target.value })
-                        if (e.target.value && editForm.departure_date) {
-                          fetchBookedSites(e.target.value, editForm.departure_date, selected.id)
-                        }
+                        if (e.target.value && editForm.departure_date) fetchBookedSites(e.target.value, editForm.departure_date, selected.id)
                       }}
                     />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Departure</label>
-                    <input
-                      type="date"
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                    <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                       value={editForm.departure_date}
                       onChange={e => {
                         setEditForm({ ...editForm, departure_date: e.target.value })
-                        if (editForm.arrival_date && e.target.value) {
-                          fetchBookedSites(editForm.arrival_date, e.target.value, selected.id)
-                        }
+                        if (editForm.arrival_date && e.target.value) fetchBookedSites(editForm.arrival_date, e.target.value, selected.id)
                       }}
                     />
                   </div>
                 </div>
 
-                {/* Guests */}
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Adults</label>
-                    <input
-                      type="number" min="1"
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                      value={editForm.num_adults}
-                      onChange={e => setEditForm({ ...editForm, num_adults: parseInt(e.target.value) })}
-                    />
+                    <input type="number" min="1" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                      value={editForm.num_adults} onChange={e => setEditForm({ ...editForm, num_adults: parseInt(e.target.value) })} />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Children</label>
-                    <input
-                      type="number" min="0"
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                      value={editForm.num_children}
-                      onChange={e => setEditForm({ ...editForm, num_children: parseInt(e.target.value) })}
-                    />
+                    <input type="number" min="0" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                      value={editForm.num_children} onChange={e => setEditForm({ ...editForm, num_children: parseInt(e.target.value) })} />
                   </div>
                 </div>
 
-                {/* Add-ons */}
                 {availableAddons.length > 0 && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Add-Ons</label>
@@ -527,15 +531,11 @@ export default function ReservationsPage() {
                             <p className="text-green-700 text-xs">${(addon.price / 100).toFixed(2)}</p>
                           </div>
                           <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => setEditAddons(prev => ({ ...prev, [addon.id]: Math.max(0, (prev[addon.id] || 0) - 1) }))}
-                              className="w-6 h-6 rounded-full bg-gray-200 text-gray-700 font-bold hover:bg-gray-300 text-xs"
-                            >-</button>
+                            <button onClick={() => setEditAddons(prev => ({ ...prev, [addon.id]: Math.max(0, (prev[addon.id] || 0) - 1) }))}
+                              className="w-6 h-6 rounded-full bg-gray-200 text-gray-700 font-bold hover:bg-gray-300 text-xs">-</button>
                             <span className="w-5 text-center font-medium text-gray-900 text-xs">{editAddons[addon.id] || 0}</span>
-                            <button
-                              onClick={() => setEditAddons(prev => ({ ...prev, [addon.id]: (prev[addon.id] || 0) + 1 }))}
-                              className="w-6 h-6 rounded-full bg-green-700 text-white font-bold hover:bg-green-800 text-xs"
-                            >+</button>
+                            <button onClick={() => setEditAddons(prev => ({ ...prev, [addon.id]: (prev[addon.id] || 0) + 1 }))}
+                              className="w-6 h-6 rounded-full bg-green-700 text-white font-bold hover:bg-green-800 text-xs">+</button>
                           </div>
                         </div>
                       ))}
@@ -543,18 +543,12 @@ export default function ReservationsPage() {
                   </div>
                 )}
 
-                {/* Amount Paid */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid ($)</label>
-                  <input
-                    type="number"
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                    value={editForm.amount_paid}
-                    onChange={e => setEditForm({ ...editForm, amount_paid: e.target.value })}
-                  />
+                  <input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                    value={editForm.amount_paid} onChange={e => setEditForm({ ...editForm, amount_paid: e.target.value })} />
                 </div>
 
-                {/* New Total */}
                 {editNights > 0 && editSite && (
                   <div className="bg-green-50 border border-green-100 rounded-lg p-3">
                     <div className="flex justify-between text-sm text-gray-600">
@@ -575,17 +569,12 @@ export default function ReservationsPage() {
                 )}
 
                 <div className="flex gap-2 pt-2">
-                  <button
-                    onClick={handleSaveEdit}
-                    disabled={saving}
-                    className="flex-1 bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50"
-                  >
+                  <button onClick={handleSaveEdit} disabled={saving}
+                    className="flex-1 bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50">
                     {saving ? 'Saving...' : 'Save Changes'}
                   </button>
-                  <button
-                    onClick={() => setEditing(false)}
-                    className="flex-1 bg-gray-100 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-200"
-                  >
+                  <button onClick={() => setEditing(false)}
+                    className="flex-1 bg-gray-100 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-200">
                     Cancel
                   </button>
                 </div>
@@ -595,5 +584,12 @@ export default function ReservationsPage() {
         )}
       </div>
     </div>
+  )
+}
+export default function ReservationsPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-gray-500">Loading...</div>}>
+      <ReservationsPageInner />
+    </Suspense>
   )
 }
