@@ -18,7 +18,7 @@ const defaultSettings = {
   check_in_time: '2:00 PM',
   check_out_time: '12:00 PM',
   same_day_cutoff_time: '11:00 AM',
-  same_day_cutoff_message: 'Same-day reservations are not available online. Please call us to book.',
+  same_day_cutoff_message: 'Same-day reservations are not available online. Please call us at 814-642-7674.',
   extra_adult_fee: '',
   extra_child_fee: '',
   base_occupancy_adults: 2,
@@ -28,9 +28,6 @@ const defaultSettings = {
   accent_color: '#2D6A4F',
   show_site_map: false,
   admin_password: '',
-  sender_name: '',
-  sender_email: '',
-  reply_to_email: '',
   season_start: 'May 1',
   season_end: 'October 11',
   closed_season_message: 'We are closed for the season. We look forward to welcoming you back next year!',
@@ -65,7 +62,7 @@ export default function SettingsPage() {
         check_in_time: data.check_in_time || '2:00 PM',
         check_out_time: data.check_out_time || '12:00 PM',
         same_day_cutoff_time: data.same_day_cutoff_time || '11:00 AM',
-        same_day_cutoff_message: data.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us to book.',
+        same_day_cutoff_message: data.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us at 814-642-7674.',
         extra_adult_fee: (data.extra_adult_fee / 100).toString(),
         extra_child_fee: (data.extra_child_fee / 100).toString(),
         base_occupancy_adults: data.base_occupancy_adults || 2,
@@ -75,9 +72,6 @@ export default function SettingsPage() {
         accent_color: data.accent_color || '#2D6A4F',
         show_site_map: data.show_site_map || false,
         admin_password: '',
-        sender_name: data.sender_name || '',
-        sender_email: data.sender_email || '',
-        reply_to_email: data.reply_to_email || '',
         season_start: data.season_start || 'May 1',
         season_end: data.season_end || 'October 11',
         closed_season_message: data.closed_season_message || 'We are closed for the season. We look forward to welcoming you back next year!',
@@ -131,9 +125,6 @@ export default function SettingsPage() {
       accent_color: form.accent_color,
       show_site_map: form.show_site_map,
       ...(form.admin_password ? { admin_password: form.admin_password } : {}),
-      sender_name: form.sender_name,
-      sender_email: form.sender_email,
-      reply_to_email: form.reply_to_email,
       season_start: form.season_start,
       season_end: form.season_end,
       closed_season_message: form.closed_season_message,
@@ -211,15 +202,11 @@ export default function SettingsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Park Name</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_name} onChange={e => setForm({ ...form, park_name: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Tagline</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_tagline} onChange={e => setForm({ ...form, park_tagline: e.target.value })} /></div>
-            <div><label className="block text-sm font-medium text-gray-700 mb-1">Location</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Coudersport, PA" value={form.park_location} onChange={e => setForm({ ...form, park_location: e.target.value })} /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Location</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Port Allegany, PA" value={form.park_location} onChange={e => setForm({ ...form, park_location: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Email</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" type="email" value={form.park_email} onChange={e => setForm({ ...form, park_email: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Phone</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_phone} onChange={e => setForm({ ...form, park_phone: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Address</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_address} onChange={e => setForm({ ...form, park_address: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Website</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_website} onChange={e => setForm({ ...form, park_website: e.target.value })} /></div>
-            <div><label className="block text-sm font-medium text-gray-700 mb-1">Sender Name</label><p className="text-xs text-gray-400 mb-1">Name guests see in their inbox</p><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Lakeshore Camp" value={form.sender_name} onChange={e => setForm({ ...form, sender_name: e.target.value })} /></div>
-<div><label className="block text-sm font-medium text-gray-700 mb-1">Sender Email</label><p className="text-xs text-gray-400 mb-1">Must be verified in Resend</p><input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. bookings@lakeshore.com" value={form.sender_email} onChange={e => setForm({ ...form, sender_email: e.target.value })} /></div>
-<div><label className="block text-sm font-medium text-gray-700 mb-1">Reply-To Email</label><p className="text-xs text-gray-400 mb-1">Where guest replies go</p><input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. hello@lakeshore.com" value={form.reply_to_email} onChange={e => setForm({ ...form, reply_to_email: e.target.value })} /></div>
-            
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Brand Color</label><div className="flex items-center gap-3"><input type="color" className="w-12 h-10 rounded border border-gray-200 cursor-pointer" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /><input className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /></div></div>
           </div>
 
