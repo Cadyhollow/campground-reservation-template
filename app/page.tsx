@@ -56,7 +56,7 @@ export default function HomePage() {
     supabase.from('settings').select('*').limit(1).single().then(({ data }) => { if (data) setSettings(data) })
     supabase.from('sites').select('site_type').then(({ data }) => {
       if (data) {
-        const types = [...new Set(data.map((s: any) => s.site_type))]
+        const types = [...new Set(data.map((s) => s.site_type))]
         setSiteTypes(types)
       }
     })

@@ -81,7 +81,7 @@ export default function CalendarPage() {
         .from('reservations')
         .select('*, sites(site_number, site_type)')
         .neq('status', 'cancelled')
-        .lt('arrival_date', lastDay)
+        .lte('arrival_date', lastDay)
         .gt('departure_date', firstDay)
         .order('arrival_date'),
       supabase
