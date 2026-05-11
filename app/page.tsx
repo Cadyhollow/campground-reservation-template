@@ -159,14 +159,14 @@ export default function HomePage() {
   }
 
   const siteTypeInfo: Record<string, { icon: string; label: string; desc: string }> = {
-    rv_site: { icon: '🏕️', label: 'RV Sites', desc: 'Full hookup and water & electric sites available with 30 and 30/50 amp service.' },
-    cabin: { icon: '🛖', label: 'Cabins', desc: 'Cozy cabins for a comfortable glamping experience in the great outdoors.' },
-    tent: { icon: '⛺', label: 'Tent Sites', desc: 'Back to nature tent camping with easy access to all park amenities.' },
-    yurt: { icon: '🏠', label: 'Yurts', desc: 'Unique circular yurt accommodations blending comfort with nature.' },
-    tiny_home: { icon: '🏡', label: 'Tiny Homes', desc: 'Fully equipped tiny homes for a cozy and modern camping experience.' },
-    lodge: { icon: '🏰', label: 'Lodge Rooms', desc: 'Comfortable lodge rooms with all the amenities you need.' },
-    glamping: { icon: '✨', label: 'Glamping', desc: 'Glamorous camping with luxury amenities in a beautiful natural setting.' },
-    treehouse: { icon: '🌲', label: 'Treehouses', desc: 'Unique treehouse accommodations nestled among the treetops.' },
+    rv_site: { icon: '🏕️', label: 'RV Sites', desc: 'Pull in and plug in — our RV sites offer the hookups and space you need for a comfortable stay.' },
+    cabin: { icon: '🛖', label: 'Cabins', desc: 'Cozy and comfortable, our cabins let you enjoy the outdoors without giving up the comforts of home.' },
+    tent: { icon: '⛺', label: 'Tent Sites', desc: 'Get back to nature with a classic camping experience surrounded by the great outdoors.' },
+    yurt: { icon: '🏠', label: 'Yurts', desc: 'A unique and comfortable stay in a traditional circular dwelling nestled in nature.' },
+    tiny_home: { icon: '🏡', label: 'Tiny Homes', desc: 'Fully equipped and thoughtfully designed tiny homes for a cozy modern getaway.' },
+    lodge: { icon: '🏰', label: 'Lodge Rooms', desc: 'Comfortable lodge accommodations with everything you need for a relaxing stay.' },
+    glamping: { icon: '✨', label: 'Glamping', desc: 'Experience the beauty of the outdoors with upscale amenities and stylish accommodations.' },
+    treehouse: { icon: '🌲', label: 'Treehouses', desc: 'Spend the night among the treetops in a one-of-a-kind elevated retreat.' },
   }
 
   const logoShapeClass =
