@@ -100,15 +100,18 @@ addonData?.forEach((row: any) => {
         num_adults: r.num_adults,
         num_children: r.num_children,
         addons: addonMap[r.id] || [],
-        checkedIn: false,
+        checkedIn: r.checked_in || false,
       })))
-    }
 
     setLoading(false)
   }
 
-  function toggleCheckIn(id: string) {
-    setArrivalsToday(prev => prev.map(g => g.id === id ? { ...g, checkedIn: !g.checkedIn } : g))
+  async function toggleCheckIn(id: string) {
+    const guest = arrivalsToday.find(g => g.id === id)
+    if (!guest) return
+    const newValue = !guest.checkedIn
+    setArrivalsToday(prev => prev.map(g => g.id === id ? { ...g, checkedIn: newValue } : g))
+    await supabase.from('reservations').update({ checked_in: newValue }).eq('id', id)
   }
 
   const logoShapeClass =
