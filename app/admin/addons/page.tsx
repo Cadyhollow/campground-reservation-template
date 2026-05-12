@@ -10,7 +10,6 @@ type Addon = {
   description: string
   price: number
   is_active: boolean
-  is_early_checkin: boolean
   display_order: number
 }
 
@@ -19,7 +18,6 @@ const emptyAddon = {
   description: '',
   price: '',
   is_active: true,
-  is_early_checkin: false,
   display_order: 0,
 }
 
@@ -48,7 +46,6 @@ export default function AddonsPage() {
       description: addon.description || '',
       price: (addon.price / 100).toString(),
       is_active: addon.is_active,
-      is_early_checkin: addon.is_early_checkin,
       display_order: addon.display_order,
     })
     setShowForm(true)
@@ -62,7 +59,6 @@ export default function AddonsPage() {
       description: form.description,
       price: Math.round(parseFloat(form.price as string) * 100),
       is_active: form.is_active,
-      is_early_checkin: form.is_early_checkin,
       display_order: form.display_order,
     }
     if (editingAddon) {
@@ -124,10 +120,7 @@ export default function AddonsPage() {
                 <input type="checkbox" id="is_active_addon" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="w-4 h-4 accent-green-700" />
                 <label htmlFor="is_active_addon" className="text-sm font-medium text-gray-700">Active</label>
               </div>
-              <div className="flex items-center gap-3">
-                <input type="checkbox" id="is_early_checkin" checked={form.is_early_checkin} onChange={e => setForm({ ...form, is_early_checkin: e.target.checked })} className="w-4 h-4 accent-green-700" />
-                <label htmlFor="is_early_checkin" className="text-sm font-medium text-gray-700">Early check-in option</label>
-              </div>
+              
             </div>
           </div>
           <div className="flex gap-3 mt-4">
@@ -152,7 +145,7 @@ export default function AddonsPage() {
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-semibold text-gray-900">{addon.name}</p>
-                    {addon.is_early_checkin && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Early Check-In</span>}
+        
                   </div>
                   {addon.description && <p className="text-sm text-gray-500">{addon.description}</p>}
                   <p className="text-sm font-semibold text-green-700 mt-0.5">${(addon.price / 100).toFixed(2)}</p>
