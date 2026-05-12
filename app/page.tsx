@@ -269,6 +269,28 @@ export default function HomePage() {
   return (
     <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
 
+      {/* Maintenance Mode */}
+      {settings?.maintenance_mode && (
+        <div className="min-h-screen flex flex-col items-center justify-center px-4 text-center">
+          <div className="text-6xl mb-6">🚧</div>
+          <h1 className="text-3xl font-bold text-white mb-6">
+            {settings?.park_name || 'Our Campground'}
+          </h1>
+          <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full">
+            <p className="text-gray-700 text-lg leading-relaxed">
+              {settings?.maintenance_message || 'We are temporarily unavailable for online reservations. Please call us to book your stay!'}
+            </p>
+          </div>
+          {settings?.logo_url && (
+            <div className={`mt-8 overflow-hidden flex items-center justify-center ${logoShapeClass}`}>
+              <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={160} height={160} className="object-contain w-full h-full" priority />
+            </div>
+          )}
+        </div>
+      )}
+
+      {!settings?.maintenance_mode && <>
+
       {/* Hero */}
       <div className="flex flex-col items-center justify-center px-4 py-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
         {settings?.logo_url && (
@@ -476,6 +498,7 @@ export default function HomePage() {
       <div className="text-center py-8 text-gray-600 text-sm">
         © 2026 {settings?.park_name || 'Campground'} · {settings?.park_location || ''}
       </div>
+  </>}
     </main>
   )
 }
