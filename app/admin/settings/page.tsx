@@ -18,7 +18,7 @@ const defaultSettings = {
   check_in_time: '2:00 PM',
   check_out_time: '12:00 PM',
   same_day_cutoff_time: '11:00 AM',
-  same_day_cutoff_message: 'Same-day reservations are not available online. Please call us at 814-642-7674.',
+  same_day_cutoff_message: 'Same-day reservations are not available online. Please call us to book.',
   extra_adult_fee: '',
   extra_child_fee: '',
   base_occupancy_adults: 2,
@@ -28,11 +28,17 @@ const defaultSettings = {
   accent_color: '#2D6A4F',
   show_site_map: false,
   admin_password: '',
+  sender_name: '',
+  sender_email: '',
+  reply_to_email: '',
+  use_custom_sender: false,
   season_start: 'May 1',
   season_end: 'October 11',
   closed_season_message: 'We are closed for the season. We look forward to welcoming you back next year!',
   waiver_enabled: true,
   waiver_text: '',
+  maintenance_mode: false,
+  maintenance_message: 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
 }
 
 export default function SettingsPage() {
@@ -62,7 +68,7 @@ export default function SettingsPage() {
         check_in_time: data.check_in_time || '2:00 PM',
         check_out_time: data.check_out_time || '12:00 PM',
         same_day_cutoff_time: data.same_day_cutoff_time || '11:00 AM',
-        same_day_cutoff_message: data.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us at 814-642-7674.',
+        same_day_cutoff_message: data.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us to book.',
         extra_adult_fee: (data.extra_adult_fee / 100).toString(),
         extra_child_fee: (data.extra_child_fee / 100).toString(),
         base_occupancy_adults: data.base_occupancy_adults || 2,
@@ -72,11 +78,17 @@ export default function SettingsPage() {
         accent_color: data.accent_color || '#2D6A4F',
         show_site_map: data.show_site_map || false,
         admin_password: '',
+        sender_name: data.sender_name || '',
+        sender_email: data.sender_email || '',
+        reply_to_email: data.reply_to_email || '',
+        use_custom_sender: data.use_custom_sender || false,
         season_start: data.season_start || 'May 1',
         season_end: data.season_end || 'October 11',
         closed_season_message: data.closed_season_message || 'We are closed for the season. We look forward to welcoming you back next year!',
         waiver_enabled: data.waiver_enabled !== false,
         waiver_text: data.waiver_text || '',
+        maintenance_mode: data.maintenance_mode || false,
+        maintenance_message: data.maintenance_message || 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
       })
     }
     setLoading(false)
@@ -125,11 +137,17 @@ export default function SettingsPage() {
       accent_color: form.accent_color,
       show_site_map: form.show_site_map,
       ...(form.admin_password ? { admin_password: form.admin_password } : {}),
+      sender_name: form.sender_name,
+      sender_email: form.sender_email,
+      reply_to_email: form.reply_to_email,
+      use_custom_sender: form.use_custom_sender,
       season_start: form.season_start,
       season_end: form.season_end,
       closed_season_message: form.closed_season_message,
       waiver_enabled: form.waiver_enabled,
       waiver_text: form.waiver_text,
+      maintenance_mode: form.maintenance_mode,
+      maintenance_message: form.maintenance_message,
     }
     if (settingsId) {
       const { error } = await supabase.from('settings').update(payload).eq('id', settingsId)
@@ -207,27 +225,34 @@ export default function SettingsPage() {
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Phone</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_phone} onChange={e => setForm({ ...form, park_phone: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Address</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_address} onChange={e => setForm({ ...form, park_address: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Website</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_website} onChange={e => setForm({ ...form, park_website: e.target.value })} /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Sender Name</label><p className="text-xs text-gray-400 mb-1">Name guests see in their inbox</p><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Cady Hollow Campground" value={form.sender_name} onChange={e => setForm({ ...form, sender_name: e.target.value })} /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Sender Email</label><p className="text-xs text-gray-400 mb-1">Must be verified in Resend</p><input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. bookings@cadyhollow.com" value={form.sender_email} onChange={e => setForm({ ...form, sender_email: e.target.value })} /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Reply-To Email</label><p className="text-xs text-gray-400 mb-1">Where guest replies go</p><input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. hello@cadyhollow.com" value={form.reply_to_email} onChange={e => setForm({ ...form, reply_to_email: e.target.value })} /></div>
+            <div className="md:col-span-2 flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div>
+                <p className="text-sm font-medium text-gray-900">Use Custom Sender</p>
+                <p className="text-xs text-gray-500 mt-0.5">{form.use_custom_sender ? 'Emails send from your custom sender email above.' : 'Emails send from the default bookings address.'}</p>
+              </div>
+              <button type="button" onClick={() => setForm({ ...form, use_custom_sender: !form.use_custom_sender })}
+                className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-4"
+                style={{ backgroundColor: form.use_custom_sender ? '#15803d' : '#d1d5db' }}>
+                <span className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
+                  style={{ transform: form.use_custom_sender ? 'translateX(28px)' : 'translateX(0px)' }} />
+              </button>
+            </div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Brand Color</label><div className="flex items-center gap-3"><input type="color" className="w-12 h-10 rounded border border-gray-200 cursor-pointer" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /><input className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /></div></div>
           </div>
 
-          {/* Site Map Toggle — full-width row so it's always visible */}
           <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-700">Show Site Map</p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                {form.show_site_map ? 'Guests see the interactive map when browsing sites.' : 'Guests see a list view when browsing sites.'}
-              </p>
+              <p className="text-xs text-gray-500 mt-0.5">{form.show_site_map ? 'Guests see the interactive map when browsing sites.' : 'Guests see a list view when browsing sites.'}</p>
             </div>
-            <button
-              type="button"
-              onClick={() => setForm({ ...form, show_site_map: !form.show_site_map })}
+            <button type="button" onClick={() => setForm({ ...form, show_site_map: !form.show_site_map })}
               className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-6"
-              style={{ backgroundColor: form.show_site_map ? '#15803d' : '#d1d5db' }}
-            >
-              <span
-                className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
-                style={{ transform: form.show_site_map ? 'translateX(28px)' : 'translateX(0px)' }}
-              />
+              style={{ backgroundColor: form.show_site_map ? '#15803d' : '#d1d5db' }}>
+              <span className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
+                style={{ transform: form.show_site_map ? 'translateX(28px)' : 'translateX(0px)' }} />
             </button>
           </div>
         </div>
@@ -284,46 +309,64 @@ export default function SettingsPage() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-1">Liability Waiver</h3>
           <p className="text-sm text-gray-500 mb-4">Control whether guests must sign a liability waiver during checkout. If enabled, guests will read and sign before paying.</p>
-
           <div className="flex items-center justify-between mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
             <div>
               <p className="text-sm font-medium text-gray-900">Require liability waiver at checkout</p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                {form.waiver_enabled ? 'Guests must read and sign the waiver before they can pay.' : 'No waiver will be shown to guests during checkout.'}
-              </p>
+              <p className="text-xs text-gray-500 mt-0.5">{form.waiver_enabled ? 'Guests must read and sign the waiver before they can pay.' : 'No waiver will be shown to guests during checkout.'}</p>
             </div>
-            <button
-              type="button"
-              onClick={() => setForm({ ...form, waiver_enabled: !form.waiver_enabled })}
+            <button type="button" onClick={() => setForm({ ...form, waiver_enabled: !form.waiver_enabled })}
               className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-4"
-              style={{ backgroundColor: form.waiver_enabled ? '#15803d' : '#d1d5db' }}
-            >
-              <span
-                className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
-                style={{ transform: form.waiver_enabled ? 'translateX(28px)' : 'translateX(0px)' }}
-              />
+              style={{ backgroundColor: form.waiver_enabled ? '#15803d' : '#d1d5db' }}>
+              <span className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
+                style={{ transform: form.waiver_enabled ? 'translateX(28px)' : 'translateX(0px)' }} />
             </button>
           </div>
-
           {form.waiver_enabled && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Waiver Text</label>
               <p className="text-xs text-gray-400 mb-2">Write your full liability waiver here. Use <strong>[CAMPGROUND NAME]</strong> as a placeholder — it will be automatically replaced with your park name when guests see it.</p>
-              <textarea
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-sans leading-relaxed"
-                rows={16}
+              <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-sans leading-relaxed" rows={16}
                 placeholder="Enter your liability waiver text here. Use [CAMPGROUND NAME] where your park name should appear..."
-                value={form.waiver_text}
-                onChange={e => setForm({ ...form, waiver_text: e.target.value })}
-              />
+                value={form.waiver_text} onChange={e => setForm({ ...form, waiver_text: e.target.value })} />
               <p className="text-xs text-gray-400 mt-2">💡 Tip: Consult with a legal professional to ensure your waiver is appropriate for your property and jurisdiction.</p>
             </div>
           )}
         </div>
 
+        {/* Maintenance Mode */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-1">Maintenance Mode</h3>
+          <p className="text-sm text-gray-500 mb-4">When enabled, guests will see your message instead of the booking form. The admin panel remains accessible.</p>
+          <div className="flex items-center justify-between mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <div>
+              <p className="text-sm font-medium text-gray-900">Maintenance Mode</p>
+              <p className="text-xs text-gray-500 mt-0.5">{form.maintenance_mode ? '⚠️ Booking is currently disabled for guests.' : 'Booking is live and available to guests.'}</p>
+            </div>
+            <button type="button" onClick={() => setForm({ ...form, maintenance_mode: !form.maintenance_mode })}
+              className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-4"
+              style={{ backgroundColor: form.maintenance_mode ? '#dc2626' : '#d1d5db' }}>
+              <span className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
+                style={{ transform: form.maintenance_mode ? 'translateX(28px)' : 'translateX(0px)' }} />
+            </button>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Message shown to guests</label>
+            <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" rows={3}
+              value={form.maintenance_message} onChange={e => setForm({ ...form, maintenance_message: e.target.value })} />
+          </div>
+        </div>
+
+       
+
+      {/* Square Payments */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-1">Square Payments</h3>
+          <p className="text-sm text-gray-500 mb-4">Connect your Square account to accept online payments from guests.</p>
+          <a href="/admin/settings/square" className="inline-flex items-center gap-2 bg-green-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-green-800">Manage Square Connection</a>
+        </div>
+
       </div>
 
-      {/* Admin Password */}
       <div className="border-t border-gray-200 pt-6 mt-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Change Admin Password</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
