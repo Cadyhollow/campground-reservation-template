@@ -47,6 +47,9 @@ export default function ManualBookingPage() {
     guest_name: '',
     guest_email: '',
     guest_phone: '',
+    camper_type: '',
+    camper_length: '',
+    camper_amperage: '',
     payment_type: 'full',
     amount_paid: '',
     notes: '',
@@ -69,7 +72,6 @@ export default function ManualBookingPage() {
     const { data } = await supabase.from('fees').select('*').eq('is_active', true)
     if (data) {
       setFees(data)
-      // Default all fees to enabled
       const defaults: { [name: string]: boolean } = {}
       data.forEach(f => { defaults[f.name] = true })
       setEnabledFees(defaults)
@@ -78,10 +80,11 @@ export default function ManualBookingPage() {
 
   function toggleFee(name: string) {
     setEnabledFees(prev => ({ ...prev, [name]: !prev[name] }))
-    setPriceOverride('') // clear override when fees change
+    setPriceOverride('')
   }
 
   const selectedSite = sites.find(s => s.id === form.site_id)
+  const isRvSite = selectedSite?.site_type === 'rv_site'
 
   const nights = form.arrival_date && form.departure_date
     ? Math.round((new Date(form.departure_date).getTime() - new Date(form.arrival_date).getTime()) / (1000 * 60 * 60 * 24))
@@ -111,7 +114,6 @@ export default function ManualBookingPage() {
   const calculatedTotal = baseTotal + extraGuestFee + feesTotal + addonTotal
   const total = priceOverride !== '' ? Math.round(parseFloat(priceOverride) * 100) : calculatedTotal
 
-  // Deposit = first night base rate + proportional fees (no add-ons)
   const firstNightBase = selectedSite ? selectedSite.base_rate : 0
   const proportionalFees = nights > 0 ? Math.round(feesTotal / nights) : 0
   const depositAmount = firstNightBase + proportionalFees
@@ -152,6 +154,9 @@ export default function ManualBookingPage() {
         guest_name: form.guest_name,
         guest_email: form.guest_email,
         guest_phone: form.guest_phone,
+        camper_type: isRvSite ? form.camper_type : '',
+        camper_length: isRvSite && form.camper_length ? parseInt(form.camper_length) : 0,
+        camper_amperage: isRvSite ? form.camper_amperage : '',
         base_nightly_rate: selectedSite?.base_rate || 0,
         extra_guest_fee_total: extraGuestFee,
         addons_total: addonTotal,
@@ -191,6 +196,9 @@ export default function ManualBookingPage() {
           nights,
           adults: form.num_adults,
           children: form.num_children,
+          camperType: isRvSite ? form.camper_type : '',
+          camperLength: isRvSite && form.camper_length ? parseInt(form.camper_length) : 0,
+          camperAmperage: isRvSite ? form.camper_amperage : '',
           totalPrice: total,
           amountPaid: amountPaid,
           paymentType: form.payment_type,
@@ -214,6 +222,9 @@ export default function ManualBookingPage() {
       guest_name: '',
       guest_email: '',
       guest_phone: '',
+      camper_type: '',
+      camper_length: '',
+      camper_amperage: '',
       payment_type: 'full',
       amount_paid: '',
       notes: '',
@@ -306,7 +317,7 @@ export default function ManualBookingPage() {
                     : fee.amount / 100
                   return (
                     <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-100">
-                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3">
                         <button
                           type="button"
                           onClick={() => toggleFee(fee.name)}
@@ -351,6 +362,50 @@ export default function ManualBookingPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
                 <input type="tel" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="(555) 555-5555" value={form.guest_phone} onChange={e => setForm({ ...form, guest_phone: e.target.value })} />
               </div>
+
+              {/* Camper Info — RV sites only, all optional */}
+              {isRvSite && (
+                <>
+                  <div className="md:col-span-2 border-t border-gray-100 pt-4">
+                    <p className="text-sm font-medium text-gray-700 mb-3">Camper Info <span className="text-gray-400 font-normal">(optional)</span></p>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Camper Type</label>
+                        <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.camper_type} onChange={e => setForm({ ...form, camper_type: e.target.value })}>
+                          <option value="">Unknown</option>
+                          <option value="travel_trailer">Travel Trailer</option>
+                          <option value="fifth_wheel">Fifth Wheel</option>
+                          <option value="class_a">Class A</option>
+                          <option value="class_c">Class C</option>
+                          <option value="van">Van</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Length (ft)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="100"
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                          placeholder="e.g. 32"
+                          value={form.camper_length}
+                          onChange={e => setForm({ ...form, camper_length: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Amperage</label>
+                        <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.camper_amperage} onChange={e => setForm({ ...form, camper_amperage: e.target.value })}>
+                          <option value="">Unknown</option>
+                          <option value="50amp">50 Amp</option>
+                          <option value="30amp">30 Amp</option>
+                          <option value="20amp">20 Amp</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -437,6 +492,16 @@ export default function ManualBookingPage() {
                   <p className="text-gray-500">Guests</p>
                   <p className="font-medium text-gray-900">{form.num_adults} adults, {form.num_children} children</p>
                 </div>
+                {isRvSite && (form.camper_type || form.camper_length || form.camper_amperage) && (
+                  <div>
+                    <p className="text-gray-500">Camper</p>
+                    <p className="font-medium text-gray-900">
+                      {form.camper_type ? { travel_trailer: 'Travel Trailer', fifth_wheel: 'Fifth Wheel', class_a: 'Class A', class_c: 'Class C', van: 'Van', other: 'Other' }[form.camper_type] || form.camper_type : 'Unknown type'}
+                      {form.camper_length ? ` · ${form.camper_length} ft` : ''}
+                      {form.camper_amperage ? ` · ${form.camper_amperage.replace('amp', ' Amp')}` : ''}
+                    </p>
+                  </div>
+                )}
                 <div className="border-t border-gray-100 pt-3 space-y-1">
                   <div className="flex justify-between text-gray-600">
                     <span>Site ({nights} nights)</span>

@@ -43,8 +43,22 @@ type Reservation = {
   notes: string
   created_at: string
   site_id: string
+  camper_type: string
+  camper_length: number
+  camper_amperage: string
   sites: { site_number: string; site_type: string } | null
 }
+
+const camperTypeLabel = (val: string) => ({
+  travel_trailer: 'Travel Trailer',
+  fifth_wheel: 'Fifth Wheel',
+  class_a: 'Class A',
+  class_c: 'Class C',
+  van: 'Van',
+  other: 'Other',
+}[val] || val || '—')
+
+const amperageLabel = (val: string) => val ? val.replace('amp', ' Amp') : '—'
 
 function ReservationsPageInner() {
   const searchParams = useSearchParams()
@@ -97,7 +111,6 @@ function ReservationsPageInner() {
       .select('*, sites(site_number, site_type)')
       .order('arrival_date', { ascending: true })
     if (data) {
-      // Sort: upcoming/today first, then past (descending)
       const upcoming = data.filter(r => r.arrival_date >= today)
       const past = data.filter(r => r.arrival_date < today).reverse()
       setReservations([...upcoming, ...past])
@@ -377,7 +390,7 @@ function ReservationsPageInner() {
         </div>
 
         {/* Detail / Edit Panel */}
-       {selected && (
+        {selected && (
           <div className="w-96 bg-white rounded-xl shadow-sm border border-gray-100 p-6 sticky top-6 max-h-[calc(100vh-6rem)] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900">
@@ -410,6 +423,25 @@ function ReservationsPageInner() {
                 <div>
                   <p className="text-gray-500">Guests</p>
                   <p className="font-medium text-gray-900">{selected.num_adults} adults · {selected.num_children} children</p>
+                </div>
+
+                {/* Camper Info */}
+                <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-2.5">
+                  <p className="text-gray-500 text-xs uppercase tracking-wide font-semibold mb-1.5">Camper Info</p>
+                  <div className="space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Type</span>
+                      <span className="font-medium text-gray-900">{camperTypeLabel(selected.camper_type)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Length</span>
+                      <span className="font-medium text-gray-900">{selected.camper_length ? `${selected.camper_length} ft` : '—'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Amperage</span>
+                      <span className="font-medium text-gray-900">{amperageLabel(selected.camper_amperage)}</span>
+                    </div>
+                  </div>
                 </div>
 
                 {selectedAddons.length > 0 && (
@@ -613,6 +645,7 @@ function ReservationsPageInner() {
     </div>
   )
 }
+
 export default function ReservationsPage() {
   return (
     <Suspense fallback={<div className="p-6 text-gray-500">Loading...</div>}>

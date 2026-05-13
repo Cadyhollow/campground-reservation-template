@@ -22,6 +22,98 @@ type Fee = {
   is_active: boolean
 }
 
+const CAMPER_TYPES = [
+  {
+    value: 'travel_trailer',
+    label: 'Travel Trailer',
+    svg: (
+      <svg viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+        <rect x="8" y="8" width="58" height="22" rx="3" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="2"/>
+        <rect x="12" y="12" width="10" height="8" rx="1" fill="currentColor" opacity="0.4"/>
+        <rect x="26" y="12" width="10" height="8" rx="1" fill="currentColor" opacity="0.4"/>
+        <rect x="40" y="12" width="10" height="8" rx="1" fill="currentColor" opacity="0.4"/>
+        <line x1="8" y1="30" x2="4" y2="30" stroke="currentColor" strokeWidth="2"/>
+        <circle cx="22" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <circle cx="52" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <line x1="66" y1="19" x2="74" y2="19" stroke="currentColor" strokeWidth="2"/>
+      </svg>
+    ),
+  },
+  {
+    value: 'fifth_wheel',
+    label: 'Fifth Wheel',
+    svg: (
+      <svg viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+        <rect x="8" y="10" width="56" height="20" rx="3" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="2"/>
+        <rect x="48" y="4" width="16" height="10" rx="2" fill="currentColor" opacity="0.25" stroke="currentColor" strokeWidth="1.5"/>
+        <rect x="12" y="14" width="9" height="7" rx="1" fill="currentColor" opacity="0.4"/>
+        <rect x="25" y="14" width="9" height="7" rx="1" fill="currentColor" opacity="0.4"/>
+        <circle cx="20" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <circle cx="50" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <line x1="64" y1="9" x2="72" y2="9" stroke="currentColor" strokeWidth="2"/>
+      </svg>
+    ),
+  },
+  {
+    value: 'class_a',
+    label: 'Class A',
+    svg: (
+      <svg viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+        <rect x="6" y="8" width="62" height="22" rx="2" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="2"/>
+        <rect x="6" y="8" width="12" height="22" rx="2" fill="currentColor" opacity="0.1"/>
+        <rect x="8" y="11" width="8" height="10" rx="1" fill="currentColor" opacity="0.5"/>
+        <rect x="22" y="13" width="8" height="7" rx="1" fill="currentColor" opacity="0.35"/>
+        <rect x="34" y="13" width="8" height="7" rx="1" fill="currentColor" opacity="0.35"/>
+        <rect x="46" y="13" width="8" height="7" rx="1" fill="currentColor" opacity="0.35"/>
+        <circle cx="18" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <circle cx="56" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+      </svg>
+    ),
+  },
+  {
+    value: 'class_c',
+    label: 'Class C',
+    svg: (
+      <svg viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+        <rect x="14" y="10" width="54" height="20" rx="2" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="2"/>
+        <rect x="6" y="16" width="14" height="14" rx="2" fill="currentColor" opacity="0.2" stroke="currentColor" strokeWidth="1.5"/>
+        <rect x="8" y="18" width="8" height="7" rx="1" fill="currentColor" opacity="0.45"/>
+        <rect x="30" y="13" width="8" height="7" rx="1" fill="currentColor" opacity="0.35"/>
+        <rect x="42" y="13" width="8" height="7" rx="1" fill="currentColor" opacity="0.35"/>
+        <circle cx="22" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <circle cx="56" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+      </svg>
+    ),
+  },
+  {
+    value: 'van',
+    label: 'Van',
+    svg: (
+      <svg viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+        <rect x="10" y="12" width="52" height="18" rx="3" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="2"/>
+        <path d="M10 20 Q10 12 18 12" stroke="currentColor" strokeWidth="2" fill="none"/>
+        <rect x="13" y="14" width="9" height="8" rx="1" fill="currentColor" opacity="0.5"/>
+        <rect x="26" y="15" width="8" height="6" rx="1" fill="currentColor" opacity="0.35"/>
+        <rect x="38" y="15" width="8" height="6" rx="1" fill="currentColor" opacity="0.35"/>
+        <circle cx="22" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+        <circle cx="52" cy="33" r="4" fill="currentColor" opacity="0.6"/>
+      </svg>
+    ),
+  },
+  {
+    value: 'other',
+    label: 'Other',
+    svg: (
+      <svg viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+        <rect x="10" y="10" width="52" height="20" rx="4" fill="currentColor" opacity="0.15" stroke="currentColor" strokeWidth="2" strokeDasharray="4 2"/>
+        <text x="36" y="24" textAnchor="middle" fill="currentColor" fontSize="12" fontWeight="bold" opacity="0.5">?</text>
+        <circle cx="22" cy="33" r="4" fill="currentColor" opacity="0.4"/>
+        <circle cx="52" cy="33" r="4" fill="currentColor" opacity="0.4"/>
+      </svg>
+    ),
+  },
+]
+
 function parseTime(timeStr: string): { hours: number; minutes: number } | null {
   if (!timeStr) return null
   const clean = timeStr.trim().toUpperCase()
@@ -55,7 +147,14 @@ function BookingForm() {
   const [discountResult, setDiscountResult] = useState<any>(null)
   const [discountError, setDiscountError] = useState('')
   const [checkingDiscount, setCheckingDiscount] = useState(false)
-  const [form, setForm] = useState({ guest_name: '', guest_email: '', guest_phone: '' })
+  const [form, setForm] = useState({
+    guest_name: '',
+    guest_email: '',
+    guest_phone: '',
+    camper_type: '',
+    camper_length: '',
+    camper_amperage: '',
+  })
   const [step, setStep] = useState(1)
   const [paymentLoading, setPaymentLoading] = useState(false)
   const [paymentError, setPaymentError] = useState('')
@@ -103,10 +202,7 @@ function BookingForm() {
   }
 
   async function fetchFees() {
-    const { data } = await supabase
-      .from('fees')
-      .select('*')
-      .eq('is_active', true)
+    const { data } = await supabase.from('fees').select('*').eq('is_active', true)
     setFees(data || [])
   }
 
@@ -236,7 +332,6 @@ function BookingForm() {
   const extraChildren = Math.max(0, children - 2)
   const extraGuestFee = (extraAdults * 1000 + extraChildren * 500) * site.nights
 
-  // ── Fee calculation ──────────────────────────────────────────────────────
   function feeAppliesToSite(fee: Fee): boolean {
     if (fee.applies_to === 'all') return true
     const targets = fee.applies_to.split(',').map(s => s.trim())
@@ -255,7 +350,7 @@ function BookingForm() {
     if (feeAppliesToAddons(fee)) base += addonTotal
     if (base === 0) return 0
     if (fee.type === 'percentage') return Math.round(base * fee.amount / 100)
-    return fee.amount * 100 // flat fee stored in dollars, convert to cents
+    return fee.amount * 100
   }
 
   const feeBreakdown = fees.map(fee => ({
@@ -264,7 +359,6 @@ function BookingForm() {
   })).filter(fee => fee.calculatedAmount > 0)
 
   const feesTotal = feeBreakdown.reduce((sum, fee) => sum + fee.calculatedAmount, 0)
-  // ────────────────────────────────────────────────────────────────────────
 
   const subtotal = site.total_price + extraGuestFee + addonTotal
   const discountAmount = discountResult
@@ -277,10 +371,17 @@ function BookingForm() {
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
 
+  const isRvSite = site.site_type === 'rv_site'
+
   function validateAndContinue() {
     if (!form.guest_name.trim()) { alert('Please enter your name.'); return }
     if (!form.guest_email.trim() || !form.guest_email.includes('@')) { alert('Please enter a valid email.'); return }
     if (!form.guest_phone.trim()) { alert('Please enter your phone number.'); return }
+    if (isRvSite) {
+      if (!form.camper_type) { alert('Please select your camper type.'); return }
+      if (!form.camper_length || parseInt(form.camper_length) < 1) { alert('Please enter your camper length.'); return }
+      if (!form.camper_amperage) { alert('Please select your amperage.'); return }
+    }
     setStep(2)
   }
 
@@ -314,6 +415,9 @@ function BookingForm() {
           guestName: form.guest_name,
           guestEmail: form.guest_email,
           guestPhone: form.guest_phone,
+          camperType: form.camper_type,
+          camperLength: parseInt(form.camper_length) || 0,
+          camperAmperage: form.camper_amperage,
           nightlyRate: site.nightly_rate,
           totalPrice: total,
           amountToPay, paymentType, addonItems,
@@ -339,6 +443,9 @@ function BookingForm() {
     settings?.logo_shape === 'circle' ? 'rounded-full' :
     settings?.logo_shape === 'rounded' ? 'rounded-xl' :
     settings?.logo_shape === 'square' ? 'rounded-none' : 'rounded-none'
+
+  const camperTypeLabel = (val: string) =>
+    CAMPER_TYPES.find(t => t.value === val)?.label || val
 
   if (sameDayBlocked) {
     return (
@@ -401,6 +508,63 @@ function BookingForm() {
                   <label className="block text-sm font-medium text-gray-300 mb-1">Phone Number *</label>
                   <input className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="(555) 555-5555" type="tel" value={form.guest_phone} onChange={e => setForm({ ...form, guest_phone: e.target.value })} />
                 </div>
+
+                {/* Camper Type Visual Selector — RV sites only */}
+                {isRvSite && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">Camper Type *</label>
+                      <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                        {CAMPER_TYPES.map(type => (
+                          <button
+                            key={type.value}
+                            type="button"
+                            onClick={() => setForm({ ...form, camper_type: type.value })}
+                            className="flex flex-col items-center gap-1.5 p-2 rounded-xl border-2 transition-all"
+                            style={{
+                              borderColor: form.camper_type === type.value ? 'var(--accent-color)' : '#4B5563',
+                              backgroundColor: form.camper_type === type.value ? 'rgba(var(--accent-rgb, 45,106,79), 0.15)' : '#374151',
+                              color: form.camper_type === type.value ? 'var(--accent-color)' : '#9CA3AF',
+                            }}
+                          >
+                            <div className="w-14 h-8">{type.svg}</div>
+                            <span className="text-xs font-medium text-center leading-tight">{type.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Camper Length + Amperage */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1">Camper Length (ft) *</label>
+                        <input
+                          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                          placeholder="e.g. 32"
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={form.camper_length}
+                          onChange={e => setForm({ ...form, camper_length: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1">Amperage *</label>
+                        <select
+                          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                          value={form.camper_amperage}
+                          onChange={e => setForm({ ...form, camper_amperage: e.target.value })}
+                        >
+                          <option value="">Select...</option>
+                          <option value="50amp">50 Amp</option>
+                          <option value="30amp">30 Amp</option>
+                          <option value="20amp">20 Amp</option>
+                        </select>
+                      </div>
+                    </div>
+                  </>
+                )}
+
                 <button onClick={validateAndContinue} className="w-full py-3 rounded-xl text-white font-semibold transition-colors mt-2" style={{ backgroundColor: 'var(--accent-color)' }}>
                   Continue to Add-Ons →
                 </button>
@@ -410,6 +574,7 @@ function BookingForm() {
                 <p className="text-white font-medium">{form.guest_name}</p>
                 <p>{form.guest_email}</p>
                 <p>{form.guest_phone}</p>
+                {isRvSite && form.camper_type && <p className="text-gray-400">{camperTypeLabel(form.camper_type)} · {form.camper_length} ft · {form.camper_amperage.replace('amp', ' Amp')}</p>}
                 <button onClick={() => { setStep(1); setWaiverSigned(false) }} className="text-xs mt-2" style={{ color: 'var(--accent-color)' }}>Edit</button>
               </div>
             )}
@@ -526,16 +691,16 @@ function BookingForm() {
                   <span>${(site.total_price / 100).toFixed(2)}</span>
                 </div>
                 {extraGuestFee > 0 && <div className="flex justify-between text-gray-300"><span>Extra guest fees</span><span>${(extraGuestFee / 100).toFixed(2)}</span></div>}
-               {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
-  const addon = addons.find(a => a.id === id)
-  if (!addon) return null
-  return (
-    <div key={id} className="flex justify-between">
-      <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
-      <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
-    </div>
-  )
-})}
+                {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
+                  const addon = addons.find(a => a.id === id)
+                  if (!addon) return null
+                  return (
+                    <div key={id} className="flex justify-between">
+                      <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
+                      <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
+                    </div>
+                  )
+                })}
                 {feeBreakdown.map(fee => (
                   <div key={fee.id} className="flex justify-between text-gray-300">
                     <span>{fee.name}</span>
@@ -597,16 +762,23 @@ function BookingForm() {
               <div><p className="text-gray-400">Guests</p><p className="text-white font-medium">{adults} adult{adults !== 1 ? 's' : ''}{children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}</p></div>
               <div><p className="text-gray-400">Duration</p><p className="text-white font-medium">{site.nights} night{site.nights !== 1 ? 's' : ''}</p></div>
               <div className="border-t border-gray-700 pt-3"><p className="text-gray-400">Rate</p><p className="text-white font-medium">${(site.nightly_rate / 100).toFixed(2)}/night</p></div>
+              {isRvSite && form.camper_type && (
+                <div className="border-t border-gray-700 pt-3">
+                  <p className="text-gray-400">Camper</p>
+                  <p className="text-white font-medium">{camperTypeLabel(form.camper_type)}</p>
+                  {form.camper_length && <p className="text-gray-400 text-xs">{form.camper_length} ft · {form.camper_amperage.replace('amp', ' Amp')}</p>}
+                </div>
+              )}
               {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
-  const addon = addons.find(a => a.id === id)
-  if (!addon) return null
-  return (
-    <div key={id} className="flex justify-between">
-      <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
-      <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
-    </div>
-  )
-})}
+                const addon = addons.find(a => a.id === id)
+                if (!addon) return null
+                return (
+                  <div key={id} className="flex justify-between">
+                    <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
+                    <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
+                  </div>
+                )
+              })}
               {feeBreakdown.map(fee => (
                 <div key={fee.id} className="flex justify-between">
                   <p className="text-gray-400">{fee.name}</p>

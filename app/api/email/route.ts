@@ -11,7 +11,7 @@ async function getSettings() {
   )
   const { data } = await supabase
     .from('settings')
-    .select('park_name, park_location, park_email, park_phone, confirmation_message, sender_name, sender_email, reply_to_email')
+    .select('park_name, park_location, park_email, park_phone, confirmation_message')
     .limit(1)
     .single()
   return data
@@ -30,11 +30,14 @@ export async function POST(request: NextRequest) {
       nights,
       adults,
       children,
+      camperType = '',
+      camperLength = 0,
+      camperAmperage = '',
       totalPrice,
       amountPaid,
       paymentType,
       confirmationNumber,
-      addonDetails = [],       // [{ name, quantity, price }]
+      addonDetails = [],
       extraGuestFee = 0,
       discountAmount = 0,
       discountCode = null,
@@ -42,12 +45,11 @@ export async function POST(request: NextRequest) {
 
     const settings = await getSettings()
     const campgroundName = settings?.park_name || 'Campground'
-const campgroundLocation = settings?.park_location || ''
-const contactEmail = settings?.park_email || 'reservations@bookings.com'
-const contactPhone = settings?.park_phone || ''
-const senderName = settings?.sender_name || campgroundName
-const fromEmail = settings?.sender_email || process.env.RESEND_FROM_EMAIL || 'bookings@campgroundreservations.com'
-const replyToEmail = settings?.reply_to_email || settings?.park_email || process.env.RESEND_FROM_EMAIL || 'bookings@campgroundreservations.com'
+    const campgroundLocation = settings?.park_location || ''
+    const contactEmail = settings?.park_email || process.env.RESEND_FROM_EMAIL || 'reservations@example.com'
+    const contactPhone = settings?.park_phone || ''
+    const fromEmail = process.env.RESEND_FROM_EMAIL || 'reservations@example.com'
+    const replyToEmail = settings?.park_email || process.env.RESEND_FROM_EMAIL || 'info@example.com'
 
     // Convert confirmation_message newlines into HTML paragraphs
     const rawMessage = settings?.confirmation_message || ''
@@ -60,12 +62,23 @@ const replyToEmail = settings?.reply_to_email || settings?.park_email || process
     const siteTypeLabel = (type: string) =>
       ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
 
+    const camperTypeLabel = (val: string) => ({
+      travel_trailer: 'Travel Trailer',
+      fifth_wheel: 'Fifth Wheel',
+      class_a: 'Class A',
+      class_c: 'Class C',
+      van: 'Van',
+      other: 'Other',
+    }[val] || val)
+
+    const amperageLabel = (val: string) => val.replace('amp', ' Amp')
+
     const balanceDue = totalPrice - amountPaid
 
-    // ── Build itemized add-ons rows (shared by both emails) ──────────────────
     const hasAddons = addonDetails && addonDetails.length > 0
     const hasExtraGuests = extraGuestFee > 0
     const hasDiscount = discountAmount > 0
+    const hasCamperInfo = camperType && camperType !== ''
 
     // For customer email (dark theme)
     const addonRowsDark = hasAddons
@@ -97,7 +110,7 @@ const replyToEmail = settings?.reply_to_email || settings?.park_email || process
 
     // ── Customer confirmation email ──────────────────────────────────────────
     await resend.emails.send({
-      from: `${senderName} <${fromEmail}>`,
+      from: `${campgroundName} <${fromEmail}>`,
       replyTo: replyToEmail,
       to: guestEmail,
       subject: `Reservation Confirmed — ${siteTypeLabel(siteType)} ${siteNumber} · ${arrival}`,
@@ -149,6 +162,20 @@ const replyToEmail = settings?.reply_to_email || settings?.park_email || process
                   <td style="padding:8px 0;color:#9CA3AF;font-size:14px;">Guests</td>
                   <td style="padding:8px 0;color:#ffffff;font-size:14px;">${adults} adult${adults !== 1 ? 's' : ''}${children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}</td>
                 </tr>
+                ${hasCamperInfo ? `
+                <tr>
+                  <td style="padding:8px 0;color:#9CA3AF;font-size:14px;">Camper Type</td>
+                  <td style="padding:8px 0;color:#ffffff;font-size:14px;">${camperTypeLabel(camperType)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;color:#9CA3AF;font-size:14px;">Camper Length</td>
+                  <td style="padding:8px 0;color:#ffffff;font-size:14px;">${camperLength} ft</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;color:#9CA3AF;font-size:14px;">Amperage</td>
+                  <td style="padding:8px 0;color:#ffffff;font-size:14px;">${amperageLabel(camperAmperage)}</td>
+                </tr>
+                ` : ''}
               </table>
             </div>
 
@@ -211,7 +238,7 @@ const replyToEmail = settings?.reply_to_email || settings?.park_email || process
 
     // ── Staff notification email ─────────────────────────────────────────────
     await resend.emails.send({
-      from: `${senderName} <${fromEmail}>`,
+      from: `${campgroundName} <${fromEmail}>`,
       replyTo: replyToEmail,
       to: contactEmail,
       subject: `New Reservation — ${siteTypeLabel(siteType)} ${siteNumber} · ${arrival}`,
@@ -229,6 +256,11 @@ const replyToEmail = settings?.reply_to_email || settings?.park_email || process
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Departure</td><td style="padding:6px 0;font-size:14px;">${departure}</td></tr>
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Nights</td><td style="padding:6px 0;font-size:14px;">${nights}</td></tr>
               <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Guests</td><td style="padding:6px 0;font-size:14px;">${adults} adults, ${children} children</td></tr>
+              ${hasCamperInfo ? `
+              <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Camper Type</td><td style="padding:6px 0;font-size:14px;font-weight:bold;">${camperTypeLabel(camperType)}</td></tr>
+              <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Camper Length</td><td style="padding:6px 0;font-size:14px;">${camperLength} ft</td></tr>
+              <tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Amperage</td><td style="padding:6px 0;font-size:14px;">${amperageLabel(camperAmperage)}</td></tr>
+              ` : ''}
               ${hasExtraGuests ? `<tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Extra guest fees</td><td style="padding:6px 0;font-size:14px;">$${(extraGuestFee / 100).toFixed(2)}</td></tr>` : ''}
               ${addonRowsLight}
               ${hasDiscount ? `<tr><td style="padding:6px 0;color:#6B7280;font-size:14px;">Discount${discountCode ? ` (${discountCode})` : ''}</td><td style="padding:6px 0;font-size:14px;color:#166534;">-$${(discountAmount / 100).toFixed(2)}</td></tr>` : ''}
