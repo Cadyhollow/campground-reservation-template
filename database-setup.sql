@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS settings (
   sender_email text DEFAULT '',
   reply_to_email text DEFAULT '',
   use_custom_sender boolean DEFAULT false,
+  reply_to_email text DEFAULT '',
   waiver_enabled boolean DEFAULT true,
   waiver_text text DEFAULT '',
   plan text DEFAULT 'ridgeline'
