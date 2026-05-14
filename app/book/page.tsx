@@ -367,7 +367,8 @@ function BookingForm() {
       : discountResult.discount_value
     : 0
   const total = Math.max(0, subtotal + feesTotal - discountAmount)
-  const deposit = site.nightly_rate
+  const proportionalFees = site.nights > 0 ? Math.round(feesTotal / site.nights) : 0
+const deposit = site.nightly_rate + proportionalFees
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
 
