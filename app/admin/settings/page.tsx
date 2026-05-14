@@ -46,6 +46,7 @@ export default function SettingsPage() {
   const [settingsId, setSettingsId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [plan, setPlan] = useState('trailhead')
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -55,6 +56,7 @@ export default function SettingsPage() {
     const { data } = await supabase.from('settings').select('*').limit(1).single()
     if (data) {
       setSettingsId(data.id)
+      setPlan(data.plan || 'trailhead')
       setForm({
         park_name: data.park_name || '',
         park_tagline: data.park_tagline || '',
@@ -69,8 +71,8 @@ export default function SettingsPage() {
         check_out_time: data.check_out_time || '12:00 PM',
         same_day_cutoff_time: data.same_day_cutoff_time || '11:00 AM',
         same_day_cutoff_message: data.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us to book.',
-        extra_adult_fee: data.extra_adult_fee ? (data.extra_adult_fee / 100).toString() : '0',
-extra_child_fee: data.extra_child_fee ? (data.extra_child_fee / 100).toString() : '0',
+        extra_adult_fee: (data.extra_adult_fee / 100).toString(),
+        extra_child_fee: (data.extra_child_fee / 100).toString(),
         base_occupancy_adults: data.base_occupancy_adults || 2,
         base_occupancy_children: data.base_occupancy_children || 2,
         cancellation_policy: data.cancellation_policy || '',
@@ -226,35 +228,48 @@ extra_child_fee: data.extra_child_fee ? (data.extra_child_fee / 100).toString() 
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Address</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_address} onChange={e => setForm({ ...form, park_address: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Website</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_website} onChange={e => setForm({ ...form, park_website: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Sender Name</label><p className="text-xs text-gray-400 mb-1">Name guests see in their inbox</p><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Cady Hollow Campground" value={form.sender_name} onChange={e => setForm({ ...form, sender_name: e.target.value })} /></div>
-            <div><label className="block text-sm font-medium text-gray-700 mb-1">Sender Email</label><p className="text-xs text-gray-400 mb-1">Must be verified in Resend</p><input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. bookings@cadyhollow.com" value={form.sender_email} onChange={e => setForm({ ...form, sender_email: e.target.value })} /></div>
+
+            {/* Sender Email — Summit only */}
+            {plan === 'summit' && (
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Sender Email</label><p className="text-xs text-gray-400 mb-1">Must be verified in Resend</p><input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. bookings@cadyhollow.com" value={form.sender_email} onChange={e => setForm({ ...form, sender_email: e.target.value })} /></div>
+            )}
+
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Reply-To Email</label><p className="text-xs text-gray-400 mb-1">Where guest replies go</p><input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. hello@cadyhollow.com" value={form.reply_to_email} onChange={e => setForm({ ...form, reply_to_email: e.target.value })} /></div>
-            <div className="md:col-span-2 flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
-              <div>
-                <p className="text-sm font-medium text-gray-900">Use Custom Sender</p>
-                <p className="text-xs text-gray-500 mt-0.5">{form.use_custom_sender ? 'Emails send from your custom sender email above.' : 'Emails send from the default bookings address.'}</p>
+
+            {/* Use Custom Sender — Summit only */}
+            {plan === 'summit' && (
+              <div className="md:col-span-2 flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Use Custom Sender</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{form.use_custom_sender ? 'Emails send from your custom sender email above.' : 'Emails send from the default bookings address.'}</p>
+                </div>
+                <button type="button" onClick={() => setForm({ ...form, use_custom_sender: !form.use_custom_sender })}
+                  className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-4"
+                  style={{ backgroundColor: form.use_custom_sender ? '#15803d' : '#d1d5db' }}>
+                  <span className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
+                    style={{ transform: form.use_custom_sender ? 'translateX(28px)' : 'translateX(0px)' }} />
+                </button>
               </div>
-              <button type="button" onClick={() => setForm({ ...form, use_custom_sender: !form.use_custom_sender })}
-                className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-4"
-                style={{ backgroundColor: form.use_custom_sender ? '#15803d' : '#d1d5db' }}>
-                <span className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
-                  style={{ transform: form.use_custom_sender ? 'translateX(28px)' : 'translateX(0px)' }} />
-              </button>
-            </div>
+            )}
+
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Brand Color</label><div className="flex items-center gap-3"><input type="color" className="w-12 h-10 rounded border border-gray-200 cursor-pointer" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /><input className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /></div></div>
           </div>
 
-          <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-700">Show Site Map</p>
-              <p className="text-xs text-gray-500 mt-0.5">{form.show_site_map ? 'Guests see the interactive map when browsing sites.' : 'Guests see a list view when browsing sites.'}</p>
+          {/* Show Site Map — Ridgeline and Summit only */}
+          {['ridgeline', 'summit'].includes(plan) && (
+            <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-700">Show Site Map</p>
+                <p className="text-xs text-gray-500 mt-0.5">{form.show_site_map ? 'Guests see the interactive map when browsing sites.' : 'Guests see a list view when browsing sites.'}</p>
+              </div>
+              <button type="button" onClick={() => setForm({ ...form, show_site_map: !form.show_site_map })}
+                className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-6"
+                style={{ backgroundColor: form.show_site_map ? '#15803d' : '#d1d5db' }}>
+                <span className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
+                  style={{ transform: form.show_site_map ? 'translateX(28px)' : 'translateX(0px)' }} />
+              </button>
             </div>
-            <button type="button" onClick={() => setForm({ ...form, show_site_map: !form.show_site_map })}
-              className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-6"
-              style={{ backgroundColor: form.show_site_map ? '#15803d' : '#d1d5db' }}>
-              <span className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
-                style={{ transform: form.show_site_map ? 'translateX(28px)' : 'translateX(0px)' }} />
-            </button>
-          </div>
+          )}
         </div>
 
         {/* Booking Rules */}
@@ -354,15 +369,6 @@ extra_child_fee: data.extra_child_fee ? (data.extra_child_fee / 100).toString() 
             <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" rows={3}
               value={form.maintenance_message} onChange={e => setForm({ ...form, maintenance_message: e.target.value })} />
           </div>
-        </div>
-
-       
-
-      {/* Square Payments */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-1">Square Payments</h3>
-          <p className="text-sm text-gray-500 mb-4">Connect your Square account to accept online payments from guests.</p>
-          <a href="/admin/settings/square" className="inline-flex items-center gap-2 bg-green-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-green-800">Manage Square Connection</a>
         </div>
 
       </div>
