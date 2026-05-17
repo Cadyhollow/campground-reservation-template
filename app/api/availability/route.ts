@@ -37,10 +37,8 @@ export async function GET(request: NextRequest) {
   if (settings?.season_start && settings?.season_end) {
     const arrivalDate = new Date(arrival + 'T12:00:00')
     const year = arrivalDate.getFullYear()
-    const startPart = settings.season_start.length === 10 ? settings.season_start.slice(5) : monthDayToISO(settings.season_start)
-    const endPart = settings.season_end.length === 10 ? settings.season_end.slice(5) : monthDayToISO(settings.season_end)
-    const seasonStart = new Date(`${year}-${startPart}T00:00:00`)
-    const seasonEnd = new Date(`${year}-${endPart}T23:59:59`)
+    const seasonStart = new Date(`${year}-${monthDayToISO(settings.season_start)}T00:00:00`)
+    const seasonEnd = new Date(`${year}-${monthDayToISO(settings.season_end)}T23:59:59`)
 
     if (arrivalDate < seasonStart || arrivalDate > seasonEnd) {
       return NextResponse.json({
@@ -120,6 +118,7 @@ export async function GET(request: NextRequest) {
 
   const sitesWithPricing = availableSites.map(site => {
     const applicableRules = pricingRules?.filter(rule => {
+      if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
       if (rule.site_id) return rule.site_id === site.id
       if (rule.site_type) return rule.site_type === site.site_type
       return false
@@ -129,6 +128,7 @@ export async function GET(request: NextRequest) {
     const nightlyRate = bestRule ? bestRule.nightly_rate : site.base_rate
 
     const applicableMinStay = minStayRules?.filter(rule => {
+      if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
       if (rule.site_id) return rule.site_id === site.id
       if (rule.site_type) return rule.site_type === site.site_type
       return false
