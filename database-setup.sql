@@ -136,7 +136,8 @@ CREATE TABLE IF NOT EXISTS pricing_rules (
   end_date date NOT NULL,
   nightly_rate integer NOT NULL,
   priority integer DEFAULT 0,
-  is_active boolean DEFAULT true
+  is_active boolean DEFAULT true,
+  site_ids text DEFAULT ''
 );
 
 
@@ -150,7 +151,8 @@ CREATE TABLE IF NOT EXISTS min_stay_rules (
   start_date date NOT NULL,
   end_date date NOT NULL,
   min_nights integer NOT NULL DEFAULT 1,
-  is_active boolean DEFAULT true
+  is_active boolean DEFAULT true,
+  site_ids text DEFAULT ''
 );
 
 
