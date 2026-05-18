@@ -104,12 +104,12 @@ export default function CalendarPage() {
 
   function getReservationsForDay(day: number) {
     const dateStr = String(year) + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0')
-    return reservations.filter(r => r.arrival_date <= dateStr && r.departure_date > dateStr)
+    return reservations.filter(r => r.arrival_date <= dateStr && r.departure_date >= dateStr)
   }
 
   function getReservationForSiteAndDay(siteId: string, day: number) {
     const dateStr = String(year) + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0')
-    return reservations.find(r => r.site_id === siteId && r.arrival_date <= dateStr && r.departure_date > dateStr) || null
+    return reservations.find(r => r.site_id === siteId && r.arrival_date <= dateStr && r.departure_date >= dateStr) || null
   }
 
   function prevMonth() {
@@ -138,6 +138,10 @@ export default function CalendarPage() {
   function isArrivalDay(r: Reservation, day: number) {
     const dateStr = String(year) + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0')
     return r.arrival_date === dateStr
+  }
+  function isCheckoutDay(r: Reservation, day: number) {
+    const dateStr = String(year) + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0')
+    return r.departure_date === dateStr
   }
 
   const siteTypeLabel = (type: string) => {
@@ -231,6 +235,11 @@ export default function CalendarPage() {
           <div className="w-2 h-2 rounded-full" style={{ backgroundColor: STATUS_COLORS.pending }} />
           <span className="text-xs text-gray-500">Pending</span>
         </div>
+        <div className="w-px h-4 bg-gray-200 mx-1" />
+        <div className="flex items-center gap-1.5">
+          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#ede9fe', border: '1px solid #c4b5fd' }} />
+          <span className="text-xs text-gray-500">Checkout day</span>
+        </div>
       </div>
 
       {/* Calendar View */}
@@ -275,15 +284,19 @@ export default function CalendarPage() {
                       {(expandedDays.has(day) ? dayReservations : dayReservations.slice(0, 3)).map(r => {
                         const colors = SITE_TYPE_COLORS[r.sites?.site_type] || SITE_TYPE_COLORS.rv_site
                         const arrival = isArrivalDay(r, day)
+                        const checkout = isCheckoutDay(r, day)
+                        const bgColor = checkout ? '#ede9fe' : colors.bg
+                        const textColor = checkout ? '#6d28d9' : colors.text
+                        const borderColor = checkout ? '#c4b5fd' : (selected?.id === r.id ? colors.text : colors.border)
                         return (
                           <button
                             key={r.id}
                             onClick={() => setSelected(selected?.id === r.id ? null : r)}
                             className="w-full text-left px-1 py-0.5 rounded text-xs font-medium truncate transition-opacity hover:opacity-80"
                             style={{
-                              backgroundColor: colors.bg,
-                              color: colors.text,
-                              border: '1px solid ' + (selected?.id === r.id ? colors.text : colors.border),
+                              backgroundColor: bgColor,
+                              color: textColor,
+                              border: '1px solid ' + borderColor,
                               borderLeftWidth: arrival ? '3px' : '1px',
                             }}
                           >
