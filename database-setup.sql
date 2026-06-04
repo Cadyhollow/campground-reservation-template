@@ -52,7 +52,15 @@ CREATE TABLE IF NOT EXISTS settings (
   seasonal_enabled boolean DEFAULT false,
   total_sites integer DEFAULT 0,
   total_cabins integer DEFAULT 0,
-  max_credit_amount integer DEFAULT 0
+  max_credit_amount integer DEFAULT 0,
+  early_checkin_enabled boolean DEFAULT false,
+  early_checkin_price integer DEFAULT 0,
+  early_checkin_time text DEFAULT '',
+  early_checkin_show_customers boolean DEFAULT false,
+  late_checkout_enabled boolean DEFAULT false,
+  late_checkout_price integer DEFAULT 0,
+  late_checkout_time text DEFAULT '',
+  late_checkout_show_customers boolean DEFAULT false
 );
 
 -- Insert default settings row
