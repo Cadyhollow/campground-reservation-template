@@ -26,8 +26,27 @@ export default function AdminDashboard() {
     revenueThisMonth: 0,
   })
   const [recentReservations, setRecentReservations] = useState<any[]>([])
+  const [upcomingReservations, setUpcomingReservations] = useState<any[]>([])
+  const [totalActiveSites, setTotalActiveSites] = useState(0)
+  const [occupancyTonight, setOccupancyTonight] = useState({ arriving: 0, occupied: 0, departing: 0 })
+  const [plan, setPlan] = useState<string>('summit')
   const [arrivalsToday, setArrivalsToday] = useState<ArrivalGuest[]>([])
   const [loading, setLoading] = useState(true)
+  const [dashboardView, setDashboardView] = useState<'owner'|'staff'>('staff')
+  const [slideOut, setSlideOut] = useState<'arrivals'|'departures'|null>(null)
+  const [walkinCountToday, setWalkinCountToday] = useState(0)
+  const [sitesAvailableTonight, setSitesAvailableTonight] = useState(0)
+
+  useEffect(() => {
+    const stored = localStorage.getItem('resonation_dashboard_view')
+    if (stored === 'owner' || stored === 'staff') setDashboardView(stored as 'owner'|'staff')
+    const handler = () => {
+      const v = localStorage.getItem('resonation_dashboard_view')
+      if (v === 'owner' || v === 'staff') setDashboardView(v as 'owner'|'staff')
+    }
+    window.addEventListener('dashboardViewChanged', handler)
+    return () => window.removeEventListener('dashboardViewChanged', handler)
+  }, [])
 
   useEffect(() => { fetchAll() }, [])
 
@@ -49,7 +68,10 @@ export default function AdminDashboard() {
         .neq('status', 'cancelled'),
     ])
 
-    if (settingsData) setSettings(settingsData)
+    if (settingsData) {
+      setSettings(settingsData)
+      if (settingsData.plan) setPlan(settingsData.plan)
+    }
 
     if (resData) {
       const thisMonth = resData.filter((r: any) =>
@@ -66,7 +88,23 @@ export default function AdminDashboard() {
         revenueThisMonth: revenue,
       })
       setRecentReservations(resData.slice(0, 8))
+      const upcoming = resData
+        .filter((r: any) => r.arrival_date >= today)
+        .sort((a: any, b: any) => a.arrival_date.localeCompare(b.arrival_date))
+        .slice(0, 5)
+      setUpcomingReservations(upcoming)
+      const occupiedTonight = resData.filter((r: any) =>
+        r.arrival_date < today && r.departure_date > today
+      ).length
+      const arrivingTonight = resData.filter((r: any) => r.arrival_date === today).length
+      const departingTonight = resData.filter((r: any) => r.departure_date === today).length
+      setOccupancyTonight({ arriving: arrivingTonight, occupied: occupiedTonight, departing: departingTonight })
     }
+    const { count } = await supabase
+      .from('sites')
+      .select('*', { count: 'exact', head: true })
+      .eq('is_available', true)
+    setTotalActiveSites(count || 0)
 
     if (todayArrivals && todayArrivals.length > 0) {
       const ids = todayArrivals.map((r: any) => r.id)
@@ -102,6 +140,28 @@ export default function AdminDashboard() {
         checkedIn: r.checked_in || false,
       })))
     }
+
+    // Walk-in sales count today
+    const { count: walkinCount } = await supabase
+      .from('folio_payments')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'completed')
+      .gte('paid_at', today + 'T00:00:00')
+      .lte('paid_at', today + 'T23:59:59')
+    setWalkinCountToday(walkinCount || 0)
+
+    // Sites available tonight
+    const { count: totalSitesCount } = await supabase
+      .from('sites')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_available', true)
+    const { count: occupiedCount } = await supabase
+      .from('reservations')
+      .select('id', { count: 'exact', head: true })
+      .neq('status', 'cancelled')
+      .lte('arrival_date', today)
+      .gte('departure_date', today)
+    setSitesAvailableTonight(Math.max(0, (totalSitesCount || 0) - (occupiedCount || 0)))
 
     setLoading(false)
   }
@@ -159,29 +219,57 @@ export default function AdminDashboard() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-          <p className="text-xs text-gray-500 mb-1">Arrivals Today</p>
-          <p className="text-3xl font-bold text-gray-900">{stats.arrivalsToday}</p>
+        {/* Arrivals — always shown, clickable */}
+        <div onClick={()=>setSlideOut('arrivals')}
+          className="rounded-xl border p-4 shadow-sm cursor-pointer hover:shadow-md transition-all"
+          style={{background:'#f0fdfa',borderColor:'#99f6e4'}}>
+          <p className="text-xs font-semibold mb-1" style={{color:'#0f766e'}}>Arrivals Today</p>
+          <p className="text-3xl font-bold" style={{color:'#0f766e'}}>{stats.arrivalsToday}</p>
+          <p className="text-xs mt-1" style={{color:'#5eead4'}}>Tap to view list →</p>
         </div>
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-          <p className="text-xs text-gray-500 mb-1">Departures Today</p>
-          <p className="text-3xl font-bold text-gray-900">{stats.departuresToday}</p>
+        {/* Departures — always shown, clickable */}
+        <div onClick={()=>setSlideOut('departures')}
+          className="rounded-xl border p-4 shadow-sm cursor-pointer hover:shadow-md transition-all"
+          style={{background:'#fffbeb',borderColor:'#fde68a'}}>
+          <p className="text-xs font-semibold mb-1" style={{color:'#92400e'}}>Departures Today</p>
+          <p className="text-3xl font-bold" style={{color:'#92400e'}}>{stats.departuresToday}</p>
+          <p className="text-xs mt-1" style={{color:'#fbbf24'}}>Tap to view list →</p>
         </div>
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-          <p className="text-xs text-gray-500 mb-1">Reservations This Month</p>
-          <p className="text-3xl font-bold text-gray-900">{stats.totalThisMonth}</p>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-          <p className="text-xs text-gray-500 mb-1">Revenue This Month</p>
-          <p className="text-3xl font-bold text-gray-900">${(stats.revenueThisMonth / 100).toLocaleString('en-US', { minimumFractionDigits: 0 })}</p>
-        </div>
+        {/* Card 3 — owner vs staff */}
+        {dashboardView === 'owner' ? (
+          <div className="rounded-xl border p-4 shadow-sm" style={{background:'#eef2ff',borderColor:'#c7d2fe'}}>
+            <p className="text-xs font-semibold mb-1" style={{color:'#3730a3'}}>Reservations This Month</p>
+            <p className="text-3xl font-bold" style={{color:'#3730a3'}}>{stats.totalThisMonth}</p>
+          </div>
+        ) : (
+          <div className="rounded-xl border p-4 shadow-sm" style={{background:'#eff6ff',borderColor:'#bfdbfe'}}>
+            <p className="text-xs font-semibold mb-1" style={{color:'#1e40af'}}>Sites Available Tonight</p>
+            <p className="text-3xl font-bold" style={{color:'#1e40af'}}>{sitesAvailableTonight}</p>
+          </div>
+        )}
+        {/* Card 4 — owner vs staff */}
+        {dashboardView === 'owner' ? (
+          <div className="rounded-xl border p-4 shadow-sm" style={{background:'#f0fdf4',borderColor:'#bbf7d0'}}>
+            <p className="text-xs font-semibold mb-1" style={{color:'#14532d'}}>Revenue This Month</p>
+            <p className="text-3xl font-bold" style={{color:'#14532d'}}>${(stats.revenueThisMonth / 100).toLocaleString('en-US', { minimumFractionDigits: 0 })}</p>
+          </div>
+        ) : (
+          <div className="rounded-xl border p-4 shadow-sm" style={{background:'#faf5ff',borderColor:'#e9d5ff'}}>
+            <p className="text-xs font-semibold mb-1" style={{color:'#581c87'}}>Walk-In Sales Today</p>
+            <p className="text-3xl font-bold" style={{color:'#581c87'}}>{walkinCountToday}</p>
+          </div>
+        )}
       </div>
 
       {/* Quick links */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         {[
           { label: 'New Booking', href: '/admin/manual-booking', icon: '➕' },
+          ...(settings?.pos_enabled ? [{ label: 'Walk-Up Sale', href: '/admin/folio/new', icon: '🛒' }] : []),
+          { label: 'Walk-In Booking', href: '/admin/walkin-booking', icon: '🏕️' },
+          { label: 'Guest Directory', href: '/admin/guests', icon: '👥' },
           { label: 'Calendar', href: '/admin/calendar', icon: '📅' },
+          ...(plan === 'ridgeline' || plan === 'summit' ? [{ label: 'Park Map', href: '/admin/map', icon: '🗺️' }] : []),
           { label: 'Reservations', href: '/admin/reservations', icon: '📋' },
           { label: 'Settings', href: '/admin/settings', icon: '⚙️' },
         ].map(link => (
@@ -239,9 +327,9 @@ export default function AdminDashboard() {
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
-                        <p className={`font-semibold text-gray-900 ${guest.checkedIn ? 'line-through text-gray-400' : ''}`}>
+                        <a href={`/admin/folio/${guest.id}`} className={`font-semibold text-gray-900 hover:text-green-700 hover:underline underline-offset-2 ${guest.checkedIn ? 'line-through text-gray-400' : ''}`}>
                           {guest.guest_name}
-                        </p>
+                        </a>
                         <span className="text-sm font-medium text-gray-700 shrink-0">
                           {siteTypeLabel(guest.site_type)} {guest.site_number}
                         </span>
@@ -285,33 +373,151 @@ export default function AdminDashboard() {
         )}
       </div>
 
-      {/* Recent reservations */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-900">Recent Reservations</h2>
-          <Link href="/admin/reservations" className="text-sm text-green-700 hover:underline">View all →</Link>
+      {/* Occupancy + Upcoming */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+        {/* Occupancy Bar */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-base font-semibold text-gray-900">Tonight's Occupancy</h2>
+            <span className="text-2xl font-bold text-gray-900">
+              {occupancyTonight.arriving + occupancyTonight.occupied + occupancyTonight.departing}
+              <span className="text-sm font-normal text-gray-400"> / {totalActiveSites}</span>
+            </span>
+          </div>
+          {/* Bar */}
+          <div className="w-full h-4 rounded-full overflow-hidden bg-gray-100 flex mb-4">
+            {totalActiveSites > 0 && (
+              <>
+                {occupancyTonight.occupied > 0 && (
+                  <div className="h-full transition-all" style={{ width: `${(occupancyTonight.occupied / totalActiveSites) * 100}%`, backgroundColor: '#4ade80' }} />
+                )}
+                {occupancyTonight.arriving > 0 && (
+                  <div className="h-full transition-all" style={{ width: `${(occupancyTonight.arriving / totalActiveSites) * 100}%`, backgroundColor: '#fbbf24' }} />
+                )}
+                {occupancyTonight.departing > 0 && (
+                  <div className="h-full transition-all" style={{ width: `${(occupancyTonight.departing / totalActiveSites) * 100}%`, backgroundColor: '#fb923c' }} />
+                )}
+              </>
+            )}
+          </div>
+          {/* Legend */}
+          <div className="flex flex-wrap gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#4ade80' }} />
+              <span className="text-xs text-gray-600">{occupancyTonight.occupied} Occupied</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#fbbf24' }} />
+              <span className="text-xs text-gray-600">{occupancyTonight.arriving} Arriving</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#fb923c' }} />
+              <span className="text-xs text-gray-600">{occupancyTonight.departing} Departing</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-gray-200" />
+              <span className="text-xs text-gray-600">{Math.max(0, totalActiveSites - occupancyTonight.arriving - occupancyTonight.occupied - occupancyTonight.departing)} Available</span>
+            </div>
+          </div>
         </div>
-        <div className="divide-y divide-gray-50">
-          {recentReservations.length === 0 ? (
-            <p className="text-gray-400 text-sm text-center py-8">No reservations yet.</p>
-          ) : recentReservations.map(r => (
-            <Link key={r.id} href={`/admin/reservations?id=${r.id}`}
-              className="flex items-center justify-between px-6 py-3 hover:bg-gray-50 transition-colors">
-              <div>
-                <p className="text-sm font-medium text-gray-900">{r.guest_name}</p>
-                <p className="text-xs text-gray-500">{siteTypeLabel(r.sites?.site_type)} {r.sites?.site_number} · {r.arrival_date} → {r.departure_date}</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className={`text-xs px-2 py-1 rounded-full font-medium ${statusColor(r.status)}`}>
-                  {r.status.charAt(0).toUpperCase() + r.status.slice(1)}
-                </span>
-                <span className="text-sm font-medium text-gray-700">${(r.amount_paid / 100).toFixed(0)}</span>
-              </div>
-            </Link>
-          ))}
+
+        {/* Upcoming Arrivals */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <h2 className="text-base font-semibold text-gray-900">Upcoming Arrivals</h2>
+            <Link href="/admin/reservations" className="text-sm text-green-700 hover:underline">View all →</Link>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {upcomingReservations.length === 0 ? (
+              <p className="text-gray-400 text-sm text-center py-8">No upcoming arrivals.</p>
+            ) : upcomingReservations.map(r => {
+              const isToday = r.arrival_date === new Date().toISOString().split('T')[0]
+              const paidInFull = r.amount_paid >= r.total_price
+              return (
+                <Link key={r.id} href={`/admin/reservations?id=${r.id}`}
+                  className="flex items-center justify-between px-6 py-3 hover:bg-gray-50 transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl flex flex-col items-center justify-center shrink-0"
+                      style={{ background: isToday ? '#f0fdf4' : '#f9fafb', border: '1px solid', borderColor: isToday ? '#bbf7d0' : '#e5e7eb' }}>
+                      <span className="text-xs font-bold" style={{ color: isToday ? '#15803d' : '#6b7280' }}>
+                        {new Date(r.arrival_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short' })}
+                      </span>
+                      <span className="text-sm font-extrabold leading-none" style={{ color: isToday ? '#15803d' : '#111827' }}>
+                        {new Date(r.arrival_date + 'T12:00:00').getDate()}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">{r.guest_name}</p>
+                      <p className="text-xs text-gray-500">{siteTypeLabel(r.sites?.site_type)} {r.sites?.site_number}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1">
+                    <span className="text-sm font-medium text-gray-700">${(r.total_price / 100).toFixed(0)}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${paidInFull ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                      {paidInFull ? 'Paid' : 'Balance due'}
+                    </span>
+                  </div>
+                </Link>
+              )
+            })}
+          </div>
         </div>
+
       </div>
 
+      {/* Arrivals/Departures slide-out */}
+      {slideOut && (
+        <>
+          <div className="fixed inset-0 bg-black/40 z-40" onClick={()=>setSlideOut(null)}/>
+          <div className="fixed right-0 top-0 h-full w-full max-w-md bg-white z-50 shadow-2xl flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">{slideOut==='arrivals'?'Arrivals Today':'Departures Today'}</h2>
+                <p className="text-xs text-gray-400 mt-0.5">{new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</p>
+              </div>
+              <button onClick={()=>setSlideOut(null)} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 font-bold text-lg">×</button>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {slideOut==='arrivals' && (
+                arrivalsToday.length===0 ? (
+                  <p className="text-gray-400 text-sm text-center py-12">No arrivals today</p>
+                ) : arrivalsToday.map(guest=>{
+                  const balance = guest.total_price - guest.amount_paid
+                  return (
+                    <div key={guest.id} className={`px-6 py-4 border-b border-gray-50 ${guest.checkedIn?'bg-green-50':''}`}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-semibold text-gray-900">{guest.guest_name}</span>
+                        <span className="text-sm text-gray-500">{siteTypeLabel(guest.site_type)} {guest.site_number}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500">{guest.num_adults} adult{guest.num_adults!==1?'s':''}{guest.num_children>0?`, ${guest.num_children} child${guest.num_children!==1?'ren':''}`:''}</span>
+                        {balance<=0
+                          ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">Paid in full</span>
+                          : <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full font-semibold">Due: ${(balance/100).toFixed(2)}</span>
+                        }
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+              {slideOut==='departures' && (
+                recentReservations.filter(r=>r.departure_date===new Date().toISOString().split('T')[0]).length===0 ? (
+                  <p className="text-gray-400 text-sm text-center py-12">No departures today</p>
+                ) : recentReservations.filter(r=>r.departure_date===new Date().toISOString().split('T')[0]).map((r:any)=>(
+                  <div key={r.id} className="px-6 py-4 border-b border-gray-50">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-semibold text-gray-900">{r.guest_name}</span>
+                      <span className="text-sm text-gray-500">{siteTypeLabel(r.sites?.site_type||'')} {r.sites?.site_number}</span>
+                    </div>
+                    <span className="text-xs text-gray-400">Checking out today</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

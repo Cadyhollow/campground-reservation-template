@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import Image from 'next/image'
+import CampgroundMap from './components/CampgroundMap'
 import { supabase } from '@/lib/supabase'
 
 type Site = {
@@ -117,7 +118,7 @@ export default function HomePage() {
         .in('site_id', siteIds)
       if (sc) {
         const map: Record<string, number[]> = {}
-        sc.forEach((row: any) => {
+        sc.forEach((row) => {
           if (!map[row.site_id]) map[row.site_id] = []
           map[row.site_id].push(row.category_id)
         })
@@ -406,7 +407,33 @@ export default function HomePage() {
             </div>
           ) : (
             <>
-              
+              {settings?.show_site_map && (
+                <div className="rounded-2xl p-4 mb-6" style={{ backgroundColor: '#2B2B2B' }}>
+                  <h3 className="text-white font-semibold mb-3 text-sm">
+                    Click a site on the map to select it — <span className="text-gray-400">grey = not available for selected dates</span>
+                  </h3>
+                  <CampgroundMap
+                    onSelectSite={(site) => {
+  const s = site as any
+  setSelectedSite(s)
+  const catIds = siteCategories[s.id]
+  if (catIds && catIds.length > 0) {
+    setOpenCategories(prev => {
+      const next = new Set(prev)
+      catIds.forEach((id) => next.add(id))
+      return next
+    })
+  } else {
+    setOpenCategories(prev => new Set(prev).add('uncategorized'))
+  }
+}}
+                    sites={sites}
+                    availableSiteIds={sites.filter(s => s.meets_min_stay !== false).map(s => s.id)}
+                    selectedSiteId={selectedSite?.id}
+                    nights={selectedSite?.nights || 0}
+                  />
+                </div>
+              )}
 
               {/* Category Accordion */}
               {categories.length > 0 ? (
@@ -471,7 +498,7 @@ export default function HomePage() {
       <div className="text-center py-8 text-gray-600 text-sm">
         © 2026 {settings?.park_name || 'Campground'} · {settings?.park_location || ''}
       </div>
-  </>}
+   </>}
     </main>
   )
 }

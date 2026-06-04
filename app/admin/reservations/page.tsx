@@ -46,6 +46,7 @@ type Reservation = {
   camper_type: string
   camper_length: number
   camper_amperage: string
+  square_payment_id: string | null
   sites: { site_number: string; site_type: string } | null
 }
 
@@ -73,6 +74,7 @@ function ReservationsPageInner() {
   const [selectedAddons, setSelectedAddons] = useState<Addon[]>([])
   const [notes, setNotes] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
+  const [sortBy, setSortBy] = useState<'arrival_date' | 'created_at' | 'guest_name'>('arrival_date')
 
   // Edit mode state
   const [editing, setEditing] = useState(false)
@@ -83,10 +85,21 @@ function ReservationsPageInner() {
     num_adults: 2,
     num_children: 0,
     amount_paid: '',
+    guest_email: '',
+    guest_phone: '',
   })
+  const [resendingEmail, setResendingEmail] = useState(false)
   const [editAddons, setEditAddons] = useState<{ [id: string]: number }>({})
   const [saving, setSaving] = useState(false)
   const [fees, setFees] = useState<{name:string,type:string,amount:number,applies_to:string}[]>([])
+  const [pricingRules, setPricingRules] = useState<any[]>([])
+  const [overrideTotal, setOverrideTotal] = useState(false)
+  const [overrideTotalValue, setOverrideTotalValue] = useState('')
+  const [showResRefund, setShowResRefund] = useState(false)
+  const [resRefundAmount, setResRefundAmount] = useState('')
+  const [resRefundReason, setResRefundReason] = useState('')
+  const [processingResRefund, setProcessingResRefund] = useState(false)
+  const [resRefundError, setResRefundError] = useState('')
 
   useEffect(() => {
     fetchReservations()
@@ -108,7 +121,7 @@ function ReservationsPageInner() {
     const today = new Date().toISOString().split('T')[0]
     const { data } = await supabase
       .from('reservations')
-      .select('*, sites(site_number, site_type)')
+      .select('*, sites(site_number, site_type), square_payment_id')
       .order('arrival_date', { ascending: true })
     if (data) {
       const upcoming = data.filter(r => r.arrival_date >= today)
@@ -131,6 +144,8 @@ function ReservationsPageInner() {
   async function fetchFees() {
     const { data } = await supabase.from('fees').select('*').eq('is_active', true)
     setFees(data || [])
+    const { data: rulesData } = await supabase.from('pricing_rules').select('*').eq('is_active', true)
+    setPricingRules(rulesData || [])
   }
 
   async function fetchBookedSites(arrival: string, departure: string, excludeReservationId: string) {
@@ -193,11 +208,15 @@ function ReservationsPageInner() {
       num_adults: res.num_adults,
       num_children: res.num_children,
       amount_paid: (res.amount_paid / 100).toFixed(2),
+      guest_email: res.guest_email || '',
+      guest_phone: res.guest_phone || '',
     })
     fetchAddonsForEdit(res.id)
     if (res.arrival_date && res.departure_date) {
       fetchBookedSites(res.arrival_date, res.departure_date, res.id)
     }
+    setOverrideTotal(false)
+    setOverrideTotalValue('')
     setEditing(true)
   }
 
@@ -209,7 +228,17 @@ function ReservationsPageInner() {
     const nights = Math.round(
       (new Date(editForm.departure_date).getTime() - new Date(editForm.arrival_date).getTime()) / (1000 * 60 * 60 * 24)
     )
-    const basePrice = site ? site.base_rate * nights : selected.total_price
+    const applicable = site ? pricingRules.filter(rule => {
+      const withinDates = rule.start_date <= editForm.departure_date && rule.end_date >= editForm.arrival_date
+      if (!withinDates) return false
+      if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
+      if (rule.site_id) return rule.site_id === site.id
+      if (rule.site_type) return rule.site_type === site.site_type
+      return false
+    }) : []
+    const bestRule = applicable.sort((a: any, b: any) => b.priority - a.priority)[0]
+    const nightlyRate = site ? (bestRule ? bestRule.nightly_rate : site.base_rate) : 0
+    const basePrice = site ? nightlyRate * nights : selected.total_price
     const addonTotal = Object.entries(editAddons).reduce((sum, [id, qty]) => {
       const addon = availableAddons.find(a => a.id === id)
       return sum + (addon ? addon.price * qty : 0)
@@ -228,15 +257,26 @@ function ReservationsPageInner() {
     const existingNotes = selected.notes || ''
     const updatedNotes = existingNotes ? `${existingNotes}\n${auditNote}` : auditNote
 
+    const finalTotal = overrideTotal && overrideTotalValue
+      ? Math.round(parseFloat(overrideTotalValue) * 100)
+      : newTotal
+
+    const prevTotal = newTotal > 0 ? newTotal : selected.total_price
+    const overrideNote = overrideTotal && overrideTotalValue
+      ? `\n[Total overridden ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] Previous total: $${(prevTotal/100).toFixed(2)} → New total: $${parseFloat(overrideTotalValue).toFixed(2)}`
+      : ''
+
     const { error } = await supabase.from('reservations').update({
       site_id: editForm.site_id,
       arrival_date: editForm.arrival_date,
       departure_date: editForm.departure_date,
       num_adults: editForm.num_adults,
       num_children: editForm.num_children,
-      total_price: newTotal,
+      total_price: finalTotal,
       amount_paid: Math.round(parseFloat(editForm.amount_paid) * 100),
-      notes: updatedNotes,
+      notes: updatedNotes + overrideNote,
+      guest_email: editForm.guest_email,
+      guest_phone: editForm.guest_phone,
     }).eq('id', selected.id)
 
     if (error) { toast.error('Error saving changes.'); setSaving(false); return }
@@ -261,10 +301,57 @@ function ReservationsPageInner() {
     if (data) { setSelected(data); fetchAddons(data.id) }
   }
 
+  async function handleResRefund() {
+    if (!selected || !resRefundAmount) return
+    setProcessingResRefund(true)
+    setResRefundError('')
+
+    const res = await fetch('/api/reservation-refund', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reservationId: selected.id,
+        squarePaymentId: selected.square_payment_id,
+        refundAmount: parseFloat(resRefundAmount),
+        reason: resRefundReason || 'Refund',
+        currentAmountPaid: selected.amount_paid,
+        currentNotes: selected.notes || '',
+      }),
+    })
+    const data = await res.json()
+
+    if (!data.success) {
+      setResRefundError(data.error || 'Refund failed. Please try again.')
+      setProcessingResRefund(false)
+      return
+    }
+
+    toast.success('Refund recorded successfully!')
+    setProcessingResRefund(false)
+    setShowResRefund(false)
+    setResRefundAmount('')
+    setResRefundReason('')
+    await fetchReservations()
+    const { data: updated } = await supabase.from('reservations').select('*, sites(site_number, site_type), square_payment_id').eq('id', selected.id).single()
+    if (updated) { setSelected(updated); fetchAddons(updated.id) }
+  }
+
   async function handleCancel(res: Reservation) {
-    if (!confirm(`Cancel reservation for ${res.guest_name}? This cannot be undone.`)) return
+    if (!confirm(`Cancel reservation for ${res.guest_name}?\n\nThis marks it as cancelled but keeps the record in your history.`)) return
     await supabase.from('reservations').update({ status: 'cancelled' }).eq('id', res.id)
     toast.success('Reservation cancelled.')
+    fetchReservations()
+    setSelected(null)
+  }
+
+  async function handleDelete(res: Reservation) {
+    if (!confirm(`PERMANENTLY DELETE this reservation for ${res.guest_name}?\n\nThis cannot be undone and will remove all records. Only use this for test data or duplicates.`)) return
+    const secondConfirm = prompt(`Type DELETE to confirm permanently removing this reservation:`)
+    if (secondConfirm !== 'DELETE') { toast.error('Deletion cancelled.'); return }
+    await supabase.from('reservation_addons').delete().eq('reservation_id', res.id)
+    await supabase.from('folios').delete().eq('reservation_id', res.id)
+    await supabase.from('reservations').delete().eq('id', res.id)
+    toast.success('Reservation permanently deleted.')
     fetchReservations()
     setSelected(null)
   }
@@ -285,6 +372,19 @@ function ReservationsPageInner() {
       res.sites?.site_number.includes(search)
     const matchesStatus = statusFilter === 'all' || res.status === statusFilter
     return matchesSearch && matchesStatus
+  }).sort((a, b) => {
+    if (sortBy === 'arrival_date') {
+      const today = new Date().toISOString().split('T')[0]
+      const aUpcoming = a.arrival_date >= today
+      const bUpcoming = b.arrival_date >= today
+      if (aUpcoming && !bUpcoming) return -1
+      if (!aUpcoming && bUpcoming) return 1
+      if (aUpcoming && bUpcoming) return a.arrival_date.localeCompare(b.arrival_date)
+      return b.arrival_date.localeCompare(a.arrival_date)
+    }
+    if (sortBy === 'created_at') return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    if (sortBy === 'guest_name') return a.guest_name.localeCompare(b.guest_name)
+    return 0
   })
 
   const statusColor = (status: string) => ({
@@ -306,7 +406,20 @@ function ReservationsPageInner() {
     ? Math.round((new Date(editForm.departure_date).getTime() - new Date(editForm.arrival_date).getTime()) / (1000 * 60 * 60 * 24))
     : 0
   const editSite = allSites.find(s => s.id === editForm.site_id)
-  const editBasePrice = editSite ? editSite.base_rate * editNights : 0
+  const editNightlyRate = (() => {
+    if (!editSite || !editForm.arrival_date || !editForm.departure_date) return editSite?.base_rate || 0
+    const applicable = pricingRules.filter(rule => {
+      const withinDates = rule.start_date <= editForm.departure_date && rule.end_date >= editForm.arrival_date
+      if (!withinDates) return false
+      if (rule.site_ids) return rule.site_ids.split(',').includes(editSite.id)
+      if (rule.site_id) return rule.site_id === editSite.id
+      if (rule.site_type) return rule.site_type === editSite.site_type
+      return false
+    })
+    const best = applicable.sort((a: any, b: any) => b.priority - a.priority)[0]
+    return best ? best.nightly_rate : editSite.base_rate
+  })()
+  const editBasePrice = editNightlyRate * editNights
   const editAddonTotal = Object.entries(editAddons).reduce((sum, [id, qty]) => {
     const addon = availableAddons.find(a => a.id === id)
     return sum + (addon ? addon.price * qty : 0)
@@ -350,6 +463,16 @@ function ReservationsPageInner() {
           <option value="pending">Pending</option>
           <option value="manual">Manual</option>
           <option value="cancelled">Cancelled</option>
+        </select>
+        <select
+          className="border border-gray-200 rounded-lg px-4 py-2.5 text-sm shrink-0"
+          style={{ width: '180px' }}
+          value={sortBy}
+          onChange={e => setSortBy(e.target.value as any)}
+        >
+          <option value="arrival_date">Sort: Arrival Date</option>
+          <option value="created_at">Sort: Date Booked</option>
+          <option value="guest_name">Sort: Guest Name</option>
         </select>
       </div>
 
@@ -419,6 +542,34 @@ function ReservationsPageInner() {
                 <div>
                   <p className="text-gray-500">Dates</p>
                   <p className="font-medium text-gray-900">{selected.arrival_date} → {selected.departure_date} ({nights(selected)} nights)</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Nightly Rate</p>
+                  <p className="font-medium text-gray-900">
+                    {(() => {
+                      const site = allSites.find(s => s.id === selected.site_id)
+                      if (!site) return '—'
+                      const applicable = pricingRules.filter(rule => {
+                        const withinDates = rule.start_date <= selected.departure_date && rule.end_date >= selected.arrival_date
+                        if (!withinDates) return false
+                        if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
+                        if (rule.site_id) return rule.site_id === site.id
+                        if (rule.site_type) return rule.site_type === site.site_type
+                        return false
+                      })
+                      const best = applicable.sort((a: any, b: any) => b.priority - a.priority)[0]
+                      const rate = best ? best.nightly_rate : site.base_rate
+                      const isRule = !!best
+                      return <>
+                        ${(rate / 100).toFixed(2)}/night
+                        {isRule && <span className="ml-2 text-xs text-amber-600 font-normal">(pricing rule applied)</span>}
+                      </>
+                    })()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Reservation Made</p>
+                  <p className="font-medium text-gray-900">{new Date(selected.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
                 </div>
                 <div>
                   <p className="text-gray-500">Guests</p>
@@ -493,7 +644,8 @@ function ReservationsPageInner() {
                 </div>
 
                 {selected.status !== 'cancelled' && (
-                  <div className="flex gap-2 pt-3">
+                  <>
+                  <div className="flex gap-2 pt-3 flex-wrap">
                     <button
                       onClick={() => startEditing(selected)}
                       className="flex-1 bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800"
@@ -501,10 +653,119 @@ function ReservationsPageInner() {
                       Edit Reservation
                     </button>
                     <button
+                      onClick={() => window.location.href = '/admin/folio/' + selected.id}
+                      className="flex-1 px-4 py-2 rounded-lg text-sm font-medium text-white"
+                      style={{ background: '#2E6B8A', border: 'none', cursor: 'pointer' }}
+                    >
+                      Open Folio
+                    </button>
+                    <button
                       onClick={() => handleCancel(selected)}
                       className="flex-1 bg-red-50 text-red-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-100"
                     >
                       Cancel
+                    </button>
+                  </div>
+                  <div className="pt-2">
+                    <button
+                      onClick={async () => {
+                        if (!selected.guest_email) { toast.error('No email address on file.'); return }
+                        setResendingEmail(true)
+                        try {
+                          const nights = Math.round((new Date(selected.departure_date).getTime() - new Date(selected.arrival_date).getTime()) / (1000 * 60 * 60 * 24))
+                          await fetch('/api/email', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              guestName: selected.guest_name,
+                              guestEmail: selected.guest_email,
+                              siteNumber: selected.sites?.site_number || '',
+                              siteType: selected.sites?.site_type || 'rv_site',
+                              arrival: selected.arrival_date,
+                              departure: selected.departure_date,
+                              nights,
+                              adults: selected.num_adults,
+                              children: selected.num_children,
+                              camperType: '',
+                              camperLength: 0,
+                              camperAmperage: '',
+                              totalPrice: selected.total_price,
+                              amountPaid: selected.amount_paid,
+                              paymentType: selected.payment_type,
+                              confirmationNumber: selected.id.slice(0,8).toUpperCase(),
+                              addonDetails: [],
+                              extraGuestFee: 0,
+                            }),
+                          })
+                          toast.success('Confirmation email resent!')
+                        } catch (e) {
+                          toast.error('Failed to resend email.')
+                        }
+                        setResendingEmail(false)
+                      }}
+                      disabled={resendingEmail}
+                      className="w-full bg-blue-50 text-blue-700 border border-blue-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-100 disabled:opacity-50"
+                    >
+                      {resendingEmail ? 'Sending...' : '✉️ Resend Confirmation Email'}
+                    </button>
+                  </div>
+                  </>
+                )}
+                {selected.amount_paid > 0 && selected.status !== 'cancelled' && (
+                  <div className="pt-2">
+                    {!showResRefund ? (
+                      <button
+                        onClick={() => { setResRefundAmount(((selected.amount_paid * 0.9) / 100).toFixed(2)); setShowResRefund(true); setResRefundError('') }}
+                        className="w-full bg-orange-50 text-orange-700 border border-orange-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-100"
+                      >
+                        Issue Refund
+                      </button>
+                    ) : (
+                      <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-semibold text-orange-800">Issue Refund</span>
+                          <span className="text-xs text-gray-500">Paid: ${(selected.amount_paid / 100).toFixed(2)}</span>
+                        </div>
+                        <div className="flex gap-2">
+                          {[100, 90, 50].map(pct => (
+                            <button key={pct} onClick={() => setResRefundAmount((selected.amount_paid * pct / 10000).toFixed(2))}
+                              className="flex-1 bg-white border border-gray-200 rounded text-xs font-semibold py-1 hover:bg-gray-50">
+                              {pct}%
+                            </button>
+                          ))}
+                        </div>
+                        <div className="relative">
+                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                          <input type="number" step="0.01" className="w-full border border-gray-200 rounded pl-6 pr-2 py-1.5 text-sm"
+                            value={resRefundAmount} onChange={e => setResRefundAmount(e.target.value)} />
+                        </div>
+                        <input type="text" placeholder="Reason (e.g. Cancellation — outside 7 days)"
+                          className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm"
+                          value={resRefundReason} onChange={e => setResRefundReason(e.target.value)} />
+                        {selected.square_payment_id
+                          ? <p className="text-xs text-green-700">✓ Will refund to card via Square</p>
+                          : <p className="text-xs text-gray-500">Cash/check — return funds manually</p>}
+                        {resRefundError && <p className="text-xs text-red-600">{resRefundError}</p>}
+                        <div className="flex gap-2">
+                          <button onClick={() => setShowResRefund(false)}
+                            className="flex-1 bg-white border border-gray-200 rounded py-1.5 text-sm">Cancel</button>
+                          <button onClick={handleResRefund} disabled={processingResRefund || !resRefundAmount}
+                            className="flex-1 bg-red-600 text-white rounded py-1.5 text-sm font-semibold disabled:opacity-50">
+                            {processingResRefund ? 'Processing...' : `Refund $${resRefundAmount}`}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {selected.status === 'cancelled' && (
+                  <div className="pt-3">
+                    <div className="text-xs text-gray-400 mb-2 text-center">This reservation is cancelled and kept for records.</div>
+                    <button
+                      onClick={() => handleDelete(selected)}
+                      className="w-full bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700"
+                    >
+                      🗑 Permanently Delete
                     </button>
                   </div>
                 )}
@@ -529,7 +790,7 @@ function ReservationsPageInner() {
                       const isCurrent = site.id === selected.site_id
                       return (
                         <option key={site.id} value={site.id}>
-                          {siteTypeLabel(site.site_type)} {site.site_number} — ${(site.base_rate / 100).toFixed(2)}/night
+                          {siteTypeLabel(site.site_type)} {site.site_number} — ${((editForm.site_id === site.id ? editNightlyRate : site.base_rate) / 100).toFixed(2)}/night
                           {isCurrent ? ' (current)' : isBooked ? ' ⚠ booked' : ' ✓ available'}
                         </option>
                       )
@@ -571,6 +832,16 @@ function ReservationsPageInner() {
                     <input type="number" min="0" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                       value={editForm.num_children} onChange={e => setEditForm({ ...editForm, num_children: parseInt(e.target.value) })} />
                   </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                    value={editForm.guest_email} onChange={e => setEditForm({ ...editForm, guest_email: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                  <input type="tel" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                    value={editForm.guest_phone} onChange={e => setEditForm({ ...editForm, guest_phone: e.target.value })} />
                 </div>
 
                 {availableAddons.length > 0 && (
@@ -626,6 +897,48 @@ function ReservationsPageInner() {
                     </div>
                   </div>
                 )}
+
+                {/* Override total */}
+                <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={overrideTotal}
+                      onChange={e => {
+                        setOverrideTotal(e.target.checked)
+                        if (e.target.checked && editNights > 0 && editSite) {
+                          setOverrideTotalValue((editTotal / 100).toFixed(2))
+                        } else {
+                          setOverrideTotalValue('')
+                        }
+                      }}
+                      className="w-4 h-4 accent-green-700"
+                    />
+                    <span className="text-sm font-medium text-gray-700">Override total price</span>
+                  </label>
+                  {overrideTotal && (
+                    <div className="mt-2">
+                      <p className="text-xs text-gray-500 mb-1">Enter the actual total (e.g. what was agreed at booking)</p>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="w-full border border-green-300 rounded-lg pl-7 pr-3 py-2 text-sm font-semibold"
+                          value={overrideTotalValue}
+                          onChange={e => setOverrideTotalValue(e.target.value)}
+                        />
+                      </div>
+                      {overrideTotalValue && (
+                        <div className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                          Balance due will be: <strong>${Math.max(0, parseFloat(overrideTotalValue || '0') - parseFloat(editForm.amount_paid || '0')).toFixed(2)}</strong>
+                          {' · '}An audit note will be added automatically.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 <div className="flex gap-2 pt-2">
                   <button onClick={handleSaveEdit} disabled={saving}

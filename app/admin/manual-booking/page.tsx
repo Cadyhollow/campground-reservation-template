@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import toast, { Toaster } from 'react-hot-toast'
 
@@ -27,17 +28,23 @@ type Fee = {
   type: string
   amount: number
   applies_to: string
+  card_only: boolean
 }
 
-export default function ManualBookingPage() {
+function ManualBookingInner() {
   const [sites, setSites] = useState<Site[]>([])
   const [addons, setAddons] = useState<Addon[]>([])
   const [selectedAddons, setSelectedAddons] = useState<{ [id: string]: number }>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [fees, setFees] = useState<Fee[]>([])
+  const [pricingRules, setPricingRules] = useState<any[]>([])
   const [enabledFees, setEnabledFees] = useState<{ [name: string]: boolean }>({})
-  const [priceOverride, setPriceOverride] = useState('')
+  const [balanceDue, setBalanceDue] = useState('')
+  const [squareCardRef, setSquareCardRef] = useState<any>(null)
+  const [squareCardLoaded, setSquareCardLoaded] = useState(false)
+  const [squareInstance, setSquareInstance] = useState<any>(null)
+  const cardLoadingRef = useRef(false)
   const [form, setForm] = useState({
     site_id: '',
     arrival_date: '',
@@ -52,20 +59,79 @@ export default function ManualBookingPage() {
     camper_amperage: '',
     payment_type: 'full',
     amount_paid: '',
+    payment_method: 'cash',
     notes: '',
   })
 
-  useEffect(() => { fetchSites(); fetchAddons(); fetchFees() }, [])
+  useEffect(() => { fetchSites(); fetchAddons(); fetchFees(); fetchPricingRules() }, [])
+  const searchParams = useSearchParams()
+  useEffect(() => {
+    const siteIdFromUrl = searchParams.get('site_id')
+    if (siteIdFromUrl && sites.length > 0) {
+      setForm(prev => ({ ...prev, site_id: siteIdFromUrl }))
+    }
+  }, [searchParams, sites])
 
-  async function fetchSites() {
-    const { data } = await supabase.from('sites').select('*').eq('is_available', true).order('display_order')
-    setSites(data || [])
+  useEffect(() => {
+    if (form.payment_method === 'card') {
+      const timer = setTimeout(loadSquareCard, 500)
+      return () => clearTimeout(timer)
+    }
+  }, [form.payment_method])
+
+  async function fetchPricingRules() {
+    const { data } = await supabase.from('pricing_rules').select('*').eq('is_active', true)
+    setPricingRules(data || [])
+  }
+
+  async function fetchSites(arrivalDate?: string, departureDate?: string) {
+    const { data: allSites } = await supabase.from('sites').select('*').eq('is_available', true).order('display_order')
+    if (!arrivalDate || !departureDate || !allSites) {
+      setSites(allSites || [])
+      setLoading(false)
+      return
+    }
+    // Filter out sites with conflicting reservations
+    const { data: conflicts } = await supabase
+      .from('reservations')
+      .select('site_id')
+      .neq('status', 'cancelled')
+      .lt('arrival_date', departureDate)
+      .gt('departure_date', arrivalDate)
+    const conflictIds = new Set((conflicts || []).map((r: any) => r.site_id))
+    setSites(allSites.filter(s => !conflictIds.has(s.id)))
     setLoading(false)
   }
 
   async function fetchAddons() {
     const { data } = await supabase.from('addons').select('*').eq('is_active', true).order('display_order')
     setAddons(data || [])
+  }
+
+  async function loadSquareCard() {
+    if (cardLoadingRef.current) return
+    const container = document.getElementById('manual-booking-card')
+    if (!container) return
+    cardLoadingRef.current = true
+    container.innerHTML = ''
+    try {
+      let sq = squareInstance
+      if (!sq) {
+        if (!(window as any).Square) {
+          const script = document.createElement('script')
+          script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
+            ? 'https://web.squarecdn.com/v1/square.js'
+            : 'https://sandbox.web.squarecdn.com/v1/square.js'
+          await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
+        }
+        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, 'L42H3PRBWB5CJ')
+        setSquareInstance(sq)
+      }
+      const card = await sq.card()
+      await card.attach('#manual-booking-card')
+      setSquareCardRef(card)
+      setSquareCardLoaded(true)
+    } catch (e) { console.error('Square card load error:', e); cardLoadingRef.current = false }
   }
 
   async function fetchFees() {
@@ -80,7 +146,7 @@ export default function ManualBookingPage() {
 
   function toggleFee(name: string) {
     setEnabledFees(prev => ({ ...prev, [name]: !prev[name] }))
-    setPriceOverride('')
+    setBalanceDue('')
   }
 
   const selectedSite = sites.find(s => s.id === form.site_id)
@@ -90,7 +156,17 @@ export default function ManualBookingPage() {
     ? Math.round((new Date(form.departure_date).getTime() - new Date(form.arrival_date).getTime()) / (1000 * 60 * 60 * 24))
     : 0
 
-  const baseTotal = selectedSite ? selectedSite.base_rate * nights : 0
+  const applicablePricingRules = selectedSite && form.arrival_date && form.departure_date ? pricingRules.filter(rule => {
+    const withinDates = rule.start_date <= form.departure_date && rule.end_date >= form.arrival_date
+    if (!withinDates) return false
+    if (rule.site_ids) return rule.site_ids.split(',').includes(selectedSite.id)
+    if (rule.site_id) return rule.site_id === selectedSite.id
+    if (rule.site_type) return rule.site_type === selectedSite.site_type
+    return false
+  }) : []
+  const bestPricingRule = applicablePricingRules.sort((a: any, b: any) => b.priority - a.priority)[0]
+  const nightlyRate = selectedSite ? (bestPricingRule ? bestPricingRule.nightly_rate : selectedSite.base_rate) : 0
+  const baseTotal = selectedSite ? nightlyRate * nights : 0
   const extraAdults = Math.max(0, form.num_adults - 2)
   const extraChildren = Math.max(0, form.num_children - 2)
   const extraGuestFee = (extraAdults * 1000 + extraChildren * 500) * nights
@@ -106,13 +182,22 @@ export default function ManualBookingPage() {
   const feesTotal = enabledApplicableFees.reduce((sum, f) =>
     sum + (f.type === 'percentage' ? (baseTotal / 100) * f.amount / 100 : f.amount) * 100, 0)
 
+
+
   const addonTotal = Object.entries(selectedAddons).reduce((sum, [id, qty]) => {
     const addon = addons.find(a => a.id === id)
     return sum + (addon ? addon.price * qty : 0)
   }, 0)
 
   const calculatedTotal = baseTotal + extraGuestFee + feesTotal + addonTotal
-  const total = priceOverride !== '' ? Math.round(parseFloat(priceOverride) * 100) : calculatedTotal
+  const total = calculatedTotal
+
+  // Card-only fees (excluded from cash total)
+  const cardOnlyFees = enabledApplicableFees.filter(f => f.card_only)
+  const cardOnlyFeesTotal = cardOnlyFees.reduce((sum, f) =>
+    sum + (f.type === 'percentage' ? (baseTotal / 100) * f.amount / 100 : f.amount) * 100, 0)
+  const cashTotal = total - cardOnlyFeesTotal
+  const hasCashCardSplit = cardOnlyFeesTotal > 0
 
   const firstNightBase = selectedSite ? selectedSite.base_rate : 0
   const proportionalFees = nights > 0 ? Math.round(feesTotal / nights) : 0
@@ -134,6 +219,23 @@ export default function ManualBookingPage() {
 
     setSaving(true)
     const amountPaid = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0
+
+    // If card payment, tokenize first before creating reservation
+    let cardToken: string | null = null
+    if (form.payment_method === 'card' && amountPaid > 0) {
+      if (!squareCardRef) {
+        toast.error('Card form not ready. Please wait a moment.')
+        setSaving(false)
+        return
+      }
+      const result = await squareCardRef.tokenize()
+      if (result.status !== 'OK') {
+        toast.error('Card details invalid. Please check and try again.')
+        setSaving(false)
+        return
+      }
+      cardToken = result.token
+    }
 
     const addonItems = Object.entries(selectedAddons)
       .filter(([_, qty]) => qty > 0)
@@ -160,9 +262,11 @@ export default function ManualBookingPage() {
         base_nightly_rate: selectedSite?.base_rate || 0,
         extra_guest_fee_total: extraGuestFee,
         addons_total: addonTotal,
-        total_price: total,
+        total_price: balanceDue ? amountPaid + Math.round(parseFloat(balanceDue) * 100) : calculatedTotal,
+        fees_total: 0,
         amount_paid: amountPaid,
-        payment_type: form.payment_type,
+        payment_type: amountPaid > 0 ? 'deposit' : 'unpaid',
+        payment_method: form.payment_method,
         notes: form.notes,
         addonItems,
       }),
@@ -211,8 +315,46 @@ export default function ManualBookingPage() {
       console.error('Email failed:', e)
     }
 
-    toast.success(`Reservation created! Confirmation #${data.confirmationNumber}`)
+    // Charge card if applicable — create folio first then charge
+    if (cardToken && data.reservationId && amountPaid > 0) {
+      // Create folio for this reservation
+      const { data: newFolio } = await supabase.from('folios').insert({
+        reservation_id: data.reservationId,
+        guest_name: form.guest_name,
+        guest_email: form.guest_email || '',
+        folio_type: 'reservation',
+        status: 'open',
+      }).select().single()
+
+      if (newFolio) {
+        const cardRes = await fetch('/api/admin-card-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sourceId: cardToken,
+            folioId: newFolio.id,
+            amount: amountPaid,
+            surchargeAmount: 0,
+            guestName: form.guest_name,
+          }),
+        })
+        const cardData = await cardRes.json()
+        if (!cardData.success) {
+          toast.error('Reservation created but card charge failed: ' + (cardData.error || 'Unknown error'))
+          setSaving(false)
+          return
+        }
+      }
+    }
+
+    if (cardToken && amountPaid > 0) {
+      toast.success(`✓ Card approved! Reservation #${data.confirmationNumber} created.`)
+    } else {
+      toast.success(`Reservation created! Confirmation #${data.confirmationNumber}`)
+    }
     setSaving(false)
+    setSquareCardLoaded(false)
+    setSquareCardRef(null)
     setForm({
       site_id: '',
       arrival_date: '',
@@ -227,10 +369,11 @@ export default function ManualBookingPage() {
       camper_amperage: '',
       payment_type: 'full',
       amount_paid: '',
+      payment_method: 'cash',
       notes: '',
     })
     setSelectedAddons({})
-    setPriceOverride('')
+    setBalanceDue('')
   }
 
   return (
@@ -248,26 +391,23 @@ export default function ManualBookingPage() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Site & Dates</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Site *</label>
-                <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.site_id} onChange={e => setForm({ ...form, site_id: e.target.value })}>
-                  <option value="">Select a site...</option>
-                  {sites.map(site => (
-                    <option key={site.id} value={site.id}>
-                      {siteTypeLabel(site.site_type)} {site.site_number} — ${(site.base_rate / 100).toFixed(2)}/night
-                      {site.site_type === 'rv_site' ? ` · ${ampLabel(site.amp_service)} · ${hookupLabel(site.hookups)}` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Arrival Date *</label>
-                <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.arrival_date} onChange={e => setForm({ ...form, arrival_date: e.target.value })} />
+                <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.arrival_date} onChange={e => {
+                  const newArrival = e.target.value
+                  setForm(prev => ({ ...prev, arrival_date: newArrival, site_id: '' }))
+                  if (newArrival && form.departure_date) fetchSites(newArrival, form.departure_date)
+                }} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Departure Date *</label>
                 <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.departure_date}
-                  onChange={e => { if (form.arrival_date && e.target.value && e.target.value <= form.arrival_date) { toast.error('Departure must be after arrival date.'); return } setForm({ ...form, departure_date: e.target.value }) }} />
+                  onChange={e => {
+                    if (form.arrival_date && e.target.value && e.target.value <= form.arrival_date) { toast.error('Departure must be after arrival date.'); return }
+                    const newDep = e.target.value
+                    setForm(prev => ({ ...prev, departure_date: newDep, site_id: '' }))
+                    if (form.arrival_date && newDep) fetchSites(form.arrival_date, newDep)
+                  }} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Adults</label>
@@ -276,6 +416,37 @@ export default function ManualBookingPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Children</label>
                 <input type="number" min="0" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.num_children} onChange={e => setForm({ ...form, num_children: parseInt(e.target.value) })} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Site *</label>
+                {!form.arrival_date || !form.departure_date ? (
+                  <div className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-400 bg-gray-50">Enter dates above to see available sites</div>
+                ) : sites.length === 0 ? (
+                  <div className="w-full border border-red-200 rounded-lg px-3 py-2 text-sm text-red-500 bg-red-50">No sites available for these dates</div>
+                ) : (
+                  <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.site_id} onChange={e => setForm({ ...form, site_id: e.target.value })}>
+                    <option value="">Select a site...</option>
+                    {sites.map(site => {
+                      const applicable = pricingRules.filter(rule => {
+                        const withinDates = rule.start_date <= form.departure_date && rule.end_date >= form.arrival_date
+                        if (!withinDates) return false
+                        if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
+                        if (rule.site_id) return rule.site_id === site.id
+                        if (rule.site_type) return rule.site_type === site.site_type
+                        return false
+                      })
+                      const bestRule = applicable.sort((a: any, b: any) => b.priority - a.priority)[0]
+                      const rate = bestRule ? bestRule.nightly_rate : site.base_rate
+                      return (
+                        <option key={site.id} value={site.id}>
+                          {siteTypeLabel(site.site_type)} {site.site_number} — ${(rate / 100).toFixed(2)}/night
+                          {bestRule ? ' ★' : ''}
+                          {site.site_type === 'rv_site' ? ` · ${ampLabel(site.amp_service)} · ${hookupLabel(site.hookups)}` : ''}
+                        </option>
+                      )
+                    })}
+                  </select>
+                )}
               </div>
             </div>
           </div>
@@ -412,58 +583,61 @@ export default function ManualBookingPage() {
           {/* Payment */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Payment</h3>
+            <p className="text-xs text-gray-500 mb-4">Enter what was collected today and what the guest will owe at arrival. Balance due is the cash price — card adds 3% at check-in.</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Type</label>
-                <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.payment_type} onChange={e => setForm({ ...form, payment_type: e.target.value })}>
-                  <option value="full">Paid in Full</option>
-                  <option value="deposit">Deposit Only</option>
-                  <option value="unpaid">Pay on Arrival</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid ($)</label>
-                <input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="0.00" value={form.amount_paid} onChange={e => setForm({ ...form, amount_paid: e.target.value })} />
-                {form.payment_type === 'deposit' && depositAmount > 0 && (
-                  <p className="text-xs text-green-700 mt-1">
-                    Suggested deposit: ${(depositAmount / 100).toFixed(2)} (1 night + fees)
-                  </p>
-                )}
-                {form.payment_type === 'full' && total > 0 && (
-                  <p className="text-xs text-green-700 mt-1">
-                    Full amount: ${(total / 100).toFixed(2)}
-                  </p>
-                )}
-              </div>
-
-              {/* Price Override */}
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Override Total Price ($)
-                  <span className="ml-2 text-xs text-gray-400 font-normal">Optional — use for special deals or discounts</span>
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Payment Method</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['cash', 'card', 'check'] as const).map(m => (
+                    <button key={m} type="button" onClick={() => setForm({ ...form, payment_method: m })}
+                      className="py-2 rounded-lg text-sm font-semibold border-2 capitalize transition-colors"
+                      style={{ borderColor: form.payment_method === m ? '#15803d' : '#e5e7eb', background: form.payment_method === m ? '#f0fdf4' : '#fff', color: form.payment_method === m ? '#15803d' : '#374151' }}>
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid Today ($)</label>
+                <input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="0.00" value={form.amount_paid} onChange={e => setForm({ ...form, amount_paid: e.target.value })} />
+                <p className="text-xs text-gray-400 mt-1">Card total: ${(total / 100).toFixed(2)} · Cash total: ${(cashTotal / 100).toFixed(2)}</p>
+              </div>
+              {form.payment_method === 'card' && (
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Card Details</label>
+                  <div id="manual-booking-card" className="border border-gray-200 rounded-lg p-2 min-h-[89px]"
+                    ref={el => { if (el && !squareCardLoaded) setTimeout(loadSquareCard, 100) }}
+                  />
+                  {!squareCardLoaded && <p className="text-xs text-gray-400 mt-1">Loading card form...</p>}
+                </div>
+              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Balance Due at Arrival ($)</label>
                 <input
                   type="number"
+                  min="0"
+                  step="0.01"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                  placeholder={`Calculated: $${(calculatedTotal / 100).toFixed(2)}`}
-                  value={priceOverride}
-                  onChange={e => setPriceOverride(e.target.value)}
+                  placeholder={(cashTotal / 100).toFixed(2)}
+                  value={balanceDue}
+                  onChange={e => setBalanceDue(e.target.value)}
                 />
-                {priceOverride !== '' && (
-                  <button onClick={() => setPriceOverride('')} className="text-xs text-red-500 hover:text-red-700 mt-1">
-                    ✕ Clear override — revert to calculated total
-                  </button>
-                )}
+                <p className="text-xs text-gray-400 mt-1">Suggested: ${(cashTotal / 100).toFixed(2)} cash. Card adds 3% at check-in.</p>
               </div>
-
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Internal Notes</label>
                 <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" rows={3} placeholder="Any notes about this booking..." value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} />
               </div>
             </div>
           </div>
-
-          <button onClick={handleSave} disabled={saving} className="w-full py-3 rounded-xl text-white font-semibold bg-green-700 hover:bg-green-800 disabled:opacity-50 transition-colors">
+          {form.payment_method === 'card' && !squareCardLoaded && (
+            <p className="text-center text-sm text-amber-600 font-medium mb-2">⏳ Waiting for card form to load — please wait before submitting.</p>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving || (form.payment_method === 'card' && parseFloat(form.amount_paid || '0') > 0 && !squareCardLoaded)}
+            className="w-full py-3 rounded-xl text-white font-semibold bg-green-700 hover:bg-green-800 disabled:opacity-50 transition-colors"
+          >
             {saving ? 'Saving...' : 'Create Reservation & Send Confirmation Email'}
           </button>
         </div>
@@ -535,22 +709,12 @@ export default function ManualBookingPage() {
                       </div>
                     )
                   })}
-                  {priceOverride !== '' && (
-                    <div className="flex justify-between text-amber-600 text-xs pt-1">
-                      <span>⚡ Price overridden</span>
-                      <span>was ${(calculatedTotal / 100).toFixed(2)}</span>
-                    </div>
-                  )}
+
                   <div className="flex justify-between font-bold text-gray-900 border-t border-gray-100 pt-2 mt-2">
                     <span>Total</span>
                     <span>${(total / 100).toFixed(2)}</span>
                   </div>
-                  {form.payment_type === 'deposit' && depositAmount > 0 && (
-                    <div className="flex justify-between text-green-700 text-xs pt-1">
-                      <span>Deposit due today</span>
-                      <span>${(depositAmount / 100).toFixed(2)}</span>
-                    </div>
-                  )}
+
                 </div>
               </div>
             )}
@@ -558,5 +722,13 @@ export default function ManualBookingPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function ManualBookingPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-gray-500">Loading...</div>}>
+      <ManualBookingInner />
+    </Suspense>
   )
 }
