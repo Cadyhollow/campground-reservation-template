@@ -413,7 +413,7 @@ export default function HomePage() {
                     Click a site on the map to select it — <span className="text-gray-400">grey = not available for selected dates</span>
                   </h3>
                   <CampgroundMap
-                    onSelectSite={(site) => {
+                    onSiteSelect={(site) => {
   const s = site as any
   setSelectedSite(s)
   const catIds = siteCategories[s.id]
