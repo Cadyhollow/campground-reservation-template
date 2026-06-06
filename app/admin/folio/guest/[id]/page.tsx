@@ -82,6 +82,9 @@ export default function GuestAccountPage() {
   const [cashTendered, setCashTendered] = useState('')
   const [maxCreditAmount, setMaxCreditAmount] = useState(0)
   const [waiveFee, setWaiveFee] = useState(false)
+  const [terminalDeviceId, setTerminalDeviceId] = useState('')
+  const [cardEntryMode, setCardEntryMode] = useState('terminal')
+  const [terminalStatus, setTerminalStatus] = useState('idle')
   const [paymentNote, setPaymentNote] = useState('')
   const [savingPayment, setSavingPayment] = useState(false)
   const [showCustomItem, setShowCustomItem] = useState(false)
@@ -96,12 +99,13 @@ export default function GuestAccountPage() {
     const [{ data: guestData }, { data: prods }, { data: settings }, { data: cats }] = await Promise.all([
       supabase.from('guests').select('*').eq('id', guestId).single(),
       supabase.from('products').select('*').eq('active', true).order('display_order'),
-      (supabase.from('settings').select('card_surcharge_percent, max_credit_amount').single()) as any,
+      (supabase.from('settings').select('card_surcharge_percent, max_credit_amount, square_terminal_device_id').single()) as any,
       supabase.from('product_categories').select('name').order('display_order'),
     ])
     if (guestData) setGuest(guestData)
     setProducts(prods || [])
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
+    if (settings?.square_terminal_device_id) setTerminalDeviceId(settings.square_terminal_device_id)
     if (settings?.max_credit_amount !== undefined) setMaxCreditAmount(settings.max_credit_amount || 0)
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
 
@@ -198,6 +202,47 @@ export default function GuestAccountPage() {
     if (!confirm('Void this payment?')) return
     await supabase.from('folio_payments').update({ status: 'voided' }).eq('id', id)
     await loadFolioData(folio!.id)
+  }
+
+  async function sendToTerminal() {
+    if (!folio) return
+    const surchargeAmount = cardSurcharge > 0 && !waiveFee
+      ? Math.round(paymentAmountCents * (cardSurcharge / 100))
+      : 0
+    const totalCharge = paymentAmountCents + surchargeAmount
+    setTerminalStatus('waiting')
+    try {
+      const res = await fetch('/api/terminal/charge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: totalCharge,
+          folioId: folio.id,
+          note: paymentNote || 'Guest account payment',
+          surchargeAmount,
+        }),
+      })
+      const data = await res.json()
+      if (!data.checkoutId) { setTerminalStatus('error'); return }
+      const poll = setInterval(async () => {
+        const pr = await fetch('/api/terminal/charge?checkoutId=' + data.checkoutId)
+        const pd = await pr.json()
+        if (pd.status === 'COMPLETED') {
+          clearInterval(poll)
+          setShowPayment(false)
+          setPaymentAmount('')
+          setPaymentNote('')
+          setTerminalStatus('idle')
+          setCardEntryMode('terminal')
+          await loadFolioData(folio.id)
+        } else if (pd.status === 'CANCELED' || pd.status === 'CANCEL_REQUESTED') {
+          clearInterval(poll)
+          setTerminalStatus('error')
+        }
+      }, 2000)
+    } catch {
+      setTerminalStatus('error')
+    }
   }
 
   async function collectPayment() {
@@ -402,6 +447,16 @@ export default function GuestAccountPage() {
                 </button>
               ))}
             </div>
+            {paymentMethod === 'card' && terminalDeviceId && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
+                <button onClick={() => setCardEntryMode('terminal')} style={{ padding: '11px', border: '2px solid ' + (cardEntryMode === 'terminal' ? '#2E6B8A' : '#e5e7eb'), borderRadius: 8, background: cardEntryMode === 'terminal' ? '#e8f2f7' : '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', color: cardEntryMode === 'terminal' ? '#2E6B8A' : '#374151' }}>
+                  Use Terminal
+                </button>
+                <button onClick={() => setCardEntryMode('manual')} style={{ padding: '11px', border: '2px solid ' + (cardEntryMode === 'manual' ? '#2E6B8A' : '#e5e7eb'), borderRadius: 8, background: cardEntryMode === 'manual' ? '#e8f2f7' : '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', color: cardEntryMode === 'manual' ? '#2E6B8A' : '#374151' }}>
+                  Enter Manually
+                </button>
+              </div>
+            )}
             {paymentMethod === 'card' && cardSurcharge > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, padding: '10px 14px', background: waiveFee ? '#f0fdf4' : '#fffbeb', border: '1px solid', borderColor: waiveFee ? '#bbf7d0' : '#fde68a', borderRadius: 8 }}>
                 <div>
@@ -484,9 +539,42 @@ export default function GuestAccountPage() {
             )}
             <label style={ml}>Note (optional)</label>
             <input style={{ ...si, marginBottom: 16 }} placeholder='e.g. May electric bill' value={paymentNote} onChange={e => setPaymentNote(e.target.value)} />
-            <button onClick={collectPayment} disabled={savingPayment} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
-              {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
-            </button>
+            {paymentMethod === 'card' && cardEntryMode === 'terminal' && terminalDeviceId ? (
+              <div>
+                {terminalStatus === 'waiting' ? (
+                  <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 12, padding: '1.5rem', textAlign: 'center' }}>
+                    <div style={{ fontSize: 32, marginBottom: 8 }}>🖥</div>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: '#0369a1', marginBottom: 4 }}>Waiting for Terminal...</div>
+                    <div style={{ fontSize: 13, color: '#0284c7' }}>Have guest tap, swipe, or insert card</div>
+                  </div>
+                ) : terminalStatus === 'error' ? (
+                  <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: '1rem', textAlign: 'center' }}>
+                    <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 6 }}>Payment canceled or failed</div>
+                    <button onClick={() => setTerminalStatus('idle')} style={{ background: '#fff', border: '1px solid #d1d5db', borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }}>Try again</button>
+                  </div>
+                ) : (
+                  <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 12, padding: '1.25rem', textAlign: 'center' }}>
+                    <div style={{ fontSize: 28, marginBottom: 6 }}>💳</div>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: '#0369a1', marginBottom: 2 }}>Send to Square Terminal</div>
+                    <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
+                      Amount: <strong>${(paymentAmountCents/100).toFixed(2)}</strong>
+                      {surchargePreview > 0 && !waiveFee && <> + {cardSurcharge}% fee = <strong>${(totalWithSurcharge/100).toFixed(2)}</strong></>}
+                    </div>
+                    <button
+                      onClick={sendToTerminal}
+                      disabled={!paymentAmountCents}
+                      style={{ width: '100%', background: paymentAmountCents ? '#2E6B8A' : '#d1d5db', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: paymentAmountCents ? 'pointer' : 'default' }}
+                    >
+                      Send to Terminal →
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button onClick={collectPayment} disabled={savingPayment} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}>
+                {savingPayment ? 'Recording...' : paymentMethod === 'card' && surchargePreview > 0 ? 'Charge card · $' + (totalWithSurcharge/100).toFixed(2) : paymentMethod === 'cash' && cashTendered !== '' ? 'Record cash · $' + Math.min(parseFloat(cashTendered), parseFloat(paymentAmount)).toFixed(2) : 'Record ' + paymentMethod + ' · $' + paymentAmount}
+              </button>
+            )}
           </div>
         </div>
       )}
