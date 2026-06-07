@@ -357,7 +357,7 @@ export default function ReportsPage() {
   const otherGuestRevenue = otherGuestLineItems.reduce((s,li)=>s+(li.line_total||0),0)/100
   const seasonalPaymentsRevenue = guestAccountPayments.reduce((s,p)=>s+(p.amount||0)-(p.surcharge_amount||0),0)/100
   // Total = res + pos + seasonal (no double counting)
-  const totalCombined = resRevenue + (posEnabled?posRevenue:0) + seasonalPaymentsRevenue
+  const totalCombined = resRevenue + (posEnabled?posRevenue:0) + electricRevenue + otherGuestRevenue
   // All payments for method breakdown
   const allPayments = [...transactions]
   const totalCash = allPayments.filter(t=>t.method==='cash').reduce((s,t)=>s+t.amount,0)/100
@@ -602,7 +602,7 @@ export default function ReportsPage() {
             {/* Hero KPIs */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Today's Revenue" value={'$'+todayRevenue.toFixed(2)} sub="all payments today" color="text-emerald-600"/>
-              <KPICard label="Total Revenue" value={'$'+totalCombined.toFixed(2)} sub={reportBy==='payment_date'?'payments received':'based on stay dates'}/>
+              <KPICard label="Total Revenue" value={'$'+totalCombined.toFixed(2)} sub={reportBy==='payment_date'?'payments received':'reservations + charges'}/>
               <KPICard label="Tonight's Occupancy" value={Math.min(100,Math.round(((tonightCount+seasonalCount)/totalSites)*100))+'%'} sub={(tonightCount+seasonalCount)+' of '+totalSites+' sites · '+tonightCabins+'/'+totalCabins+' cabins'} color={Math.round(((tonightCount+seasonalCount)/totalSites)*100)>80?'text-emerald-600':Math.round(((tonightCount+seasonalCount)/totalSites)*100)>50?'text-amber-600':'text-gray-900'} onClick={()=>setShowOccupancyDetail(true)}/>
               <KPICard label="Future Bookings" value={futureCount.toString()} sub="confirmed ahead" onClick={()=>setActiveTab('reservations')}/>
             </div>
