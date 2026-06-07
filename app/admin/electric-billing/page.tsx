@@ -701,16 +701,27 @@ export default function ElectricBillingPage() {
                                 <option value='venmo'>Venmo</option>
                                 <option value='other'>Other</option>
                               </select>
+                              {row.paymentMethod === 'card' && (
+                                <div style={{ fontSize: 11, color: '#15803d', marginTop: 4, fontStyle: 'italic' }}>
+                                  → Will open guest folio to charge terminal
+                                </div>
+                              )}
                             </div>
                             <div style={{ flex: 1, minWidth: 120 }}>
                               <label style={{ ...lbl, marginTop: 0 }}>Note (optional)</label>
                               <input style={si} placeholder='e.g. Check #1042' value={row.paymentNote} onChange={e => updatePaymentField(i, 'paymentNote', e.target.value)} />
                             </div>
-                            <button onClick={() => recordPayment(i)} disabled={row.savingPayment || !row.paymentAmount}
+                            <button onClick={() => {
+                              if (row.paymentMethod === 'card') {
+                                window.location.href = `/admin/folio/guest/${row.guest.id}`;
+                              } else {
+                                recordPayment(i);
+                              }
+                            }} disabled={row.savingPayment || !row.paymentAmount}
                               style={{ background: '#15803d', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer', height: 34 }}>
                               {row.savingPayment ? 'Saving...' : 'Save Payment'}
                             </button>
-                            <button onClick={() => updatePaymentField(i, 'showPayment', 'false')}
+                            <button onClick={() => updatePaymentField(i, 'showPayment', false)}
                               style={{ background: 'none', border: '1px solid #d1d5db', borderRadius: 7, padding: '7px 14px', fontSize: 13, cursor: 'pointer', height: 34 }}>
                               Cancel
                             </button>
