@@ -721,7 +721,7 @@ export default function ElectricBillingPage() {
                               style={{ background: '#15803d', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer', height: 34 }}>
                               {row.savingPayment ? 'Saving...' : 'Save Payment'}
                             </button>
-                            <button onClick={() => updatePaymentField(i, 'showPayment', false)}
+                            <button onClick={() => updatePaymentField(i, 'showPayment', false as unknown as string)}
                               style={{ background: 'none', border: '1px solid #d1d5db', borderRadius: 7, padding: '7px 14px', fontSize: 13, cursor: 'pointer', height: 34 }}>
                               Cancel
                             </button>
