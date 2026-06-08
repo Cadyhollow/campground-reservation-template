@@ -20,6 +20,7 @@ type Fee = {
   amount: number
   applies_to: string
   is_active: boolean
+  card_only: boolean
 }
 
 const CAMPER_TYPES = [
@@ -359,6 +360,7 @@ function BookingForm() {
   })).filter(fee => fee.calculatedAmount > 0)
 
   const feesTotal = feeBreakdown.reduce((sum, fee) => sum + fee.calculatedAmount, 0)
+  const cardOnlyFeesTotal = feeBreakdown.filter(fee => fee.card_only).reduce((sum, fee) => sum + fee.calculatedAmount, 0)
 
   const subtotal = site.total_price + extraGuestFee + addonTotal
   const discountAmount = discountResult
@@ -425,6 +427,7 @@ const deposit = site.nightly_rate + proportionalFees
           discountCode: discountResult?.code || null,
           discountAmount, extraGuestFee, addonTotal,
           feesTotal,
+          cardOnlyFeesTotal,
           nights: site.nights,
           waiverSigned: waiverSigned,
           signatureData,
