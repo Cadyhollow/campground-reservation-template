@@ -43,24 +43,7 @@ CREATE TABLE IF NOT EXISTS settings (
   use_custom_sender boolean DEFAULT false,
   waiver_enabled boolean DEFAULT true,
   waiver_text text DEFAULT '',
-  plan text DEFAULT 'ridgeline',
-  pos_enabled boolean DEFAULT false,
-  card_surcharge_percent numeric DEFAULT 0,
-  electric_bill_message text DEFAULT '',
-  square_terminal_device_id text DEFAULT '',
-  square_terminal_name text DEFAULT '',
-  seasonal_enabled boolean DEFAULT false,
-  total_sites integer DEFAULT 0,
-  total_cabins integer DEFAULT 0,
-  max_credit_amount integer DEFAULT 0,
-  early_checkin_enabled boolean DEFAULT false,
-  early_checkin_price integer DEFAULT 0,
-  early_checkin_time text DEFAULT '',
-  early_checkin_show_customers boolean DEFAULT false,
-  late_checkout_enabled boolean DEFAULT false,
-  late_checkout_price integer DEFAULT 0,
-  late_checkout_time text DEFAULT '',
-  late_checkout_show_customers boolean DEFAULT false
+  plan text DEFAULT 'ridgeline'
 );
 
 -- Insert default settings row
@@ -104,11 +87,9 @@ CREATE TABLE IF NOT EXISTS reservations (
   extra_guest_fee_total integer DEFAULT 0,
   addons_total integer DEFAULT 0,
   discount_amount integer DEFAULT 0,
-  fees_total integer DEFAULT 0,
   total_price integer NOT NULL DEFAULT 0,
   amount_paid integer DEFAULT 0,
   payment_type text DEFAULT 'full' CHECK (payment_type IN ('full', 'deposit', 'unpaid')),
-  payment_method text DEFAULT '',
   square_payment_id text,
   waiver_signed boolean DEFAULT false,
   waiver_signed_at timestamptz,
@@ -150,7 +131,6 @@ CREATE TABLE IF NOT EXISTS pricing_rules (
   name text NOT NULL,
   site_id uuid REFERENCES sites(id),
   site_type text,
-  site_ids text,
   start_date date NOT NULL,
   end_date date NOT NULL,
   nightly_rate integer NOT NULL,
@@ -166,7 +146,6 @@ CREATE TABLE IF NOT EXISTS min_stay_rules (
   name text NOT NULL,
   site_id uuid REFERENCES sites(id),
   site_type text,
-  site_ids text,
   start_date date NOT NULL,
   end_date date NOT NULL,
   min_nights integer NOT NULL DEFAULT 1,
@@ -218,8 +197,7 @@ CREATE TABLE IF NOT EXISTS fees (
   type text NOT NULL CHECK (type IN ('percentage', 'flat')),
   amount numeric NOT NULL,
   applies_to text DEFAULT 'all',
-  is_active boolean DEFAULT true,
-  card_only boolean DEFAULT false
+  is_active boolean DEFAULT true
 );
 
 
@@ -252,110 +230,6 @@ CREATE TABLE IF NOT EXISTS square_connections (
 );
 
 
--- Product Categories
-CREATE TABLE IF NOT EXISTS product_categories (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  name text NOT NULL,
-  created_at timestamptz DEFAULT now()
-);
-
-
--- Products
-CREATE TABLE IF NOT EXISTS products (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  name text NOT NULL,
-  price integer NOT NULL DEFAULT 0,
-  category_id uuid REFERENCES product_categories(id) ON DELETE SET NULL,
-  in_stock boolean DEFAULT true,
-  created_at timestamptz DEFAULT now()
-);
-
-
--- Guests (seasonal camper directory)
-CREATE TABLE IF NOT EXISTS guests (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  first_name text,
-  last_name text,
-  email text,
-  phone text,
-  site_id uuid REFERENCES sites(id) ON DELETE SET NULL,
-  email_opt_out boolean DEFAULT false,
-  created_at timestamptz DEFAULT now()
-);
-
-
--- Folios (running charge accounts)
-CREATE TABLE IF NOT EXISTS folios (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  type text NOT NULL,
-  reservation_id uuid REFERENCES reservations(id) ON DELETE SET NULL,
-  guest_id uuid REFERENCES guests(id) ON DELETE SET NULL,
-  guest_name text,
-  created_at timestamptz DEFAULT now()
-);
-
-
--- Folio Line Items
-CREATE TABLE IF NOT EXISTS folio_line_items (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  folio_id uuid REFERENCES folios(id) ON DELETE CASCADE,
-  description text,
-  amount integer NOT NULL DEFAULT 0,
-  quantity integer DEFAULT 1,
-  notes text,
-  voided boolean DEFAULT false,
-  created_at timestamptz DEFAULT now()
-);
-
-
--- Folio Payments
-CREATE TABLE IF NOT EXISTS folio_payments (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  folio_id uuid REFERENCES folios(id) ON DELETE CASCADE,
-  amount integer NOT NULL DEFAULT 0,
-  method text,
-  note text,
-  receipt_sent_at timestamptz,
-  created_at timestamptz DEFAULT now()
-);
-
-
--- Square Terminal Checkouts
-CREATE TABLE IF NOT EXISTS terminal_checkouts (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  folio_id uuid REFERENCES folios(id) ON DELETE SET NULL,
-  device_id text,
-  amount integer NOT NULL DEFAULT 0,
-  surcharge_amount integer DEFAULT 0,
-  status text,
-  square_checkout_id text,
-  created_at timestamptz DEFAULT now()
-);
-
-
--- Electric Readings
-CREATE TABLE IF NOT EXISTS electric_readings (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  guest_id uuid REFERENCES guests(id) ON DELETE CASCADE,
-  reading_date date NOT NULL,
-  kwh integer NOT NULL DEFAULT 0,
-  amount integer NOT NULL DEFAULT 0,
-  note text,
-  email_sent_at timestamptz,
-  created_at timestamptz DEFAULT now()
-);
-
-
--- Broadcast Emails Log
-CREATE TABLE IF NOT EXISTS broadcast_emails (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  sent_at timestamptz DEFAULT now(),
-  subject text,
-  recipient_count integer,
-  sent_by text
-);
-
-
 -- ============================================================
 -- ROW LEVEL SECURITY
 -- ============================================================
@@ -374,19 +248,10 @@ ALTER TABLE fees ENABLE ROW LEVEL SECURITY;
 ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE site_categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE square_connections ENABLE ROW LEVEL SECURITY;
-ALTER TABLE product_categories ENABLE ROW LEVEL SECURITY;
-ALTER TABLE products ENABLE ROW LEVEL SECURITY;
-ALTER TABLE guests ENABLE ROW LEVEL SECURITY;
-ALTER TABLE folios ENABLE ROW LEVEL SECURITY;
-ALTER TABLE folio_line_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE folio_payments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE terminal_checkouts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE electric_readings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE broadcast_emails ENABLE ROW LEVEL SECURITY;
 
 
 -- ============================================================
--- RLS POLICIES
+-- RLS POLICIES (allow all for simplicity — service role used for admin)
 -- ============================================================
 
 DO $$ BEGIN
@@ -445,42 +310,6 @@ DO $$ BEGIN
   -- square_connections
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'square_connections' AND policyname = 'Allow all on square_connections') THEN
     CREATE POLICY "Allow all on square_connections" ON square_connections FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  -- product_categories
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'product_categories' AND policyname = 'Allow all on product_categories') THEN
-    CREATE POLICY "Allow all on product_categories" ON product_categories FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  -- products
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'products' AND policyname = 'Allow all on products') THEN
-    CREATE POLICY "Allow all on products" ON products FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  -- guests
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'guests' AND policyname = 'Allow all on guests') THEN
-    CREATE POLICY "Allow all on guests" ON guests FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  -- folios
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'folios' AND policyname = 'Allow all on folios') THEN
-    CREATE POLICY "Allow all on folios" ON folios FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  -- folio_line_items
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'folio_line_items' AND policyname = 'Allow all on folio_line_items') THEN
-    CREATE POLICY "Allow all on folio_line_items" ON folio_line_items FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  -- folio_payments
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'folio_payments' AND policyname = 'Allow all on folio_payments') THEN
-    CREATE POLICY "Allow all on folio_payments" ON folio_payments FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  -- terminal_checkouts
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'terminal_checkouts' AND policyname = 'Allow all on terminal_checkouts') THEN
-    CREATE POLICY "Allow all on terminal_checkouts" ON terminal_checkouts FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  -- electric_readings
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'electric_readings' AND policyname = 'Allow all on electric_readings') THEN
-    CREATE POLICY "Allow all on electric_readings" ON electric_readings FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-  -- broadcast_emails
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'broadcast_emails' AND policyname = 'Allow all on broadcast_emails') THEN
-    CREATE POLICY "Allow all on broadcast_emails" ON broadcast_emails FOR ALL USING (true) WITH CHECK (true);
   END IF;
 END $$;
 
