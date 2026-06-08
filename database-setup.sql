@@ -410,34 +410,5 @@ BEGIN
 END $$;
 
 
--- ============================================================
--- STORAGE BUCKETS
--- ============================================================
-
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('logos', 'logos', true)
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('site-photos', 'site-photos', true)
-ON CONFLICT (id) DO NOTHING;
-
-
--- ============================================================
--- STORAGE POLICIES
--- ============================================================
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'objects' AND policyname = 'Allow public read on logos') THEN
-    CREATE POLICY "Allow public read on logos" ON storage.objects FOR SELECT USING (bucket_id = 'logos');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'objects' AND policyname = 'Allow upload on logos') THEN
-    CREATE POLICY "Allow upload on logos" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'logos');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'objects' AND policyname = 'Allow public read on site-photos') THEN
-    CREATE POLICY "Allow public read on site-photos" ON storage.objects FOR SELECT USING (bucket_id = 'site-photos');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'objects' AND policyname = 'Allow upload on site-photos') THEN
-    CREATE POLICY "Allow upload on site-photos" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'site-photos');
-  END IF;
-END $$;
+-- Storage buckets are created via Supabase Storage API during onboarding,
+-- not via SQL (the storage schema is not accessible via /database/query).
