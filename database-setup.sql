@@ -222,10 +222,12 @@ CREATE TABLE IF NOT EXISTS site_categories (
 CREATE TABLE IF NOT EXISTS square_connections (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  campground_id text NOT NULL UNIQUE,
   merchant_id text NOT NULL,
   access_token text NOT NULL,
   refresh_token text NOT NULL,
-  expires_at timestamptz NOT NULL,
+  token_expires_at timestamptz NOT NULL,
   location_id text
 );
 

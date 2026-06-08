@@ -11,11 +11,19 @@ const SQUARE_BASE_URL =
     : 'https://connect.squareupsandbox.com'
 
 export function getSquareAuthUrl(campgroundId: string): string {
+  // Build state as base64-encoded JSON containing client ID + return URL.
+  // The central callback at admin.myresonation.com uses this to route back.
+  const statePayload = {
+    campground_id: campgroundId,
+    return_to: process.env.NEXT_PUBLIC_BASE_URL || '',
+  }
+  const state = Buffer.from(JSON.stringify(statePayload)).toString('base64')
+
   const params = new URLSearchParams({
     client_id: process.env.SQUARE_APPLICATION_ID!,
     scope: 'PAYMENTS_WRITE PAYMENTS_READ ORDERS_WRITE MERCHANT_PROFILE_READ',
     session: 'false',
-    state: campgroundId,
+    state,
   })
 
   return `${SQUARE_BASE_URL}/oauth2/authorize?${params.toString()}`
@@ -37,6 +45,7 @@ export async function exchangeCodeForTokens(code: string) {
   return response.json()
 }
 
+// Now accepts optional locationId parameter
 export async function saveSquareConnection(
   campgroundId: string,
   accessToken: string,
