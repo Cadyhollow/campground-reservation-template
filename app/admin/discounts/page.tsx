@@ -147,8 +147,16 @@ export default function DiscountsPage() {
               <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Summer 2026 promotion" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} />
             </div>
             <div className="flex items-center gap-3 pt-6">
-              <input type="checkbox" id="is_active_discount" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} className="w-4 h-4 accent-green-700" />
-              <label htmlFor="is_active_discount" className="text-sm font-medium text-gray-700">Active</label>
+              <button
+                  type="button"
+                  onClick={() => setForm({ ...form, is_active: !form.is_active })}
+                  className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200"
+                  style={{ backgroundColor: form.is_active ? '#15803d' : '#d1d5db' }}
+                >
+                  <span className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition duration-200"
+                    style={{ transform: form.is_active ? 'translateX(20px)' : 'translateX(0px)' }} />
+                </button>
+                <span className="text-sm font-medium text-gray-700">Active</span>
             </div>
           </div>
           <div className="flex gap-3 mt-4">
