@@ -58,6 +58,7 @@ export default function SettingsPage() {
   const [settingsId, setSettingsId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [squareConnected, setSquareConnected] = useState<boolean | null>(null)
   const [plan, setPlan] = useState('trailhead')
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -200,6 +201,13 @@ export default function SettingsPage() {
     fetchSettings()
   }
 
+  useEffect(() => {
+    fetch('/api/square/status')
+      .then(res => res.json())
+      .then(data => setSquareConnected(!!data.connected))
+      .catch(() => setSquareConnected(false))
+  }, [])
+
   if (loading) return <div className="flex items-center justify-center h-64"><div className="text-gray-500">Loading settings...</div></div>
 
   return (
@@ -217,6 +225,30 @@ export default function SettingsPage() {
 
       <div className="space-y-6">
 
+        {/* Square Payments */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="flex-1 min-w-0">
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">Square Payments</h3>
+              <p className="text-sm text-gray-500 mb-3">Connect your Square account so guests can pay for reservations online.</p>
+              {squareConnected === true && (
+                <div className="inline-flex items-center gap-2 text-sm text-green-700">
+                  <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                  Connected
+                </div>
+              )}
+              {squareConnected === false && (
+                <div className="inline-flex items-center gap-2 text-sm text-gray-500">
+                  <div className="w-2 h-2 rounded-full bg-gray-300"></div>
+                  Not connected
+                </div>
+              )}
+            </div>
+            <a href="/admin/settings/square" className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 whitespace-nowrap">
+              {squareConnected ? 'Manage' : 'Connect Square'}
+            </a>
+          </div>
+        </div>
         {/* Logo */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Logo</h3>
