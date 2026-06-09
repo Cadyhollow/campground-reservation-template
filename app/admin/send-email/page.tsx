@@ -69,14 +69,14 @@ export default function SendEmailPage() {
       const today = new Date().toISOString().split('T')[0]
       const { data } = await supabase
         .from('reservations')
-        .select('guest_name, guest_email, site_number')
+        .select('guest_name, guest_email, site_name')
         .lte('arrival_date', today)
         .gte('departure_date', today)
         .neq('status', 'cancelled')
       const unique = dedupeByEmail(data || [])
       setRecipients(unique.map(r => ({
         id: r.guest_email, name: r.guest_name, email: r.guest_email,
-        site_number: r.site_number, is_seasonal: false, is_monthly: false,
+        site_number: r.site_name, is_seasonal: false, is_monthly: false,
         email_opt_out: false, checked: true,
       })))
     } else if (group === 'individual') {
@@ -92,14 +92,14 @@ export default function SendEmailPage() {
     setLoading(true)
     const { data } = await supabase
       .from('reservations')
-      .select('guest_name, guest_email, site_number')
+      .select('guest_name, guest_email, site_name')
       .gte('arrival_date', dateFrom)
       .lte('departure_date', dateTo)
       .neq('status', 'cancelled')
     const unique = dedupeByEmail(data || [])
     setRecipients(unique.map(r => ({
       id: r.guest_email, name: r.guest_name, email: r.guest_email,
-      site_number: r.site_number, is_seasonal: false, is_monthly: false,
+      site_number: r.site_name, is_seasonal: false, is_monthly: false,
       email_opt_out: false, checked: true,
     })))
     setLoading(false)

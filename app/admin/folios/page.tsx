@@ -73,7 +73,7 @@ export default function FoliosPage() {
     if (resIds.length > 0) {
       const { data: resData } = await supabase
         .from('reservations')
-        .select('id, site_number, arrival_date, departure_date, total_price, amount_paid')
+        .select('id, site_number:site_name, arrival_date, departure_date, total_price, amount_paid')
         .in('id', resIds)
       if (resData) resData.forEach((r: any) => { resMap[r.id] = r })
     }
