@@ -3,9 +3,6 @@
 -- Complete Database Setup Script
 -- Run this entire file in Supabase SQL Editor for each new client
 -- ============================================================
--- Last updated: 2026-06-08
--- Verified against Cady Hollow + Lakeshore production schemas (22 tables)
--- ============================================================
 
 
 -- ============================================================
@@ -25,7 +22,6 @@ CREATE TABLE IF NOT EXISTS settings (
   logo_url text,
   logo_shape text DEFAULT 'circle',
   accent_color text DEFAULT '#2D6A4F',
-  primary_color text DEFAULT '#2D6A4F',
   season_start text,
   season_end text,
   closed_season_message text DEFAULT 'We are closed for the season. We look forward to welcoming you back next year!',
@@ -35,8 +31,6 @@ CREATE TABLE IF NOT EXISTS settings (
   same_day_cutoff_message text DEFAULT 'Same-day reservations are not available online. Please call us to book.',
   extra_adult_fee integer DEFAULT 0,
   extra_child_fee integer DEFAULT 0,
-  base_adult_rate integer DEFAULT 0,
-  base_child_rate integer DEFAULT 0,
   base_occupancy_adults integer DEFAULT 2,
   base_occupancy_children integer DEFAULT 2,
   cancellation_policy text DEFAULT '',
@@ -49,28 +43,7 @@ CREATE TABLE IF NOT EXISTS settings (
   use_custom_sender boolean DEFAULT false,
   waiver_enabled boolean DEFAULT true,
   waiver_text text DEFAULT '',
-  plan text DEFAULT 'ridgeline',
-  pos_enabled boolean DEFAULT false,
-  card_surcharge_percent numeric DEFAULT 0,
-  electric_bill_message text DEFAULT '',
-  square_terminal_device_id text DEFAULT '',
-  square_terminal_name text DEFAULT '',
-  seasonal_enabled boolean DEFAULT false,
-  total_sites integer DEFAULT 0,
-  total_cabins integer DEFAULT 0,
-  max_credit_amount integer DEFAULT 0,
-  early_checkin_enabled boolean DEFAULT false,
-  early_checkin_price integer DEFAULT 0,
-  early_checkin_time text DEFAULT '',
-  early_checkin_show_customers boolean DEFAULT false,
-  late_checkout_enabled boolean DEFAULT false,
-  late_checkout_price integer DEFAULT 0,
-  late_checkout_time text DEFAULT '',
-  late_checkout_show_customers boolean DEFAULT false,
-  maintenance_mode boolean DEFAULT false,
-  maintenance_message text DEFAULT '',
-  created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now()
+  plan text DEFAULT 'ridgeline'
 );
 
 -- Insert default settings row
@@ -114,11 +87,9 @@ CREATE TABLE IF NOT EXISTS reservations (
   extra_guest_fee_total integer DEFAULT 0,
   addons_total integer DEFAULT 0,
   discount_amount integer DEFAULT 0,
-  fees_total integer DEFAULT 0,
   total_price integer NOT NULL DEFAULT 0,
   amount_paid integer DEFAULT 0,
   payment_type text DEFAULT 'full' CHECK (payment_type IN ('full', 'deposit', 'unpaid')),
-  payment_method text DEFAULT '',
   square_payment_id text,
   waiver_signed boolean DEFAULT false,
   waiver_signed_at timestamptz,
@@ -126,12 +97,7 @@ CREATE TABLE IF NOT EXISTS reservations (
   notes text DEFAULT '',
   confirmation_number text,
   discount_code text,
-  checked_in boolean DEFAULT false,
-  special_requests text DEFAULT '',
-  site_name text DEFAULT '',
-  camper_type text DEFAULT '',
-  camper_length integer DEFAULT 0,
-  camper_amperage text DEFAULT ''
+  checked_in boolean DEFAULT false
 );
 
 
@@ -143,7 +109,6 @@ CREATE TABLE IF NOT EXISTS addons (
   description text DEFAULT '',
   price integer NOT NULL DEFAULT 0,
   is_active boolean DEFAULT true,
-  is_early_checkin boolean DEFAULT false,
   display_order integer DEFAULT 0
 );
 
@@ -166,7 +131,6 @@ CREATE TABLE IF NOT EXISTS pricing_rules (
   name text NOT NULL,
   site_id uuid REFERENCES sites(id),
   site_type text,
-  site_ids text,
   start_date date NOT NULL,
   end_date date NOT NULL,
   nightly_rate integer NOT NULL,
@@ -182,7 +146,6 @@ CREATE TABLE IF NOT EXISTS min_stay_rules (
   name text NOT NULL,
   site_id uuid REFERENCES sites(id),
   site_type text,
-  site_ids text,
   start_date date NOT NULL,
   end_date date NOT NULL,
   min_nights integer NOT NULL DEFAULT 1,
@@ -195,12 +158,8 @@ CREATE TABLE IF NOT EXISTS cancellation_rules (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at timestamptz DEFAULT now(),
   name text NOT NULL,
-  start_date date,
-  end_date date,
-  deposit_refundable boolean DEFAULT true,
-  refund_percent integer DEFAULT 90,
-  cancellation_deadline_days integer DEFAULT 7,
-  policy_text text,
+  days_before_arrival integer NOT NULL,
+  refund_percentage integer NOT NULL DEFAULT 0,
   is_active boolean DEFAULT true
 );
 
@@ -220,13 +179,12 @@ CREATE TABLE IF NOT EXISTS discounts (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at timestamptz DEFAULT now(),
   code text NOT NULL UNIQUE,
-  description text,
-  discount_type text,
-  discount_value integer,
-  valid_from date,
-  valid_until date,
+  type text NOT NULL CHECK (type IN ('percentage', 'flat')),
+  amount integer NOT NULL,
+  start_date date,
+  end_date date,
   max_uses integer,
-  times_used integer DEFAULT 0,
+  uses_count integer DEFAULT 0,
   is_active boolean DEFAULT true
 );
 
@@ -236,19 +194,27 @@ CREATE TABLE IF NOT EXISTS fees (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at timestamptz DEFAULT now(),
   name text NOT NULL,
-  type text NOT NULL,
+  type text NOT NULL CHECK (type IN ('percentage', 'flat')),
   amount numeric NOT NULL,
   applies_to text DEFAULT 'all',
-  is_active boolean DEFAULT true,
-  card_only boolean DEFAULT false
+  is_active boolean DEFAULT true
 );
 
 
--- Site Categories (junction table for grouping sites)
+-- Categories (for grouping sites)
+CREATE TABLE IF NOT EXISTS categories (
+  id bigint generated always as identity primary key,
+  created_at timestamptz DEFAULT now(),
+  name text NOT NULL,
+  campground_id uuid
+);
+
+
+-- Site Categories (junction table)
 CREATE TABLE IF NOT EXISTS site_categories (
   id bigint generated always as identity primary key,
   site_id uuid NOT NULL,
-  category_id bigint NOT NULL
+  category_id int8 NOT NULL
 );
 
 
@@ -256,159 +222,139 @@ CREATE TABLE IF NOT EXISTS site_categories (
 CREATE TABLE IF NOT EXISTS square_connections (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now(),
-  campground_id text NOT NULL UNIQUE,
   merchant_id text NOT NULL,
   access_token text NOT NULL,
   refresh_token text NOT NULL,
-  token_expires_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
   location_id text
 );
 
 
--- Product Categories
-CREATE TABLE IF NOT EXISTS product_categories (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at timestamptz DEFAULT now(),
-  name text NOT NULL,
-  display_order integer DEFAULT 0
-);
+-- ============================================================
+-- ROW LEVEL SECURITY
+-- ============================================================
 
-
--- Products
-CREATE TABLE IF NOT EXISTS products (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at timestamptz DEFAULT now(),
-  name text NOT NULL,
-  description text DEFAULT '',
-  category text DEFAULT 'General',
-  category_id uuid REFERENCES product_categories(id) ON DELETE SET NULL,
-  price integer NOT NULL DEFAULT 0,
-  tax_class text DEFAULT 'standard',
-  track_inventory boolean DEFAULT false,
-  stock_quantity integer,
-  in_stock boolean DEFAULT true,
-  active boolean DEFAULT true,
-  display_order integer DEFAULT 0,
-  variable_price boolean DEFAULT false
-);
-
-
--- Guests (camper directory; first/last kept nullable for future sortable directory)
-CREATE TABLE IF NOT EXISTS guests (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at timestamptz DEFAULT now(),
-  name text,
-  first_name text,
-  last_name text,
-  email text DEFAULT '',
-  phone text DEFAULT '',
-  site_id uuid REFERENCES sites(id) ON DELETE SET NULL,
-  site_number text DEFAULT '',
-  is_seasonal boolean DEFAULT false,
-  season_start date,
-  season_end date,
-  notes text DEFAULT '',
-  last_visit date,
-  email_opt_out boolean DEFAULT false
-);
-
-
--- Folios (running charge accounts)
-CREATE TABLE IF NOT EXISTS folios (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at timestamptz DEFAULT now(),
-  type text NOT NULL,
-  reservation_id uuid REFERENCES reservations(id) ON DELETE SET NULL,
-  guest_id uuid REFERENCES guests(id) ON DELETE SET NULL,
-  guest_name text
-);
-
-
--- Folio Line Items
-CREATE TABLE IF NOT EXISTS folio_line_items (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at timestamptz DEFAULT now(),
-  folio_id uuid REFERENCES folios(id) ON DELETE CASCADE,
-  description text,
-  amount integer NOT NULL DEFAULT 0,
-  quantity integer DEFAULT 1,
-  notes text,
-  voided boolean DEFAULT false
-);
-
-
--- Folio Payments
-CREATE TABLE IF NOT EXISTS folio_payments (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at timestamptz DEFAULT now(),
-  folio_id uuid REFERENCES folios(id) ON DELETE CASCADE,
-  amount integer NOT NULL DEFAULT 0,
-  method text,
-  note text,
-  receipt_sent_at timestamptz
-);
-
-
--- Square Terminal Checkouts
-CREATE TABLE IF NOT EXISTS terminal_checkouts (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at timestamptz DEFAULT now(),
-  folio_id uuid REFERENCES folios(id) ON DELETE SET NULL,
-  device_id text,
-  amount integer NOT NULL DEFAULT 0,
-  surcharge_amount integer DEFAULT 0,
-  status text,
-  square_checkout_id text
-);
-
-
--- Electric Readings
-CREATE TABLE IF NOT EXISTS electric_readings (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  created_at timestamptz DEFAULT now(),
-  guest_id uuid REFERENCES guests(id) ON DELETE CASCADE,
-  reading_date date NOT NULL,
-  kwh integer NOT NULL DEFAULT 0,
-  amount integer NOT NULL DEFAULT 0,
-  note text,
-  email_sent_at timestamptz
-);
-
-
--- Broadcast Emails Log
-CREATE TABLE IF NOT EXISTS broadcast_emails (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  sent_at timestamptz DEFAULT now(),
-  subject text,
-  recipient_count integer,
-  sent_by text
-);
+ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reservations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE addons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reservation_addons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pricing_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE min_stay_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cancellation_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE blocked_dates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE discounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE fees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE square_connections ENABLE ROW LEVEL SECURITY;
 
 
 -- ============================================================
--- ROW LEVEL SECURITY + POLICIES
--- Enable RLS and create permissive policies so the anon key works.
+-- RLS POLICIES (allow all for simplicity — service role used for admin)
 -- ============================================================
 
-DO $$
-DECLARE
-  t text;
-  tables text[] := ARRAY[
-    'settings','sites','reservations','addons','reservation_addons',
-    'pricing_rules','min_stay_rules','cancellation_rules','blocked_dates',
-    'discounts','fees','site_categories','square_connections',
-    'product_categories','products','guests','folios','folio_line_items',
-    'folio_payments','terminal_checkouts','electric_readings','broadcast_emails'
-  ];
-BEGIN
-  FOREACH t IN ARRAY tables LOOP
-    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
-    EXECUTE format('DROP POLICY IF EXISTS "Allow all" ON %I', t);
-    EXECUTE format('CREATE POLICY "Allow all" ON %I FOR ALL USING (true) WITH CHECK (true)', t);
-  END LOOP;
+DO $$ BEGIN
+  -- settings
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'settings' AND policyname = 'Allow all on settings') THEN
+    CREATE POLICY "Allow all on settings" ON settings FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- sites
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'sites' AND policyname = 'Allow all on sites') THEN
+    CREATE POLICY "Allow all on sites" ON sites FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- reservations
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'reservations' AND policyname = 'Allow all on reservations') THEN
+    CREATE POLICY "Allow all on reservations" ON reservations FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- addons
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'addons' AND policyname = 'Allow all on addons') THEN
+    CREATE POLICY "Allow all on addons" ON addons FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- reservation_addons
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'reservation_addons' AND policyname = 'Allow all on reservation_addons') THEN
+    CREATE POLICY "Allow all on reservation_addons" ON reservation_addons FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- pricing_rules
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'pricing_rules' AND policyname = 'Allow all on pricing_rules') THEN
+    CREATE POLICY "Allow all on pricing_rules" ON pricing_rules FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- min_stay_rules
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'min_stay_rules' AND policyname = 'Allow all on min_stay_rules') THEN
+    CREATE POLICY "Allow all on min_stay_rules" ON min_stay_rules FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- cancellation_rules
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'cancellation_rules' AND policyname = 'Allow all on cancellation_rules') THEN
+    CREATE POLICY "Allow all on cancellation_rules" ON cancellation_rules FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- blocked_dates
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'blocked_dates' AND policyname = 'Allow all on blocked_dates') THEN
+    CREATE POLICY "Allow all on blocked_dates" ON blocked_dates FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- discounts
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'discounts' AND policyname = 'Allow all on discounts') THEN
+    CREATE POLICY "Allow all on discounts" ON discounts FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- fees
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'fees' AND policyname = 'Allow all on fees') THEN
+    CREATE POLICY "Allow all on fees" ON fees FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- categories
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'categories' AND policyname = 'Allow all on categories') THEN
+    CREATE POLICY "Allow all on categories" ON categories FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- site_categories
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'site_categories' AND policyname = 'Allow all on site_categories') THEN
+    CREATE POLICY "Allow all on site_categories" ON site_categories FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+  -- square_connections
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'square_connections' AND policyname = 'Allow all on square_connections') THEN
+    CREATE POLICY "Allow all on square_connections" ON square_connections FOR ALL USING (true) WITH CHECK (true);
+  END IF;
 END $$;
 
 
--- Storage buckets are created via Supabase Storage API during onboarding,
--- not via SQL (the storage schema is not accessible via /database/query).
+-- ============================================================
+-- STORAGE BUCKETS
+-- Note: Run these separately if they fail (buckets may need
+-- to be created manually in Supabase Storage UI)
+-- ============================================================
+
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('logos', 'logos', true)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('site-photos', 'site-photos', true)
+ON CONFLICT (id) DO NOTHING;
+
+
+-- ============================================================
+-- STORAGE POLICIES
+-- ============================================================
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'objects' AND policyname = 'Allow public read on logos') THEN
+    CREATE POLICY "Allow public read on logos" ON storage.objects FOR SELECT USING (bucket_id = 'logos');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'objects' AND policyname = 'Allow upload on logos') THEN
+    CREATE POLICY "Allow upload on logos" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'logos');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'objects' AND policyname = 'Allow public read on site-photos') THEN
+    CREATE POLICY "Allow public read on site-photos" ON storage.objects FOR SELECT USING (bucket_id = 'site-photos');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'objects' AND policyname = 'Allow upload on site-photos') THEN
+    CREATE POLICY "Allow upload on site-photos" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'site-photos');
+  END IF;
+END $$;
+
+
+-- ============================================================
+-- DONE!
+-- Next steps after running this script:
+-- 1. Go to Settings page in admin and fill in park details
+-- 2. Add sites in the Sites page
+-- 3. Set up Square OAuth in Settings > Square Payments
+-- 4. Verify your email domain in Resend
+-- 5. Add your environment variables to Vercel
+-- ============================================================
