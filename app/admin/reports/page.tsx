@@ -12,6 +12,7 @@ type Reservation = {
   site_id: string
   guest_name: string
   guest_email: string
+  created_at: string
   sites: { site_number: string; site_type: string }
 }
 type PaymentRow = {
@@ -219,7 +220,7 @@ export default function ReportsPage() {
     setMonthlyOccupancy(occData)
 
     // Reservations
-    const { data: resData } = await supabase.from('reservations').select('id, arrival_date, departure_date, total_price, status, site_id, guest_name, guest_email, sites(site_number, site_type)').neq('status','cancelled').gte('arrival_date', start).lte('arrival_date', stayEnd).order('arrival_date')
+    const { data: resData } = await supabase.from('reservations').select('id, arrival_date, departure_date, total_price, status, site_id, guest_name, guest_email, created_at, sites(site_number, site_type)').neq('status','cancelled').gte('arrival_date', start).lte('arrival_date', stayEnd).order('arrival_date')
     const { data: cancelledData, count: cancelCount } = await supabase
       .from('reservations')
       .select('id, arrival_date, departure_date, total_price, status, site_id, guest_name, guest_email, sites(site_number, site_type)')
@@ -425,6 +426,8 @@ export default function ReportsPage() {
   })
   const topSites = Object.values(siteMap).sort((a,b)=>b.revenue-a.revenue).slice(0,5)
   const avgStay = reservations.length>0 ? reservations.reduce((sum,r)=>{ const nights=Math.round((new Date(r.departure_date).getTime()-new Date(r.arrival_date).getTime())/86400000); return sum+nights },0)/reservations.length : 0
+  // Average days between when a booking was made (created_at) and arrival — booking lead time.
+  const avgLeadTime = reservations.length>0 ? reservations.reduce((sum,r)=>{ const days=Math.round((new Date(r.arrival_date+'T12:00:00').getTime()-new Date(r.created_at).getTime())/86400000); return sum+Math.max(0,days) },0)/reservations.length : 0
 
   // Transactions filtering
   const filteredTransactions = transactions.filter(t => {
@@ -626,6 +629,7 @@ export default function ReportsPage() {
               <KPICard label="Seasonal Revenue" value={'$'+(electricRevenue+otherGuestRevenue).toFixed(2)} sub="electric + other charges"/>
               <KPICard label="Outstanding Balances" value={'$'+outstandingBalance.toFixed(2)} sub={overdueCampers.length+' camper'+(overdueCampers.length!==1?'s':'')+' with balance'} color={outstandingBalance>0?'text-red-600':'text-emerald-600'} highlight={outstandingBalance>0} onClick={()=>setActiveTab('seasonal')}/>
               <KPICard label="Card Surcharges" value={'$'+totalSurcharge.toFixed(2)} sub="collected this period"/>
+              <KPICard label="Avg Booking Lead Time" value={avgLeadTime.toFixed(1)+' days'} sub="booked in advance"/>
             </div>
 
             {/* Revenue trend */}

@@ -73,7 +73,6 @@ const navGroups: NavGroup[] = [
       { name: 'Electric Billing', href: '/admin/electric-billing', icon: '⚡', minPlan: 'summit' as const },
       { name: 'Discounts', href: '/admin/discounts', icon: '🏷️' },
       { name: 'Transactions', href: '/admin/transactions', icon: '💳' },
-      { name: 'Reports', href: '/admin/reports', icon: '📊', minPlan: 'ridgeline' as const },
     ],
   },
   {
@@ -262,6 +261,20 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </div>
           )
         })}
+
+        {/* Reports — standalone top-level item (ridgeline+) */}
+        {planAtLeast(plan, 'ridgeline') && (
+          <Link href="/admin/reports" onClick={() => setSidebarOpen(false)}
+            className="flex items-center px-4 rounded-xl text-sm font-semibold transition-all duration-150 mt-3"
+            style={{
+              minHeight: '48px', display: 'flex', alignItems: 'center',
+              background: pathname.startsWith('/admin/reports') ? 'var(--accent-color, #12c9e5)' : 'rgba(255,255,255,0.07)',
+              color: '#fff',
+              boxShadow: pathname.startsWith('/admin/reports') ? '0 2px 8px rgba(18,201,229,0.3)' : 'none',
+            }}>
+            Reports
+          </Link>
+        )}
       </nav>
 
       {/* Footer */}
