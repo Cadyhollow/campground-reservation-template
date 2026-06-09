@@ -83,6 +83,7 @@ export default function ReportsPage() {
   const [bookingPaymentsTotal, setBookingPaymentsTotal] = useState(0)
   const [guestAccountLineItems, setGuestAccountLineItems] = useState<LineItemRow[]>([])
   const [seasonalCampers, setSeasonalCampers] = useState<SeasonalCamper[]>([])
+  const [monthlyRevenue, setMonthlyRevenue] = useState(0)
   const [totalSites, setTotalSites] = useState(84)
   const [totalCabins, setTotalCabins] = useState(3)
   const [tonightCount, setTonightCount] = useState(0)
@@ -302,6 +303,20 @@ export default function ReportsPage() {
       const { data: gaLiData } = await supabase.from('folio_line_items').select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at').in('folio_id', gaFolioIds).gte('charged_at', startISO).lte('charged_at', endISO)
       setGuestAccountLineItems(gaLiData as any || [])
     } else { setGuestAccountLineItems([]) }
+
+    // Monthly campers' guest-account charges (for the Monthly Revenue card)
+    const { data: monthlyGuests } = await supabase.from('guests').select('id').eq('is_monthly', true)
+    const monthlyGuestIds = (monthlyGuests||[]).map((g:any)=>g.id)
+    let monthlyCharges = 0
+    if (monthlyGuestIds.length > 0) {
+      const { data: mFolios } = await supabase.from('folios').select('id').eq('folio_type','guest_account').in('guest_id', monthlyGuestIds)
+      const mFolioIds = (mFolios||[]).map((f:any)=>f.id)
+      if (mFolioIds.length > 0) {
+        const { data: mItems } = await supabase.from('folio_line_items').select('line_total').in('folio_id', mFolioIds).gte('charged_at', startISO).lte('charged_at', endISO)
+        monthlyCharges = (mItems||[]).reduce((s:number,i:any)=>s+(i.line_total||0),0)
+      }
+    }
+    setMonthlyRevenue(monthlyCharges)
 
     if (resData) setReservations(resData as any)
     setCancelledCount(cancelledData?.length || 0)
@@ -627,6 +642,7 @@ export default function ReportsPage() {
               <KPICard label="Reservation Revenue" value={'$'+resRevenue.toFixed(2)} sub={reservations.length+' bookings'}/>
               {posEnabled&&<KPICard label="Store Revenue" value={'$'+posRevenue.toFixed(2)} sub={posPayments.length+' transactions'} onClick={()=>setActiveTab('store')}/>}
               <KPICard label="Seasonal Revenue" value={'$'+(electricRevenue+otherGuestRevenue).toFixed(2)} sub="electric + other charges"/>
+              <KPICard label="Monthly Revenue" value={'$'+(monthlyRevenue/100).toFixed(2)} sub="monthly camper charges"/>
               <KPICard label="Outstanding Balances" value={'$'+outstandingBalance.toFixed(2)} sub={overdueCampers.length+' camper'+(overdueCampers.length!==1?'s':'')+' with balance'} color={outstandingBalance>0?'text-red-600':'text-emerald-600'} highlight={outstandingBalance>0} onClick={()=>setActiveTab('seasonal')}/>
               <KPICard label="Card Surcharges" value={'$'+totalSurcharge.toFixed(2)} sub="collected this period"/>
               <KPICard label="Avg Booking Lead Time" value={avgLeadTime.toFixed(1)+' days'} sub="booked in advance"/>
