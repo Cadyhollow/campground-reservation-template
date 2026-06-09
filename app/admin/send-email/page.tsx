@@ -19,7 +19,7 @@ type Recipient = {
   checked: boolean
 }
 
-type Group = 'seasonal' | 'monthly' | 'tonight' | 'alltime' | 'individual'
+type Group = 'seasonal' | 'monthly' | 'tonight' | 'allguests' | 'daterange'
 
 export default function SendEmailPage() {
   const router = useRouter()
@@ -31,7 +31,7 @@ export default function SendEmailPage() {
   }, [])
 
   const [recipients, setRecipients] = useState<Recipient[]>([])
-  const [selectedGroup, setSelectedGroup] = useState<Group | null>(null)
+  const [activeGroups, setActiveGroups] = useState<Set<Group>>(new Set())
   const [loading, setLoading] = useState(false)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -54,18 +54,28 @@ export default function SendEmailPage() {
   const optedOutCount = recipients.filter(r => r.checked && r.email_opt_out && !bypassOptOut).length
   const willSendTo = checkedRecipients.filter(r => bypassOptOut || !r.email_opt_out)
 
-  async function loadGroup(group: Group) {
-    setSelectedGroup(group)
-    setLoading(true)
-    setRecipients([])
+  function resToRecipients(data: any[]): Recipient[] {
+    return data.map(r => ({
+      id: r.guest_email, name: r.guest_name, email: r.guest_email,
+      site_number: r.site_name || '', is_seasonal: false, is_monthly: false,
+      email_opt_out: false, checked: true,
+    }))
+  }
 
+  async function fetchGroup(group: Group): Promise<Recipient[]> {
     if (group === 'seasonal') {
       const { data } = await supabase.from('guests').select('*').eq('is_seasonal', true).order('site_number')
-      setRecipients(toRecipients(data || []))
-    } else if (group === 'monthly') {
+      return toRecipients(data || [])
+    }
+    if (group === 'monthly') {
       const { data } = await supabase.from('guests').select('*').eq('is_monthly', true).order('site_number')
-      setRecipients(toRecipients(data || []))
-    } else if (group === 'tonight') {
+      return toRecipients(data || [])
+    }
+    if (group === 'allguests') {
+      const { data } = await supabase.from('guests').select('*').order('name')
+      return toRecipients(data || [])
+    }
+    if (group === 'tonight') {
       const today = new Date().toISOString().split('T')[0]
       const { data } = await supabase
         .from('reservations')
@@ -73,36 +83,46 @@ export default function SendEmailPage() {
         .lte('arrival_date', today)
         .gte('departure_date', today)
         .neq('status', 'cancelled')
-      const unique = dedupeByEmail(data || [])
-      setRecipients(unique.map(r => ({
-        id: r.guest_email, name: r.guest_name, email: r.guest_email,
-        site_number: r.site_name, is_seasonal: false, is_monthly: false,
-        email_opt_out: false, checked: true,
-      })))
-    } else if (group === 'individual') {
-      const { data } = await supabase.from('guests').select('*').order('name')
-      setRecipients(toRecipients(data || [], false))
+      return resToRecipients(dedupeByEmail(data || []))
     }
+    if (group === 'daterange') {
+      if (!dateFrom || !dateTo) return []
+      const { data } = await supabase
+        .from('reservations')
+        .select('guest_name, guest_email, site_name')
+        .gte('arrival_date', dateFrom)
+        .lte('departure_date', dateTo)
+        .neq('status', 'cancelled')
+      return resToRecipients(dedupeByEmail(data || []))
+    }
+    return []
+  }
 
+  async function rebuildRecipients(active: Set<Group>) {
+    setLoading(true)
+    const prevChecked = new Map(recipients.map(r => [r.email.toLowerCase(), r.checked]))
+    const lists = await Promise.all(Array.from(active).map(fetchGroup))
+    const seen = new Set<string>()
+    const merged: Recipient[] = []
+    for (const list of lists) {
+      for (const r of list) {
+        const key = (r.email || '').toLowerCase()
+        if (!r.email || seen.has(key)) continue
+        seen.add(key)
+        const prior = prevChecked.get(key)
+        merged.push({ ...r, checked: prior !== undefined ? prior : r.checked })
+      }
+    }
+    setRecipients(merged)
     setLoading(false)
   }
 
-  async function loadAllTime() {
-    if (!dateFrom || !dateTo) return
-    setLoading(true)
-    const { data } = await supabase
-      .from('reservations')
-      .select('guest_name, guest_email, site_name')
-      .gte('arrival_date', dateFrom)
-      .lte('departure_date', dateTo)
-      .neq('status', 'cancelled')
-    const unique = dedupeByEmail(data || [])
-    setRecipients(unique.map(r => ({
-      id: r.guest_email, name: r.guest_name, email: r.guest_email,
-      site_number: r.site_name, is_seasonal: false, is_monthly: false,
-      email_opt_out: false, checked: true,
-    })))
-    setLoading(false)
+  function toggleGroup(group: Group) {
+    const next = new Set(activeGroups)
+    if (next.has(group)) next.delete(group)
+    else next.add(group)
+    setActiveGroups(next)
+    rebuildRecipients(next)
   }
 
   function toRecipients(data: any[], checked = true): Recipient[] {
@@ -177,7 +197,7 @@ export default function SendEmailPage() {
       <div style={{ fontSize: 48, marginBottom: 16 }}>✅</div>
       <h2 style={{ fontSize: 24, fontWeight: 700, color: '#111827' }}>Email sent!</h2>
       <p style={{ color: '#6b7280', fontSize: 15 }}>Successfully delivered to {sentCount} recipient{sentCount !== 1 ? 's' : ''}.</p>
-      <button onClick={() => { setSent(false); setSubject(''); setMessage(''); setRecipients([]); setSelectedGroup(null); setHeaderImageUrl(''); setButtonLabel(''); setButtonUrl('') }}
+      <button onClick={() => { setSent(false); setSubject(''); setMessage(''); setRecipients([]); setActiveGroups(new Set()); setHeaderImageUrl(''); setButtonLabel(''); setButtonUrl('') }}
         style={{ marginTop: 24, background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 28px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
         Send Another Email
       </button>
@@ -194,23 +214,27 @@ export default function SendEmailPage() {
       {/* Step 1: Recipients */}
       <div style={card}>
         <h3 style={cardTitle}>Step 1 — Choose Recipients</h3>
+        <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 12px' }}>Tap any categories to combine them — duplicate emails merge automatically, and you can check or uncheck anyone in the list below.</p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
           {([
             { key: 'seasonal', label: '⛺ All Seasonals' },
             { key: 'monthly', label: '📅 All Monthlies' },
             { key: 'tonight', label: '🌙 Staying Tonight' },
-            { key: 'alltime', label: '📋 All Guests Ever' },
-            { key: 'individual', label: '👤 Select Individuals' },
-          ] as { key: Group; label: string }[]).map(g => (
-            <button key={g.key} onClick={() => g.key === 'alltime' ? setSelectedGroup('alltime') : loadGroup(g.key)}
-              style={{ padding: '8px 16px', fontSize: 13, fontWeight: 600, borderRadius: 8, cursor: 'pointer', border: '2px solid', borderColor: selectedGroup === g.key ? '#2E6B8A' : '#e5e7eb', background: selectedGroup === g.key ? '#EBF4F8' : '#fff', color: selectedGroup === g.key ? '#2E6B8A' : '#374151' }}>
-              {g.label}
+            { key: 'allguests', label: '📋 All Guests Ever' },
+            { key: 'daterange', label: '🗓️ By Stay Dates' },
+          ] as { key: Group; label: string }[]).map(g => {
+            const on = activeGroups.has(g.key)
+            return (
+            <button key={g.key} onClick={() => toggleGroup(g.key)}
+              style={{ padding: '8px 16px', fontSize: 13, fontWeight: 600, borderRadius: 8, cursor: 'pointer', border: '2px solid', borderColor: on ? '#2E6B8A' : '#e5e7eb', background: on ? '#EBF4F8' : '#fff', color: on ? '#2E6B8A' : '#374151' }}>
+              {on ? '✓ ' : ''}{g.label}
             </button>
-          ))}
+            )
+          })}
         </div>
 
-        {/* Date range for all time */}
-        {selectedGroup === 'alltime' && (
+        {/* Date range — only when "By Stay Dates" is active */}
+        {activeGroups.has('daterange') && (
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', marginBottom: 16 }}>
             <div>
               <label style={lbl}>From</label>
@@ -220,9 +244,9 @@ export default function SendEmailPage() {
               <label style={lbl}>To</label>
               <input style={{ ...inp, width: 160 }} type='date' value={dateTo} onChange={e => setDateTo(e.target.value)} />
             </div>
-            <button onClick={loadAllTime} disabled={!dateFrom || !dateTo || loading}
+            <button onClick={() => rebuildRecipients(activeGroups)} disabled={!dateFrom || !dateTo || loading}
               style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer', height: 36 }}>
-              {loading ? 'Loading...' : 'Load Guests'}
+              {loading ? 'Loading...' : 'Apply dates'}
             </button>
           </div>
         )}
