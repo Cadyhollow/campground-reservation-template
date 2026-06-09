@@ -11,13 +11,14 @@ export async function POST(request: NextRequest) {
     const {
       sourceId,
       folioId,
+      reservationId,
       amount,
       surchargeAmount = 0,
       note = '',
       guestName = '',
     } = await request.json()
 
-    if (!sourceId || !folioId || !amount) {
+    if (!sourceId || !amount || (!folioId && !reservationId)) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
 
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({
         source_id: sourceId,
-        idempotency_key: `ac-${folioId.slice(0,8)}-${Date.now()}`,
+        idempotency_key: `ac-${(folioId || reservationId).slice(0,8)}-${Date.now()}`,
         amount_money: { amount, currency: 'USD' },
         location_id: process.env.SQUARE_LOCATION_ID,
       }),
@@ -48,16 +49,24 @@ export async function POST(request: NextRequest) {
 
     const squarePaymentId = squareData.payment.id
 
-    // Record the payment on the folio
-    await supabase.from('folio_payments').insert({
-      folio_id: folioId,
-      method: 'card',
-      amount: amount,
-      surcharge_amount: surchargeAmount,
-      status: 'completed',
-      note: note + (surchargeAmount > 0 ? ` (incl. card fee: $${(surchargeAmount/100).toFixed(2)})` : '') + ' · Manual entry',
-      square_payment_id: squarePaymentId,
-    })
+    if (folioId) {
+      // Record the payment on the folio (check-in / walk-up flow)
+      await supabase.from('folio_payments').insert({
+        folio_id: folioId,
+        method: 'card',
+        amount: amount,
+        surcharge_amount: surchargeAmount,
+        status: 'completed',
+        note: note + (surchargeAmount > 0 ? ` (incl. card fee: $${(surchargeAmount/100).toFixed(2)})` : '') + ' · Manual entry',
+        square_payment_id: squarePaymentId,
+      })
+    } else {
+      // Booking deposit charged against a reservation — record on the reservation,
+      // not as a folio_payment, so it is never double-counted at the folio.
+      await supabase.from('reservations')
+        .update({ square_payment_id: squarePaymentId })
+        .eq('id', reservationId)
+    }
 
     return NextResponse.json({ success: true, paymentId: squarePaymentId })
 

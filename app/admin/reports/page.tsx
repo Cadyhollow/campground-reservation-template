@@ -77,6 +77,9 @@ export default function ReportsPage() {
   const [transactions, setTransactions] = useState<PaymentRow[]>([])
   const [lineItems, setLineItems] = useState<LineItemRow[]>([])
   const [guestAccountPayments, setGuestAccountPayments] = useState<PaymentRow[]>([])
+  // Booking payments recorded on reservations (deposits / online), keyed by created_at.
+  // Disjoint from folio_payments, so safe to add to payment-date revenue.
+  const [bookingPaymentsTotal, setBookingPaymentsTotal] = useState(0)
   const [guestAccountLineItems, setGuestAccountLineItems] = useState<LineItemRow[]>([])
   const [seasonalCampers, setSeasonalCampers] = useState<SeasonalCamper[]>([])
   const [totalSites, setTotalSites] = useState(84)
@@ -239,6 +242,16 @@ export default function ReportsPage() {
       .order('paid_at', { ascending: false })
     const pmtData = allPmtData || []
 
+    // Reservation booking payments (deposits / online) within the payment window.
+    const { data: bookingPmts } = await supabase
+      .from('reservations')
+      .select('amount_paid, created_at')
+      .gt('amount_paid', 0)
+      .neq('status', 'cancelled')
+      .gte('created_at', startISO)
+      .lte('created_at', endISO)
+    setBookingPaymentsTotal((bookingPmts || []).reduce((sum: number, r: any) => sum + (r.amount_paid || 0), 0))
+
     // Store line items — fetch ALL line items in date range, exclude guest_account folios
     const guestAccountFolioIdSet = new Set(allGaFolioIds)
     const { data: allLiData } = await supabase
@@ -345,7 +358,7 @@ export default function ReportsPage() {
   // ── Computed values ────────────────────────────────────────────────────────
   const stayDateRevenue = reservations.reduce((s,r)=>s+(r.total_price||0),0)/100
   // reservation payments only (non-guest-account, non-walkup)
-  const paymentDateResRevenue = resPayments.reduce((s,p)=>s+(p.amount||0)-(p.surcharge_amount||0),0)/100
+  const paymentDateResRevenue = (resPayments.reduce((s,p)=>s+(p.amount||0)-(p.surcharge_amount||0),0) + bookingPaymentsTotal)/100
   const resRevenue = reportBy==='payment_date' ? paymentDateResRevenue : stayDateRevenue
   // POS = walkin + walkup folios only
   const posPayments = transactions.filter(t=>{const ft=(t.folios as any)?.folio_type; return ft==='walkin'||ft==='walkup'})

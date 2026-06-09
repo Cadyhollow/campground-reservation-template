@@ -11,6 +11,7 @@ type Fee = {
   amount: number
   applies_to: string
   is_active: boolean
+  card_only: boolean
 }
 
 const APPLIES_TO_OPTIONS = [
@@ -45,6 +46,7 @@ export default function FeesPage() {
     applies_to_all: true,
     applies_to_selections: [] as string[],
     is_active: true,
+    card_only: false,
   })
 
   useEffect(() => { fetchFees() }, [])
@@ -58,7 +60,7 @@ export default function FeesPage() {
 
   function openAddForm() {
     setEditingFee(null)
-    setForm({ name: '', type: 'percentage', amount: '', applies_to_all: true, applies_to_selections: [], is_active: true })
+    setForm({ name: '', type: 'percentage', amount: '', applies_to_all: true, applies_to_selections: [], is_active: true, card_only: false })
     setShowForm(true)
   }
 
@@ -72,6 +74,7 @@ export default function FeesPage() {
       applies_to_all: isAll,
       applies_to_selections: isAll ? [] : fee.applies_to.split(',').map(s => s.trim()),
       is_active: fee.is_active,
+      card_only: fee.card_only || false,
     })
     setShowForm(true)
   }
@@ -97,6 +100,7 @@ export default function FeesPage() {
       amount: parseFloat(form.amount),
       applies_to,
       is_active: form.is_active,
+      card_only: form.card_only,
     }
     if (editingFee) {
       const { error } = await supabase.from('fees').update(payload).eq('id', editingFee.id)
@@ -199,6 +203,10 @@ export default function FeesPage() {
               />
               <label htmlFor="is_active" className="text-sm text-gray-700">Active (applied to bookings)</label>
             </div>
+            <div className="flex items-center gap-2 mt-3">
+              <input type="checkbox" id="card_only" checked={form.card_only} onChange={e => setForm({ ...form, card_only: e.target.checked })} style={{ width: '16px', height: '16px', flexShrink: 0, appearance: 'auto' as any }} />
+              <label htmlFor="card_only" className="text-sm text-gray-700">Card payment fee only (waived for cash/check payments)</label>
+            </div>
           </div>
 
           <div className="flex gap-3 mt-6">
@@ -223,7 +231,7 @@ export default function FeesPage() {
                 <div className={`w-2 h-2 rounded-full ${fee.is_active ? 'bg-green-500' : 'bg-gray-300'}`} />
                 <div>
                   <p className="font-semibold text-gray-900">{fee.name}</p>
-                  <p className="text-sm text-gray-500">{formatFee(fee)} · {formatAppliesTo(fee.applies_to)}{!fee.is_active && ' · Inactive'}</p>
+                  <p className="text-sm text-gray-500">{formatFee(fee)} · {formatAppliesTo(fee.applies_to)}{fee.card_only && ' · 💳 Card only'}{!fee.is_active && ' · Inactive'}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">

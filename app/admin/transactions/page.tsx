@@ -123,14 +123,10 @@ export default function TransactionsPage() {
       .neq('status', 'cancelled')
       .is('id', null) // placeholder — will be replaced below
 
-    // Get reservation IDs that already have folios (to avoid double counting)
-    const { data: folioResIds } = await supabase
-      .from('folios')
-      .select('reservation_id')
-      .not('reservation_id', 'is', null)
-    const folioResIdSet = new Set((folioResIds || []).map((f: any) => f.reservation_id))
-
-    // Fetch online reservations WITHOUT folios
+    // Booking payments live in reservations.amount_paid and never overlap with
+    // folio_payments (folio money is recorded separately), so we count every
+    // reservation payment plus all folio payments — no dedup needed.
+    // Fetch reservation booking payments
     const { data: onlineResData } = await supabase
       .from('reservations')
       .select('id, guest_name, amount_paid, payment_type, payment_method, created_at, square_payment_id')
@@ -140,7 +136,6 @@ export default function TransactionsPage() {
       .neq('status', 'cancelled')
 
     const onlinePayments: Payment[] = (onlineResData || [])
-      .filter((r: any) => !folioResIdSet.has(r.id))
       .map((r: any) => ({
         id: 'res-' + r.id,
         paid_at: r.created_at,

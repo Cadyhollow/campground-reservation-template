@@ -100,6 +100,28 @@ function ReservationsPageInner() {
   const [resRefundReason, setResRefundReason] = useState('')
   const [processingResRefund, setProcessingResRefund] = useState(false)
   const [resRefundError, setResRefundError] = useState('')
+  // Folio totals for the selected reservation (money/charges that live on its folio,
+  // not in reservations.amount_paid). Lets the list show true paid status.
+  const [selectedFolioPaid, setSelectedFolioPaid] = useState(0)
+  const [selectedFolioCharges, setSelectedFolioCharges] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    async function loadFolioTotals() {
+      if (!selected?.id) { setSelectedFolioPaid(0); setSelectedFolioCharges(0); return }
+      const { data: fols } = await supabase.from('folios').select('id').eq('reservation_id', selected.id)
+      const ids = (fols || []).map((f: any) => f.id)
+      if (ids.length === 0) { if (!cancelled) { setSelectedFolioPaid(0); setSelectedFolioCharges(0) } return }
+      const [{ data: pmts }, { data: items }] = await Promise.all([
+        supabase.from('folio_payments').select('amount, surcharge_amount').eq('status', 'completed').in('folio_id', ids),
+        supabase.from('folio_line_items').select('line_total').in('folio_id', ids),
+      ])
+      const paid = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
+      const charges = (items || []).reduce((sum: number, i: any) => sum + (i.line_total || 0), 0)
+      if (!cancelled) { setSelectedFolioPaid(paid); setSelectedFolioCharges(charges) }
+    }
+    loadFolioTotals()
+    return () => { cancelled = true }
+  }, [selected?.id])
 
   useEffect(() => {
     fetchReservations()
@@ -612,12 +634,12 @@ function ReservationsPageInner() {
                 <div>
                   <p className="text-gray-500">Payment</p>
                   <p className="font-medium text-gray-900">
-                    ${(selected.amount_paid / 100).toFixed(2)} paid of ${(selected.total_price / 100).toFixed(2)} total
-                    {selected.amount_paid < selected.total_price && (
-                      <span className="ml-2 text-yellow-600 text-xs">(balance due: ${((selected.total_price - selected.amount_paid) / 100).toFixed(2)})</span>
+                    ${((selected.amount_paid + selectedFolioPaid) / 100).toFixed(2)} paid of ${((selected.total_price + selectedFolioCharges) / 100).toFixed(2)} total
+                    {(selected.amount_paid + selectedFolioPaid) < (selected.total_price + selectedFolioCharges) && (
+                      <span className="ml-2 text-yellow-600 text-xs">(balance due: ${((selected.total_price + selectedFolioCharges - selected.amount_paid - selectedFolioPaid) / 100).toFixed(2)})</span>
                     )}
                   </p>
-                  <p className="text-gray-500 text-xs mt-1">{selected.payment_type === 'deposit' ? 'Deposit paid' : 'Paid in full'}</p>
+                  <p className="text-gray-500 text-xs mt-1">{(selected.amount_paid + selectedFolioPaid) >= (selected.total_price + selectedFolioCharges) ? 'Paid in full' : (selected.amount_paid + selectedFolioPaid) > 0 ? 'Partially paid' : 'Unpaid'}</p>
                 </div>
                 <div>
                   <p className="text-gray-500">Waiver</p>

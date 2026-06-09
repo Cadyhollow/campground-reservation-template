@@ -411,9 +411,9 @@ export default function WalkInBookingPage() {
       status: 'completed',
       note: paymentNote + (surchargeAmount > 0 ? ' (incl. ' + cardSurcharge + '% card fee: $' + (surchargeAmount/100).toFixed(2) + ')' : ''),
     })
-    // Update reservation amount_paid
-    const newAmountPaid = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0) + baseAmount
-    await supabase.from('reservations').update({ amount_paid: newAmountPaid, payment_type: 'full' }).eq('id', reservationId)
+    // Walk-in money lives in the folio (folio_payments). We intentionally do NOT
+    // mirror it into reservations.amount_paid — that would double-count when the
+    // folio is reopened. Paid status is derived from folio payments in the list.
     setSavingPayment(false)
     setShowPayment(false)
     setPaymentAmount('')

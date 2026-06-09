@@ -315,35 +315,26 @@ function ManualBookingInner() {
       console.error('Email failed:', e)
     }
 
-    // Charge card if applicable — create folio first then charge
+    // Charge card if applicable — record the deposit on the reservation (no folio).
+    // The deposit lives in reservations.amount_paid/square_payment_id and flows into
+    // the folio at check-in, so it is never double-counted.
     if (cardToken && data.reservationId && amountPaid > 0) {
-      // Create folio for this reservation
-      const { data: newFolio } = await supabase.from('folios').insert({
-        reservation_id: data.reservationId,
-        guest_name: form.guest_name,
-        guest_email: form.guest_email || '',
-        folio_type: 'reservation',
-        status: 'open',
-      }).select().single()
-
-      if (newFolio) {
-        const cardRes = await fetch('/api/admin-card-payment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sourceId: cardToken,
-            folioId: newFolio.id,
-            amount: amountPaid,
-            surchargeAmount: 0,
-            guestName: form.guest_name,
-          }),
-        })
-        const cardData = await cardRes.json()
-        if (!cardData.success) {
-          toast.error('Reservation created but card charge failed: ' + (cardData.error || 'Unknown error'))
-          setSaving(false)
-          return
-        }
+      const cardRes = await fetch('/api/admin-card-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceId: cardToken,
+          reservationId: data.reservationId,
+          amount: amountPaid,
+          surchargeAmount: 0,
+          guestName: form.guest_name,
+        }),
+      })
+      const cardData = await cardRes.json()
+      if (!cardData.success) {
+        toast.error('Reservation created but card charge failed: ' + (cardData.error || 'Unknown error'))
+        setSaving(false)
+        return
       }
     }
 
@@ -599,7 +590,7 @@ function ManualBookingInner() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Amount Paid Today ($)</label>
-                <input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="0.00" value={form.amount_paid} onChange={e => setForm({ ...form, amount_paid: e.target.value })} />
+                <input type="text" inputMode="decimal" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="0.00" value={form.amount_paid} onChange={e => setForm({ ...form, amount_paid: e.target.value.replace(/[^0-9.]/g, '') })} />
                 <p className="text-xs text-gray-400 mt-1">Card total: ${(total / 100).toFixed(2)} · Cash total: ${(cashTotal / 100).toFixed(2)}</p>
               </div>
               {form.payment_method === 'card' && (
@@ -614,13 +605,12 @@ function ManualBookingInner() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Balance Due at Arrival ($)</label>
                 <input
-                  type="number"
-                  min="0"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
                   placeholder={(cashTotal / 100).toFixed(2)}
                   value={balanceDue}
-                  onChange={e => setBalanceDue(e.target.value)}
+                  onChange={e => setBalanceDue(e.target.value.replace(/[^0-9.]/g, ''))}
                 />
                 <p className="text-xs text-gray-400 mt-1">Suggested: ${(cashTotal / 100).toFixed(2)} cash. Card adds 3% at check-in.</p>
               </div>
