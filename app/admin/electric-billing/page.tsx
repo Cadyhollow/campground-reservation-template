@@ -130,7 +130,7 @@ export default function ElectricBillingPage() {
 
   async function fetchCampers() {
     setLoading(true)
-    const { data: guests } = await supabase.from('guests').select('*').eq('is_seasonal', true)
+    const { data: guests } = await supabase.from('guests').select('*').eq('electric_billing_enabled', true)
     const sortedGuests = (guests || []).sort((a, b) => parseInt(a.site_number) - parseInt(b.site_number))
     if (sortedGuests.length === 0) { setLoading(false); return }
 

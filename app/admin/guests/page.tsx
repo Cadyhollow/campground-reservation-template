@@ -15,6 +15,8 @@ type Guest = {
   phone: string
   site_number: string
   is_seasonal: boolean
+  is_monthly: boolean
+  electric_billing_enabled: boolean
   season_start: string | null
   season_end: string | null
   notes: string
@@ -27,6 +29,8 @@ const blank = (): Omit<Guest, 'id'> => ({
   phone: '',
   site_number: '',
   is_seasonal: false,
+  is_monthly: false,
+  electric_billing_enabled: false,
   season_start: null,
   season_end: null,
   notes: '',
@@ -104,6 +108,8 @@ export default function GuestsPage() {
       phone: g.phone,
       site_number: g.site_number,
       is_seasonal: g.is_seasonal,
+      is_monthly: g.is_monthly,
+      electric_billing_enabled: g.electric_billing_enabled,
       season_start: g.season_start,
       season_end: g.season_end,
       notes: g.notes,
@@ -253,7 +259,7 @@ export default function GuestsPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '14px 0 4px' }}>
               <button
                 type="button"
-                onClick={() => setForm({ ...form, is_seasonal: !form.is_seasonal })}
+                onClick={() => setForm({ ...form, is_seasonal: !form.is_seasonal, is_monthly: !form.is_seasonal ? false : form.is_monthly })}
                 style={{ width: 40, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer', backgroundColor: form.is_seasonal ? '#2E6B8A' : '#d1d5db', position: 'relative', flexShrink: 0 }}
               >
                 <span style={{ position: 'absolute', top: 3, left: form.is_seasonal ? 21 : 3, width: 16, height: 16, borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
@@ -261,14 +267,36 @@ export default function GuestsPage() {
               <label style={{ fontSize: 14, color: '#374151', fontWeight: 500 }}>Seasonal camper</label>
             </div>
 
-            {form.is_seasonal && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '4px 0' }}>
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, is_monthly: !form.is_monthly, is_seasonal: !form.is_monthly ? false : form.is_seasonal })}
+                style={{ width: 40, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer', backgroundColor: form.is_monthly ? '#2E6B8A' : '#d1d5db', position: 'relative', flexShrink: 0 }}
+              >
+                <span style={{ position: 'absolute', top: 3, left: form.is_monthly ? 21 : 3, width: 16, height: 16, borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
+              </button>
+              <label style={{ fontSize: 14, color: '#374151', fontWeight: 500 }}>Monthly camper</label>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '4px 0 4px' }}>
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, electric_billing_enabled: !form.electric_billing_enabled })}
+                style={{ width: 40, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer', backgroundColor: form.electric_billing_enabled ? '#b45309' : '#d1d5db', position: 'relative', flexShrink: 0 }}
+              >
+                <span style={{ position: 'absolute', top: 3, left: form.electric_billing_enabled ? 21 : 3, width: 16, height: 16, borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} />
+              </button>
+              <label style={{ fontSize: 14, color: '#374151', fontWeight: 500 }}>⚡ Send monthly electric bill</label>
+            </div>
+
+            {(form.is_seasonal || form.is_monthly) && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
                 <div>
-                  <label style={lbl}>Season start</label>
+                  <label style={lbl}>{form.is_monthly ? 'Stay start' : 'Season start'}</label>
                   <input style={inp} type="date" value={form.season_start || ''} onChange={e => setForm({ ...form, season_start: e.target.value || null })} />
                 </div>
                 <div>
-                  <label style={lbl}>Season end</label>
+                  <label style={lbl}>{form.is_monthly ? 'Stay end (optional)' : 'Season end'}</label>
                   <input style={inp} type="date" value={form.season_end || ''} onChange={e => setForm({ ...form, season_end: e.target.value || null })} />
                 </div>
               </div>
@@ -315,6 +343,12 @@ export default function GuestsPage() {
                   {g.is_seasonal && (
                     <span style={{ fontSize: 11, background: '#e8f2f7', color: '#2E6B8A', borderRadius: 4, padding: '2px 7px', fontWeight: 600 }}>🏡 Seasonal</span>
                   )}
+                  {g.is_monthly && (
+                    <span style={{ fontSize: 11, background: '#eef2ff', color: '#4338ca', borderRadius: 4, padding: '2px 7px', fontWeight: 600 }}>📅 Monthly</span>
+                  )}
+                  {g.electric_billing_enabled && (
+                    <span style={{ fontSize: 11, background: '#fef3c7', color: '#b45309', borderRadius: 4, padding: '2px 7px', fontWeight: 600 }}>⚡ Electric</span>
+                  )}
                   {g.site_number && (
                     <span style={{ fontSize: 11, background: '#f3f4f6', color: '#6b7280', borderRadius: 4, padding: '2px 7px' }}>Site {g.site_number}</span>
                   )}
@@ -323,7 +357,7 @@ export default function GuestsPage() {
                   {g.email && <span>{g.email}</span>}
                   {g.phone && <span>{g.phone}</span>}
                   {g.last_visit && <span>Last visit: {g.last_visit}</span>}
-                  {g.is_seasonal && g.season_start && g.season_end && <span>{g.season_start} → {g.season_end}</span>}
+                  {(g.is_seasonal || g.is_monthly) && g.season_start && <span>{g.season_start} → {g.season_end || 'open'}</span>}
                 </div>
                 {g.notes && <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2, fontStyle: 'italic' }}>{g.notes}</div>}
               </div>
