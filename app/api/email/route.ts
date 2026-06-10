@@ -41,6 +41,10 @@ export async function POST(request: NextRequest) {
       extraGuestFee = 0,
       discountAmount = 0,
       discountCode = null,
+      earlyCheckin = false,
+      earlyCheckinFee = 0,
+      lateCheckout = false,
+      lateCheckoutFee = 0,
     } = body
 
     const settings = await getSettings()
@@ -185,7 +189,7 @@ export async function POST(request: NextRequest) {
               <table style="width:100%;border-collapse:collapse;">
                 <tr>
                   <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Site charges (${nights} night${nights !== 1 ? 's' : ''})</td>
-                  <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${((totalPrice - extraGuestFee - (hasAddons ? addonDetails.reduce((s: number, a: any) => s + a.price * a.quantity, 0) : 0) + discountAmount) / 100).toFixed(2)}</td>
+                  <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${((totalPrice - extraGuestFee - (hasAddons ? addonDetails.reduce((s: number, a: any) => s + a.price * a.quantity, 0) : 0) - earlyCheckinFee - lateCheckoutFee + discountAmount) / 100).toFixed(2)}</td>
                 </tr>
                 ${hasExtraGuests ? `
                 <tr>
@@ -193,6 +197,16 @@ export async function POST(request: NextRequest) {
                   <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(extraGuestFee / 100).toFixed(2)}</td>
                 </tr>` : ''}
                 ${addonRowsDark}
+                ${earlyCheckin ? `
+                <tr>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Early Check-In</td>
+                  <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(earlyCheckinFee / 100).toFixed(2)}</td>
+                </tr>` : ''}
+                ${lateCheckout ? `
+                <tr>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Late Check-Out</td>
+                  <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(lateCheckoutFee / 100).toFixed(2)}</td>
+                </tr>` : ''}
                 ${hasDiscount ? `
                 <tr>
                   <td style="padding:6px 0;color:#4ADE80;font-size:14px;">Discount${discountCode ? ` (${discountCode})` : ''}</td>

@@ -59,7 +59,7 @@ function AdminMapInner() {
         .select('id, site_id, arrival_date, departure_date, guest_name, checked_in, status')
         .neq('status', 'cancelled')
         .lte('arrival_date', selectedDate)
-        .gt('departure_date', selectedDate)
+        .gte('departure_date', selectedDate)
       setReservations(resData || [])
       setLoading(false)
     }

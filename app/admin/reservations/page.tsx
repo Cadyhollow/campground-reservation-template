@@ -34,6 +34,10 @@ type Reservation = {
   arrival_date: string
   departure_date: string
   num_adults: number
+  early_checkin?: boolean
+  early_checkin_fee?: number
+  late_checkout?: boolean
+  late_checkout_fee?: number
   num_children: number
   total_price: number
   amount_paid: number
@@ -627,6 +631,25 @@ function ReservationsPageInner() {
                           <span className="text-gray-600">${((addon.price_at_booking * addon.quantity) / 100).toFixed(2)}</span>
                         </div>
                       ))}
+                    </div>
+                  </div>
+                )}
+                {(selected.early_checkin || selected.late_checkout) && (
+                  <div>
+                    <p className="text-gray-500 mb-1">Check-In / Check-Out Extras</p>
+                    <div className="bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 space-y-1">
+                      {selected.early_checkin && (
+                        <div className="flex justify-between text-gray-800">
+                          <span className="font-medium">Early Check-In</span>
+                          <span className="text-gray-600">${((selected.early_checkin_fee || 0) / 100).toFixed(2)}</span>
+                        </div>
+                      )}
+                      {selected.late_checkout && (
+                        <div className="flex justify-between text-gray-800">
+                          <span className="font-medium">Late Check-Out</span>
+                          <span className="text-gray-600">${((selected.late_checkout_fee || 0) / 100).toFixed(2)}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

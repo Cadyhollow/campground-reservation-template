@@ -193,13 +193,41 @@ function BookingForm() {
   async function fetchSettings() {
     const { data } = await supabase
       .from('settings')
-      .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message')
+      .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message, early_checkin_enabled, early_checkin_price, early_checkin_time, early_checkin_show_customers, late_checkout_enabled, late_checkout_price, late_checkout_time, late_checkout_show_customers')
       .limit(1)
       .single()
     if (data) {
       setSettings(data)
       checkSameDayCutoff(data, arrival)
     }
+  }
+
+  const [earlyChecked, setEarlyChecked] = useState(false)
+  const [lateChecked, setLateChecked] = useState(false)
+  const [earlyBlocked, setEarlyBlocked] = useState(false)
+  const [lateBlocked, setLateBlocked] = useState(false)
+
+  useEffect(() => {
+    async function checkTurnover() {
+      if (!site.id || (!arrival && !departure)) return
+      const { data } = await supabase
+        .from('reservations')
+        .select('arrival_date, departure_date')
+        .eq('site_id', site.id)
+        .neq('status', 'cancelled')
+      if (!data) return
+      setEarlyBlocked(data.some((r: any) => r.departure_date === arrival))
+      setLateBlocked(data.some((r: any) => r.arrival_date === departure))
+    }
+    checkTurnover()
+  }, [site.id, arrival, departure])
+
+  function fmtTime(t: string) {
+    if (!t) return ''
+    const [h, m] = t.split(':').map(Number)
+    const ampm = h >= 12 ? 'PM' : 'AM'
+    const hr = h % 12 === 0 ? 12 : h % 12
+    return `${hr}:${String(m).padStart(2, '0')} ${ampm}`
   }
 
   async function fetchFees() {
@@ -362,7 +390,9 @@ function BookingForm() {
   const feesTotal = feeBreakdown.reduce((sum, fee) => sum + fee.calculatedAmount, 0)
   const cardOnlyFeesTotal = feeBreakdown.filter(fee => fee.card_only).reduce((sum, fee) => sum + fee.calculatedAmount, 0)
 
-  const subtotal = site.total_price + extraGuestFee + addonTotal
+  const earlyFee = (earlyChecked && !earlyBlocked && settings?.early_checkin_enabled && settings?.early_checkin_show_customers) ? (settings.early_checkin_price || 0) : 0
+  const lateFee = (lateChecked && !lateBlocked && settings?.late_checkout_enabled && settings?.late_checkout_show_customers) ? (settings.late_checkout_price || 0) : 0
+  const subtotal = site.total_price + extraGuestFee + addonTotal + earlyFee + lateFee
   const discountAmount = discountResult
     ? discountResult.discount_type === 'percent'
       ? Math.round(subtotal * discountResult.discount_value / 100)
@@ -426,6 +456,8 @@ const deposit = site.nightly_rate + proportionalFees
           amountToPay, paymentType, addonItems,
           discountCode: discountResult?.code || null,
           discountAmount, extraGuestFee, addonTotal,
+          earlyCheckin: earlyFee > 0, earlyCheckinFee: earlyFee,
+          lateCheckout: lateFee > 0, lateCheckoutFee: lateFee,
           feesTotal,
           cardOnlyFeesTotal,
           nights: site.nights,
@@ -609,6 +641,30 @@ const deposit = site.nightly_rate + proportionalFees
                 </div>
               )}
 
+              {settings?.early_checkin_enabled && settings?.early_checkin_show_customers && (
+                <div className={`flex items-center justify-between p-3 rounded-lg mb-3 ${earlyBlocked ? 'bg-gray-800 opacity-50' : 'bg-gray-800'}`}>
+                  <div>
+                    <p className="text-white font-medium text-sm">Early Check-In</p>
+                    <p className="text-gray-400 text-xs">Arrive as early as {fmtTime(settings.early_checkin_time)}</p>
+                    <p className="text-sm mt-0.5" style={{ color: 'var(--accent-color)' }}>${(settings.early_checkin_price / 100).toFixed(2)}</p>
+                    {earlyBlocked && <p className="text-amber-400 text-xs mt-1">Not available for these dates — another guest is using this site.</p>}
+                  </div>
+                  <button type="button" disabled={earlyBlocked} onClick={() => setEarlyChecked(!earlyChecked)} className="w-6 h-6 shrink-0 rounded border-2 flex items-center justify-center transition-colors disabled:cursor-not-allowed" style={{ borderColor: 'var(--accent-color)', backgroundColor: (earlyChecked && !earlyBlocked) ? 'var(--accent-color)' : 'transparent' }}>{(earlyChecked && !earlyBlocked) && <span className="text-white text-sm font-bold leading-none">✓</span>}</button>
+                </div>
+              )}
+
+              {settings?.late_checkout_enabled && settings?.late_checkout_show_customers && (
+                <div className={`flex items-center justify-between p-3 rounded-lg mb-3 ${lateBlocked ? 'bg-gray-800 opacity-50' : 'bg-gray-800'}`}>
+                  <div>
+                    <p className="text-white font-medium text-sm">Late Check-Out</p>
+                    <p className="text-gray-400 text-xs">Stay until {fmtTime(settings.late_checkout_time)}</p>
+                    <p className="text-sm mt-0.5" style={{ color: 'var(--accent-color)' }}>${(settings.late_checkout_price / 100).toFixed(2)}</p>
+                    {lateBlocked && <p className="text-amber-400 text-xs mt-1">Not available for these dates — another guest is using this site.</p>}
+                  </div>
+                  <button type="button" disabled={lateBlocked} onClick={() => setLateChecked(!lateChecked)} className="w-6 h-6 shrink-0 rounded border-2 flex items-center justify-center transition-colors disabled:cursor-not-allowed" style={{ borderColor: 'var(--accent-color)', backgroundColor: (lateChecked && !lateBlocked) ? 'var(--accent-color)' : 'transparent' }}>{(lateChecked && !lateBlocked) && <span className="text-white text-sm font-bold leading-none">✓</span>}</button>
+                </div>
+              )}
+
               {/* Discount Code */}
               <div className="pt-4 border-t border-gray-700 mb-6">
                 <h3 className="text-white font-medium mb-3">Discount Code</h3>
@@ -783,6 +839,18 @@ const deposit = site.nightly_rate + proportionalFees
                   </div>
                 )
               })}
+              {earlyFee > 0 && (
+                <div className="flex justify-between">
+                  <p className="text-gray-400">Early Check-In</p>
+                  <p className="text-white font-medium">${(earlyFee / 100).toFixed(2)}</p>
+                </div>
+              )}
+              {lateFee > 0 && (
+                <div className="flex justify-between">
+                  <p className="text-gray-400">Late Check-Out</p>
+                  <p className="text-white font-medium">${(lateFee / 100).toFixed(2)}</p>
+                </div>
+              )}
               {feeBreakdown.map(fee => (
                 <div key={fee.id} className="flex justify-between">
                   <p className="text-gray-400">{fee.name}</p>

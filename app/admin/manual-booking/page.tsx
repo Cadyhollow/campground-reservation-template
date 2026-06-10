@@ -34,6 +34,9 @@ type Fee = {
 function ManualBookingInner() {
   const [sites, setSites] = useState<Site[]>([])
   const [addons, setAddons] = useState<Addon[]>([])
+  const [settings, setSettings] = useState<any>(null)
+  const [earlyChecked, setEarlyChecked] = useState(false)
+  const [lateChecked, setLateChecked] = useState(false)
   const [selectedAddons, setSelectedAddons] = useState<{ [id: string]: number }>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -63,7 +66,7 @@ function ManualBookingInner() {
     notes: '',
   })
 
-  useEffect(() => { fetchSites(); fetchAddons(); fetchFees(); fetchPricingRules() }, [])
+  useEffect(() => { fetchSites(); fetchAddons(); fetchFees(); fetchPricingRules(); fetchSettings() }, [])
   const searchParams = useSearchParams()
   useEffect(() => {
     const siteIdFromUrl = searchParams.get('site_id')
@@ -106,6 +109,10 @@ function ManualBookingInner() {
   async function fetchAddons() {
     const { data } = await supabase.from('addons').select('*').eq('is_active', true).order('display_order')
     setAddons(data || [])
+  }
+  async function fetchSettings() {
+    const { data } = await supabase.from('settings').select('early_checkin_enabled, early_checkin_price, early_checkin_time, late_checkout_enabled, late_checkout_price, late_checkout_time').limit(1).single()
+    setSettings(data || null)
   }
 
   async function loadSquareCard() {
@@ -189,7 +196,9 @@ function ManualBookingInner() {
     return sum + (addon ? addon.price * qty : 0)
   }, 0)
 
-  const calculatedTotal = baseTotal + extraGuestFee + feesTotal + addonTotal
+  const earlyFee = (earlyChecked && settings?.early_checkin_enabled) ? (settings.early_checkin_price || 0) : 0
+  const lateFee = (lateChecked && settings?.late_checkout_enabled) ? (settings.late_checkout_price || 0) : 0
+  const calculatedTotal = baseTotal + extraGuestFee + feesTotal + addonTotal + earlyFee + lateFee
   const total = calculatedTotal
 
   // Card-only fees (excluded from cash total)
@@ -262,6 +271,10 @@ function ManualBookingInner() {
         base_nightly_rate: selectedSite?.base_rate || 0,
         extra_guest_fee_total: extraGuestFee,
         addons_total: addonTotal,
+        early_checkin: earlyFee > 0,
+        early_checkin_fee: earlyFee,
+        late_checkout: lateFee > 0,
+        late_checkout_fee: lateFee,
         total_price: balanceDue ? amountPaid + Math.round(parseFloat(balanceDue) * 100) : calculatedTotal,
         fees_total: 0,
         amount_paid: amountPaid,
@@ -285,6 +298,8 @@ function ManualBookingInner() {
       quantity: item.quantity,
       price: item.price,
     }))
+    if (earlyFee > 0) addonDetails.push({ name: 'Early Check-In', quantity: 1, price: earlyFee })
+    if (lateFee > 0) addonDetails.push({ name: 'Late Check-Out', quantity: 1, price: lateFee })
 
     try {
       await fetch('/api/email', {
@@ -442,6 +457,33 @@ function ManualBookingInner() {
             </div>
           </div>
 
+          {(settings?.early_checkin_enabled || settings?.late_checkout_enabled) && (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Check-In / Check-Out Extras</h3>
+              <div className="space-y-3">
+                {settings?.early_checkin_enabled && (
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-100">
+                    <div>
+                      <p className="font-medium text-gray-900 text-sm">Early Check-In</p>
+                      <p className="text-gray-500 text-xs">Arrive as early as {settings.early_checkin_time}</p>
+                      <p className="text-green-700 text-sm mt-0.5">${((settings.early_checkin_price || 0) / 100).toFixed(2)}</p>
+                    </div>
+                    <button type="button" onClick={() => setEarlyChecked(!earlyChecked)} className="w-6 h-6 shrink-0 rounded border-2 flex items-center justify-center transition-colors" style={{ borderColor: '#15803d', backgroundColor: earlyChecked ? '#15803d' : 'transparent' }}>{earlyChecked && <span className="text-white text-sm font-bold leading-none">✓</span>}</button>
+                  </div>
+                )}
+                {settings?.late_checkout_enabled && (
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-100">
+                    <div>
+                      <p className="font-medium text-gray-900 text-sm">Late Check-Out</p>
+                      <p className="text-gray-500 text-xs">Stay until {settings.late_checkout_time}</p>
+                      <p className="text-green-700 text-sm mt-0.5">${((settings.late_checkout_price || 0) / 100).toFixed(2)}</p>
+                    </div>
+                    <button type="button" onClick={() => setLateChecked(!lateChecked)} className="w-6 h-6 shrink-0 rounded border-2 flex items-center justify-center transition-colors" style={{ borderColor: '#15803d', backgroundColor: lateChecked ? '#15803d' : 'transparent' }}>{lateChecked && <span className="text-white text-sm font-bold leading-none">✓</span>}</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           {/* Add-Ons */}
           {addons.length > 0 && (
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
@@ -687,6 +729,18 @@ function ManualBookingInner() {
                       </div>
                     )
                   })}
+                  {earlyFee > 0 && (
+                    <div className="flex justify-between text-gray-600">
+                      <span>Early Check-In</span>
+                      <span>${(earlyFee / 100).toFixed(2)}</span>
+                    </div>
+                  )}
+                  {lateFee > 0 && (
+                    <div className="flex justify-between text-gray-600">
+                      <span>Late Check-Out</span>
+                      <span>${(lateFee / 100).toFixed(2)}</span>
+                    </div>
+                  )}
                   {applicableFees.map((fee, i) => {
                     const feeAmount = fee.type === 'percentage'
                       ? (baseTotal / 100) * fee.amount / 100
