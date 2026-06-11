@@ -13,6 +13,7 @@ type Reservation = {
   payment_type: string
   total_price: number
   amount_paid: number
+  total_paid?: number
   guest_email: string
   guest_phone: string
   num_adults: number
@@ -91,7 +92,36 @@ export default function CalendarPage() {
         .order('site_number')
     ])
 
-    setReservations(resData || [])
+    // Fold in folio-collected payments so "Paid" reflects BOTH sources
+    // (reservations.amount_paid for booking-flow + folio_payments for walk-in/POS).
+    // Display-only: we never write folio money into amount_paid (would double-count in reports).
+    const resList = resData || []
+    const resIds = resList.map((r: any) => r.id)
+    let folioPaidByRes: Record<string, number> = {}
+    if (resIds.length > 0) {
+      const { data: folios } = await supabase
+        .from('folios')
+        .select('id, reservation_id')
+        .in('reservation_id', resIds)
+      const folioList = folios || []
+      const folioIds = folioList.map((f: any) => f.id)
+      if (folioIds.length > 0) {
+        const { data: pmts } = await supabase
+          .from('folio_payments')
+          .select('folio_id, amount, surcharge_amount, status')
+          .in('folio_id', folioIds)
+          .eq('status', 'completed')
+        const paidByFolio: Record<string, number> = {}
+        for (const pm of (pmts || [])) {
+          paidByFolio[pm.folio_id] = (paidByFolio[pm.folio_id] || 0) + (pm.amount - (pm.surcharge_amount || 0))
+        }
+        for (const f of folioList) {
+          if (f.reservation_id) folioPaidByRes[f.reservation_id] = (folioPaidByRes[f.reservation_id] || 0) + (paidByFolio[f.id] || 0)
+        }
+      }
+    }
+    const resWithPaid = resList.map((r: any) => ({ ...r, total_paid: (r.amount_paid || 0) + (folioPaidByRes[r.id] || 0) }))
+    setReservations(resWithPaid)
     setSites(siteData || [])
     setLoading(false)
   }
@@ -368,8 +398,8 @@ export default function CalendarPage() {
                   <div className="border-t border-gray-100 pt-3">
                     <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-medium text-gray-900">{'$' + (selected.total_price / 100).toFixed(2)}</span></div>
                     <div className="flex justify-between mt-1"><span className="text-gray-500">Paid</span>
-                      <span className="font-medium" style={{ color: selected.amount_paid >= selected.total_price ? '#16a34a' : '#d97706' }}>
-                        {'$' + (selected.amount_paid / 100).toFixed(2)}
+                      <span className="font-medium" style={{ color: (selected.total_paid ?? selected.amount_paid) >= selected.total_price ? '#16a34a' : '#d97706' }}>
+                        {'$' + ((selected.total_paid ?? selected.amount_paid) / 100).toFixed(2)}
                       </span>
                     </div>
                   </div>
@@ -475,8 +505,8 @@ export default function CalendarPage() {
                   <div className="border-t border-gray-100 pt-3">
                     <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-medium text-gray-900">{'$' + (selected.total_price / 100).toFixed(2)}</span></div>
                     <div className="flex justify-between mt-1"><span className="text-gray-500">Paid</span>
-                      <span className="font-medium" style={{ color: selected.amount_paid >= selected.total_price ? '#16a34a' : '#d97706' }}>
-                        {'$' + (selected.amount_paid / 100).toFixed(2)}
+                      <span className="font-medium" style={{ color: (selected.total_paid ?? selected.amount_paid) >= selected.total_price ? '#16a34a' : '#d97706' }}>
+                        {'$' + ((selected.total_paid ?? selected.amount_paid) / 100).toFixed(2)}
                       </span>
                     </div>
                   </div>

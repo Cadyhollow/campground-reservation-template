@@ -449,6 +449,10 @@ export default function FolioPage() {
   const itemsTotal = activeItems.reduce((sum, i) => sum + i.line_total, 0)
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
   const reservationBalance = reservation ? Math.max(0, reservation.total_price - reservation.amount_paid) : 0
+  // Display-only: reflect folio payments applied toward the reservation, without
+  // altering reservationBalance (which is load-bearing for grandTotal/totalDue).
+  const reservationEffectivePaid = reservation ? Math.min(reservation.total_price, reservation.amount_paid + paymentsTotal) : 0
+  const reservationDisplayBalance = reservation ? Math.max(0, reservation.total_price - reservationEffectivePaid) : 0
   // Cash balance removes proportional fees from remaining balance
   const feesTotal = reservation?.fees_total || 0
   const feeAlreadyPaid = reservation && feesTotal > 0 ? Math.round(reservation.amount_paid * feesTotal / reservation.total_price) : 0
@@ -536,21 +540,21 @@ export default function FolioPage() {
         <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none', background: '#C9D2D9' }}>
 
           {/* Reservation balance */}
-          {reservation && reservationBalance > 0 && (
+          {reservation && reservationDisplayBalance > 0 && (
             <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '0.875rem 1rem', marginBottom: 12 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>Reservation balance</div>
                   <div style={{ fontSize: 12, color: '#92400e', marginTop: 2 }}>
-                    Total ${(reservation.total_price/100).toFixed(2)} · Paid ${(reservation.amount_paid/100).toFixed(2)}
+                    Total ${(reservation.total_price/100).toFixed(2)} · Paid ${(reservationEffectivePaid/100).toFixed(2)}
                   </div>
                 </div>
-                <div style={{ fontWeight: 800, fontSize: 17, color: '#92400e' }}>${(reservationBalance/100).toFixed(2)}</div>
+                <div style={{ fontWeight: 800, fontSize: 17, color: '#92400e' }}>${(reservationDisplayBalance/100).toFixed(2)}</div>
               </div>
             </div>
           )}
 
-          {reservation && reservationBalance === 0 && (
+          {reservation && reservationDisplayBalance === 0 && (
             <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '0.75rem 1rem', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: '#15803d', fontWeight: 700 }}>✓</span>
               <span style={{ fontSize: 14, color: '#15803d', fontWeight: 600 }}>Reservation paid in full</span>
