@@ -193,7 +193,7 @@ function BookingForm() {
   async function fetchSettings() {
     const { data } = await supabase
       .from('settings')
-      .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message, early_checkin_enabled, early_checkin_price, early_checkin_time, early_checkin_show_customers, late_checkout_enabled, late_checkout_price, late_checkout_time, late_checkout_show_customers')
+      .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message, early_checkin_enabled, early_checkin_price, early_checkin_time, early_checkin_show_customers, late_checkout_enabled, late_checkout_price, late_checkout_time, late_checkout_show_customers, check_in_time, check_out_time')
       .limit(1)
       .single()
     if (data) {
@@ -817,8 +817,8 @@ const deposit = site.nightly_rate + proportionalFees
             <h3 className="text-white font-bold mb-4">Booking Summary</h3>
             <div className="space-y-3 text-sm">
               <div><p className="text-gray-400">Site</p><p className="text-white font-medium">{siteTypeLabel(site.site_type)} {site.site_number}</p></div>
-              <div><p className="text-gray-400">Arrival</p><p className="text-white font-medium">{arrival}</p><p className="text-gray-500 text-xs">Check-in: 2:00 PM</p></div>
-              <div><p className="text-gray-400">Departure</p><p className="text-white font-medium">{departure}</p><p className="text-gray-500 text-xs">Check-out: 12:00 PM</p></div>
+              <div><p className="text-gray-400">Arrival</p><p className="text-white font-medium">{arrival}</p><p className="text-gray-300 text-xs">Check-in: {settings?.check_in_time || '2:00 PM'}</p></div>
+              <div><p className="text-gray-400">Departure</p><p className="text-white font-medium">{departure}</p><p className="text-gray-300 text-xs">Check-out: {settings?.check_out_time || '12:00 PM'}</p></div>
               <div><p className="text-gray-400">Guests</p><p className="text-white font-medium">{adults} adult{adults !== 1 ? 's' : ''}{children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}</p></div>
               <div><p className="text-gray-400">Duration</p><p className="text-white font-medium">{site.nights} night{site.nights !== 1 ? 's' : ''}</p></div>
               <div className="border-t border-gray-700 pt-3"><p className="text-gray-400">Rate</p><p className="text-white font-medium">${(site.nightly_rate / 100).toFixed(2)}/night</p></div>

@@ -27,10 +27,17 @@ function ConfirmationContent() {
   const reservationId = searchParams.get('reservationId')
   const [reservation, setReservation] = useState<Reservation | null>(null)
   const [loading, setLoading] = useState(true)
+  const [settings, setSettings] = useState<any>(null)
 
   useEffect(() => {
     if (reservationId) fetchReservation()
+    fetchSettings()
   }, [reservationId])
+
+  async function fetchSettings() {
+    const { data } = await supabase.from('settings').select('check_in_time, check_out_time').limit(1).single()
+    setSettings(data || null)
+  }
 
   async function fetchReservation() {
     const { data } = await supabase
@@ -114,12 +121,12 @@ function ConfirmationContent() {
             <div>
               <p className="text-gray-400">Arrival</p>
               <p className="text-white font-medium">{reservation.arrival_date}</p>
-              <p className="text-gray-500 text-xs">Check-in: 2:00 PM</p>
+              <p className="text-gray-300 text-xs">Check-in: {settings?.check_in_time || '2:00 PM'}</p>
             </div>
             <div>
               <p className="text-gray-400">Departure</p>
               <p className="text-white font-medium">{reservation.departure_date}</p>
-              <p className="text-gray-500 text-xs">Check-out: 12:00 PM</p>
+              <p className="text-gray-300 text-xs">Check-out: {settings?.check_out_time || '12:00 PM'}</p>
             </div>
             <div>
               <p className="text-gray-400">Guests</p>
@@ -162,11 +169,11 @@ function ConfirmationContent() {
           <div className="space-y-3 text-sm text-gray-300">
             <div className="flex gap-3">
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
-              <p>Check-in is at <span className="text-white font-medium">2:00 PM</span>. Please check in at the office upon arrival.</p>
+              <p>Check-in is at <span className="text-white font-medium">{settings?.check_in_time || '2:00 PM'}</span>. Please check in at the office upon arrival.</p>
             </div>
             <div className="flex gap-3">
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
-              <p>Check-out is at <span className="text-white font-medium">12:00 PM (noon)</span>.</p>
+              <p>Check-out is at <span className="text-white font-medium">{settings?.check_out_time || '12:00 PM'}</span>.</p>
             </div>
             <div className="flex gap-3">
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
