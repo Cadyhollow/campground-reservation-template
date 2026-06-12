@@ -11,6 +11,7 @@ type ArrivalGuest = {
   site_type: string
   total_price: number
   amount_paid: number
+  total_paid: number
   num_adults: number
   num_children: number
   addons: { name: string; quantity: number }[]
@@ -127,6 +128,33 @@ export default function AdminDashboard() {
         addonMap[row.reservation_id].push({ name: nameMap[row.addon_id] || 'Add-on', quantity: row.quantity })
       })
 
+      // Fold in folio-collected payments so "Paid" reflects BOTH sources
+      // (reservations.amount_paid for booking-flow + folio_payments for walk-in/POS).
+      // Display-only: we never write folio money into amount_paid (would double-count in reports).
+      const arrivalResIds = todayArrivals.map((r: any) => r.id)
+      const arrFolioPaidByRes: Record<string, number> = {}
+      if (arrivalResIds.length > 0) {
+        const { data: arrFolios } = await supabase
+          .from('folios')
+          .select('id, reservation_id')
+          .in('reservation_id', arrivalResIds)
+        const arrFolioList = arrFolios || []
+        const arrFolioIds = arrFolioList.map((f: any) => f.id)
+        if (arrFolioIds.length > 0) {
+          const { data: arrPmts } = await supabase
+            .from('folio_payments')
+            .select('folio_id, amount, surcharge_amount, status')
+            .in('folio_id', arrFolioIds)
+            .eq('status', 'completed')
+          const arrPaidByFolio: Record<string, number> = {}
+          for (const pm of (arrPmts || [])) {
+            arrPaidByFolio[pm.folio_id] = (arrPaidByFolio[pm.folio_id] || 0) + (pm.amount - (pm.surcharge_amount || 0))
+          }
+          for (const f of arrFolioList) {
+            if (f.reservation_id) arrFolioPaidByRes[f.reservation_id] = (arrFolioPaidByRes[f.reservation_id] || 0) + (arrPaidByFolio[f.id] || 0)
+          }
+        }
+      }
       setArrivalsToday(todayArrivals.map((r: any) => ({
         id: r.id,
         guest_name: r.guest_name,
@@ -134,6 +162,7 @@ export default function AdminDashboard() {
         site_type: r.sites?.site_type || '',
         total_price: r.total_price,
         amount_paid: r.amount_paid,
+        total_paid: (r.amount_paid || 0) + (arrFolioPaidByRes[r.id] || 0),
         num_adults: r.num_adults,
         num_children: r.num_children,
         addons: addonMap[r.id] || [],
@@ -306,7 +335,7 @@ export default function AdminDashboard() {
         ) : (
           <div className="divide-y divide-gray-50">
             {arrivalsToday.map(guest => {
-              const balance = guest.total_price - guest.amount_paid
+              const balance = guest.total_price - (guest.total_paid ?? guest.amount_paid)
               const paidInFull = balance <= 0
               return (
                 <div
@@ -348,7 +377,7 @@ export default function AdminDashboard() {
                         ) : (
                           <div className="text-xs text-gray-600 bg-yellow-50 border border-yellow-100 rounded-lg px-2 py-1">
                             Total: <span className="font-medium">${(guest.total_price / 100).toFixed(2)}</span>
-                            {' · '}Pd: <span className="font-medium">${(guest.amount_paid / 100).toFixed(2)}</span>
+                            {' · '}Pd: <span className="font-medium">${((guest.total_paid ?? guest.amount_paid) / 100).toFixed(2)}</span>
                             {' · '}
                             <span className="text-yellow-700 font-semibold">Due: ${(balance / 100).toFixed(2)}</span>
                           </div>
@@ -483,7 +512,7 @@ export default function AdminDashboard() {
                 arrivalsToday.length===0 ? (
                   <p className="text-gray-400 text-sm text-center py-12">No arrivals today</p>
                 ) : arrivalsToday.map(guest=>{
-                  const balance = guest.total_price - guest.amount_paid
+                  const balance = guest.total_price - (guest.total_paid ?? guest.amount_paid)
                   return (
                     <div key={guest.id} className={`px-6 py-4 border-b border-gray-50 ${guest.checkedIn?'bg-green-50':''}`}>
                       <div className="flex items-center justify-between mb-1">
