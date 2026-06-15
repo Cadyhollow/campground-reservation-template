@@ -77,27 +77,12 @@ export async function POST(request: NextRequest) {
           note: 'Square Terminal' + (terminalCheckout.note ? ' · ' + terminalCheckout.note : ''),
         })
 
-        // Update reservation amount_paid if this folio has a reservation
-        const { data: folio } = await supabase
-          .from('folios')
-          .select('reservation_id')
-          .eq('id', terminalCheckout.folio_id)
-          .single()
-
-        if (folio?.reservation_id) {
-          const { data: reservation } = await supabase
-            .from('reservations')
-            .select('amount_paid, total_price')
-            .eq('id', folio.reservation_id)
-            .single()
-          if (reservation) {
-            const baseAmount = terminalCheckout.amount - surchargeAmount
-            await supabase
-              .from('reservations')
-              .update({ amount_paid: reservation.amount_paid + baseAmount })
-              .eq('id', folio.reservation_id)
-          }
-        }
+        // NOTE: We intentionally do NOT mirror Terminal payments into
+        // reservations.amount_paid. Folio money lives ONLY in folio_payments.
+        // Mirroring here double-counted the same dollar (booking amount_paid +
+        // folio payment), which inflated revenue and produced phantom
+        // balances/credits. Paid status is derived everywhere from
+        // total_price - amount_paid - folio_payments.
 
         console.log('Payment recorded for folio:', terminalCheckout.folio_id)
 

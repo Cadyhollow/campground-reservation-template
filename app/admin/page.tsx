@@ -75,12 +75,40 @@ export default function AdminDashboard() {
     }
 
     if (resData) {
+      // Fold folio-collected payments into dashboard figures so removing the
+      // webhook amount_paid mirror doesn't drop folio money. Single source of
+      // truth: amount_paid (booking) + folio_payments (folio/walk-in/POS),
+      // counted net of card surcharge to match the arrivals bridge.
+      const resIds = resData.map((r: any) => r.id)
+      const folioPaidByRes: Record<string, number> = {}
+      if (resIds.length > 0) {
+        const { data: dashFolios } = await supabase
+          .from('folios')
+          .select('id, reservation_id')
+          .in('reservation_id', resIds)
+        const dashFolioList = dashFolios || []
+        const dashFolioIds = dashFolioList.map((f: any) => f.id)
+        if (dashFolioIds.length > 0) {
+          const { data: dashPmts } = await supabase
+            .from('folio_payments')
+            .select('folio_id, amount, surcharge_amount, status')
+            .in('folio_id', dashFolioIds)
+            .eq('status', 'completed')
+          const paidByFolio: Record<string, number> = {}
+          for (const pm of (dashPmts || [])) {
+            paidByFolio[pm.folio_id] = (paidByFolio[pm.folio_id] || 0) + (pm.amount - (pm.surcharge_amount || 0))
+          }
+          for (const f of dashFolioList) {
+            if (f.reservation_id) folioPaidByRes[f.reservation_id] = (folioPaidByRes[f.reservation_id] || 0) + (paidByFolio[f.id] || 0)
+          }
+        }
+      }
       const thisMonth = resData.filter((r: any) =>
         r.arrival_date >= firstOfMonth && r.arrival_date <= lastOfMonth
       )
       const arrivals = resData.filter((r: any) => r.arrival_date === today)
       const departures = resData.filter((r: any) => r.departure_date === today)
-      const revenue = thisMonth.reduce((sum: number, r: any) => sum + (r.amount_paid || 0), 0)
+      const revenue = thisMonth.reduce((sum: number, r: any) => sum + (r.amount_paid || 0) + (folioPaidByRes[r.id] || 0), 0)
 
       setStats({
         totalThisMonth: thisMonth.length,
@@ -93,6 +121,7 @@ export default function AdminDashboard() {
         .filter((r: any) => r.arrival_date >= today)
         .sort((a: any, b: any) => a.arrival_date.localeCompare(b.arrival_date))
         .slice(0, 5)
+        .map((r: any) => ({ ...r, total_paid: (r.amount_paid || 0) + (folioPaidByRes[r.id] || 0) }))
       setUpcomingReservations(upcoming)
       const occupiedTonight = resData.filter((r: any) =>
         r.arrival_date < today && r.departure_date > today
@@ -462,7 +491,7 @@ export default function AdminDashboard() {
               <p className="text-gray-400 text-sm text-center py-8">No upcoming arrivals.</p>
             ) : upcomingReservations.map(r => {
               const isToday = r.arrival_date === new Date().toISOString().split('T')[0]
-              const paidInFull = r.amount_paid >= r.total_price
+              const paidInFull = (r.total_paid ?? r.amount_paid) >= r.total_price
               return (
                 <Link key={r.id} href={`/admin/reservations?id=${r.id}`}
                   className="flex items-center justify-between px-6 py-3 hover:bg-gray-50 transition-colors">
