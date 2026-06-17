@@ -247,10 +247,19 @@ export default function GuestAccountPage() {
 
   async function collectPayment() {
     if (!folio) return
-    const baseAmount = paymentMethod === 'cash' && cashTendered !== ''
+    const isPrepay = totalDue === 0
+    const baseAmount = isPrepay
+      ? Math.round(parseFloat(paymentAmount || '0') * 100)
+      : paymentMethod === 'cash' && cashTendered !== ''
       ? Math.min(Math.round(parseFloat(cashTendered) * 100), Math.round(parseFloat(paymentAmount) * 100))
       : Math.round(parseFloat(paymentAmount) * 100)
     if (!baseAmount || baseAmount <= 0) return
+    // Prepayment onto a zero balance becomes credit in full — enforce the credit cap (warn, allow override).
+    if (isPrepay && maxCreditAmount > 0 && baseAmount > maxCreditAmount) {
+      if (!confirm('This will add a credit of $' + (baseAmount/100).toFixed(2) + ', which exceeds the $' + (maxCreditAmount/100).toFixed(2) + ' credit limit for this account. Add it anyway?')) {
+        return
+      }
+    }
     const surchargeAmount = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee
       ? Math.round(baseAmount * (cardSurcharge / 100))
       : 0
@@ -362,11 +371,9 @@ export default function GuestAccountPage() {
             </div>
           )}
 
-          {totalDue > 0 && (
-            <button onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setShowPayment(true) }} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
-              Collect Payment · ${(totalDue/100).toFixed(2)}
-            </button>
-          )}
+          <button onClick={() => { setPaymentAmount(totalDue > 0 ? (totalDue/100).toFixed(2) : ''); setCashTendered(''); setShowPayment(true) }} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
+            {totalDue > 0 ? `Collect Payment · $${(totalDue/100).toFixed(2)}` : 'Add Payment / Credit'}
+          </button>
 
           {overpaid > 0 && (
             <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '1rem', marginTop: 8, textAlign: 'center' }}>
@@ -472,12 +479,12 @@ export default function GuestAccountPage() {
                 </button>
               </div>
             )}
-            <label style={ml}>{paymentMethod === 'cash' ? 'Amount due' : 'Amount'}</label>
+            <label style={ml}>{totalDue === 0 ? 'Amount to add' : paymentMethod === 'cash' ? 'Amount due' : 'Amount'}</label>
             <div style={{ position: 'relative', marginBottom: 8 }}>
               <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 18 }}>$</span>
-              <input style={{ ...si, paddingLeft: 30, fontSize: 24, fontWeight: 700, height: 56, background: paymentMethod === 'cash' ? '#f9fafb' : '#fff', color: paymentMethod === 'cash' ? '#6b7280' : '#111827' }} type='number' step='0.01' value={paymentAmount} readOnly={paymentMethod === 'cash'} onChange={e => setPaymentAmount(e.target.value)} />
+              <input style={{ ...si, paddingLeft: 30, fontSize: 24, fontWeight: 700, height: 56, background: (paymentMethod === 'cash' && totalDue !== 0) ? '#f9fafb' : '#fff', color: (paymentMethod === 'cash' && totalDue !== 0) ? '#6b7280' : '#111827' }} type='number' step='0.01' value={paymentAmount} readOnly={paymentMethod === 'cash' && totalDue !== 0} placeholder={totalDue === 0 ? '0.00' : undefined} onChange={e => setPaymentAmount(e.target.value)} />
             </div>
-            {paymentMethod === 'cash' && (
+            {paymentMethod === 'cash' && totalDue !== 0 && (
               <>
                 <label style={ml}>Cash tendered</label>
                 <div style={{ position: 'relative', marginBottom: 8 }}>
