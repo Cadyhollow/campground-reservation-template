@@ -34,7 +34,6 @@ export async function POST(request: NextRequest) {
 
     const itemsTotal = (lineItems || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
     const paymentsTotal = (payments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
-    const balanceRemaining = itemsTotal - paymentsTotal
     const mostRecentPayment = payments && payments.length > 0 ? payments[payments.length - 1] : null
 
     // Load reservation if applicable
@@ -47,6 +46,12 @@ export async function POST(request: NextRequest) {
         .single()
       reservation = res
     }
+    // Include the reservation's own stay charge, not just folio line items.
+    // Mirror the folio page: count booking-path money (amount_paid) + folio payments.
+    const reservationCharge = reservation ? ((reservation as any).total_price || 0) : 0
+    const chargesTotal = reservationCharge + itemsTotal
+    const totalPaid = (reservation ? ((reservation as any).amount_paid || 0) : 0) + paymentsTotal
+    const balanceRemaining = chargesTotal - totalPaid
 
     const isReservationType = receiptType === 'reservation' || folio.reservation_id
 
@@ -83,6 +88,11 @@ export async function POST(request: NextRequest) {
   <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
     <h3 style="color:#ffffff;margin:0 0 16px;font-size:16px;">Charges</h3>
     <table style="width:100%;border-collapse:collapse;">
+      ${reservation ? `
+      <tr>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Reservation stay</td>
+        <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(reservationCharge/100).toFixed(2)}</td>
+      </tr>` : ''}
       ${(lineItems || []).map((item: any) => `
       <tr>
         <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${item.description}</td>
@@ -90,7 +100,7 @@ export async function POST(request: NextRequest) {
       </tr>`).join('')}
       <tr style="border-top:1px solid #374151;">
         <td style="padding:8px 0 4px;color:#ffffff;font-size:15px;font-weight:bold;">Total</td>
-        <td style="padding:8px 0 4px;color:#ffffff;font-size:15px;font-weight:bold;text-align:right;">$${(itemsTotal/100).toFixed(2)}</td>
+        <td style="padding:8px 0 4px;color:#ffffff;font-size:15px;font-weight:bold;text-align:right;">$${(chargesTotal/100).toFixed(2)}</td>
       </tr>
     </table>
   </div>
