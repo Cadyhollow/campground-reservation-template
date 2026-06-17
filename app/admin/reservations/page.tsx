@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import WaiverActions from './WaiverActions'
 import toast, { Toaster } from 'react-hot-toast'
 
 type Addon = {
@@ -669,6 +670,7 @@ function ReservationsPageInner() {
                   <p className={`font-medium ${selected.waiver_signed ? 'text-green-600' : 'text-red-500'}`}>
                     {selected.waiver_signed ? 'Signed' : 'Not signed'}
                   </p>
+                  <WaiverActions reservationId={selected.id} guestEmail={selected.guest_email} signed={selected.waiver_signed} />
                 </div>
                 <div>
                   <p className="text-gray-500 mb-1">Internal Notes</p>

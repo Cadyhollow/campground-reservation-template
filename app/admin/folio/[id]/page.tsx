@@ -57,6 +57,12 @@ type Reservation = {
   fees_total: number
   num_adults: number
   num_children: number
+  base_nightly_rate: number
+  extra_guest_fee_total: number
+  addons_total: number
+  early_checkin_fee: number
+  late_checkout_fee: number
+  discount_amount: number
 }
 
 type Folio = {
@@ -80,6 +86,7 @@ export default function FolioPage() {
   const [lineItems, setLineItems] = useState<LineItem[]>([])
   const [payments, setPayments] = useState<Payment[]>([])
   const [products, setProducts] = useState<Product[]>([])
+  const [reservationAddons, setReservationAddons] = useState<{ name: string; quantity: number; amount: number }[]>([])
   const [cardSurcharge, setCardSurcharge] = useState(0)
   const [loading, setLoading] = useState(true)
   const [posEnabled, setPosEnabled] = useState(false)
@@ -137,7 +144,22 @@ export default function FolioPage() {
 
     // First try: treat the ID as a reservation ID
     const { data: res } = await supabase.from('reservations').select('*').eq('id', reservationId).single()
-    if (res) setReservation(res)
+    if (res) {
+      setReservation(res)
+      // Load the reservation's add-ons by name so charges can be itemized
+      const [{ data: raRows }, { data: addonDefs }] = await Promise.all([
+        supabase.from('reservation_addons').select('addon_id, quantity, price_at_booking').eq('reservation_id', res.id),
+        supabase.from('addons').select('id, name'),
+      ])
+      if (raRows && raRows.length > 0) {
+        const nameById = new Map((addonDefs || []).map((a: any) => [a.id, a.name]))
+        setReservationAddons(raRows.map((r: any) => ({
+          name: nameById.get(r.addon_id) || 'Add-on',
+          quantity: r.quantity || 1,
+          amount: (r.price_at_booking || 0) * (r.quantity || 1),
+        })))
+      }
+    }
 
     const { data: existingFolio } = await supabase.from('folios').select('*').eq('reservation_id', reservationId).single()
     if (existingFolio) {
@@ -462,6 +484,62 @@ export default function FolioPage() {
   const totalDue = Math.max(0, grandTotal - paymentsTotal)
   const overpaid = paymentsTotal > grandTotal ? paymentsTotal - grandTotal : 0
 
+  // ---- Reservation charge itemization (display-only; reconciles to total_price) ----
+  const resNights = reservation
+    ? Math.max(1, Math.round((new Date(reservation.departure_date + 'T00:00:00').getTime() - new Date(reservation.arrival_date + 'T00:00:00').getTime()) / 86400000))
+    : 0
+  const rExtraGuest = reservation?.extra_guest_fee_total || 0
+  const rAddons = reservation?.addons_total || 0
+  const rEarly = reservation?.early_checkin_fee || 0
+  const rLate = reservation?.late_checkout_fee || 0
+  const rFees = reservation?.fees_total || 0
+  const rDiscount = reservation?.discount_amount || 0
+  // Site charge is the reconciling remainder so the itemized lines always sum to total_price
+  const rSiteCharge = reservation ? (reservation.total_price - rExtraGuest - rAddons - rEarly - rLate - rFees + rDiscount) : 0
+  const rNightly = reservation ? (reservation.base_nightly_rate || 0) * resNights : 0
+  const addonLinesSum = reservationAddons.reduce((s, a) => s + a.amount, 0)
+  const useAddonDetail = reservationAddons.length > 0 && addonLinesSum === rAddons
+  type ResLine = { label: string; amount: number; negative?: boolean }
+  const resLines: ResLine[] = []
+  if (reservation) {
+    // Nightly line uses the authoritative stored per-night rate when available
+    if (rNightly > 0) {
+      resLines.push({ label: `${resNights} night${resNights !== 1 ? 's' : ''} × $${((reservation.base_nightly_rate || 0) / 100).toFixed(2)}`, amount: rNightly })
+    } else {
+      resLines.push({ label: `Site charge · ${resNights} night${resNights !== 1 ? 's' : ''}`, amount: rSiteCharge })
+    }
+    if (rExtraGuest > 0) resLines.push({ label: 'Extra guest fees', amount: rExtraGuest })
+    if (useAddonDetail) {
+      reservationAddons.forEach(a => resLines.push({ label: a.name + (a.quantity > 1 ? ` ×${a.quantity}` : ''), amount: a.amount }))
+    } else if (rAddons > 0) {
+      resLines.push({ label: 'Add-ons', amount: rAddons })
+    }
+    if (rEarly > 0) resLines.push({ label: 'Early check-in', amount: rEarly })
+    if (rLate > 0) resLines.push({ label: 'Late check-out', amount: rLate })
+    if (rFees > 0) resLines.push({ label: 'Fees', amount: rFees })
+    if (rDiscount > 0) resLines.push({ label: 'Discount', amount: rDiscount, negative: true })
+    // Reconcile: surface any amount baked into total_price that the stored breakdown didn't account for
+    const shown = resLines.reduce((s, l) => s + (l.negative ? -l.amount : l.amount), 0)
+    const leftover = reservation.total_price - shown
+    if (leftover > 0) resLines.push({ label: 'Other charges', amount: leftover })
+    else if (leftover < 0) resLines.push({ label: 'Adjustment', amount: -leftover, negative: true })
+  }
+  const fullCharges = (reservation ? reservation.total_price : 0) + itemsTotal
+  const fullPaid = (reservation ? reservation.amount_paid : 0) + paymentsTotal
+  const isGuestAcct = folio?.folio_type === 'guest_account'
+  let balanceLabel = 'Balance due'
+  let balanceAmount = totalDue
+  let balanceColor = '#dc2626'
+  if (overpaid > 0) {
+    balanceLabel = isGuestAcct ? 'Credit on account' : 'Change due'
+    balanceAmount = overpaid
+    balanceColor = isGuestAcct ? '#15803d' : '#6b7280'
+  } else if (totalDue === 0) {
+    balanceLabel = 'Paid in full'
+    balanceAmount = 0
+    balanceColor = '#15803d'
+  }
+
   // Card surcharge preview
   const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
   const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee
@@ -475,7 +553,7 @@ export default function FolioPage() {
 
   if (isNew && !folio) {
     return (
-      <div style={{ padding: '2rem', maxWidth: 480, margin: '0 auto', fontFamily: 'sans-serif', minHeight: '100vh', background: '#C9D2D9' }}>
+      <div style={{ padding: '2rem', maxWidth: 480, margin: '0 auto', fontFamily: 'sans-serif', minHeight: '100vh', background: '#FBF7EE' }}>
         <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 14, marginBottom: 24 }}>← Back</button>
         <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>New Walk-Up Sale</h1>
         <p style={{ color: '#6b7280', fontSize: 14, marginBottom: 24 }}>Start a tab for a visitor, family member, or anyone not attached to a reservation.</p>
@@ -494,9 +572,9 @@ export default function FolioPage() {
   }
 
   return (
-    <div style={{ fontFamily: 'sans-serif', minHeight: '100vh', background: '#C9D2D9' }}>
+    <div style={{ fontFamily: 'sans-serif', minHeight: '100vh', background: '#FBF7EE' }}>
       {/* Header */}
-      <div style={{ background: '#fff', borderBottom: '1px solid #b8c4cc', padding: '0.875rem 1.25rem', display: 'flex', alignItems: 'center', gap: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
+      <div style={{ background: '#fff', borderBottom: '1px solid #ECE3D2', padding: '0.875rem 1.25rem', display: 'flex', alignItems: 'center', gap: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
         <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 14, whiteSpace: 'nowrap' }}>← Back</button>
         <div style={{ flex: 1, minWidth: 0 }}>
           <h1 style={{ margin: 0, fontSize: 17, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{folio?.guest_name || reservation?.guest_name}</h1>
@@ -508,17 +586,17 @@ export default function FolioPage() {
           {folio?.folio_type === 'walkin' && <p style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>Walk-up sale</p>}
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: overpaid > 0 ? (folio?.folio_type === 'guest_account' ? '#15803d' : '#6b7280') : totalDue > 0 ? '#dc2626' : '#15803d' }}>
-            {overpaid > 0 ? (folio?.folio_type === 'guest_account' ? `Credit: $${(overpaid/100).toFixed(2)}` : `Change: $${(overpaid/100).toFixed(2)}`) : `$${(totalDue/100).toFixed(2)}`}
+          <div style={{ fontSize: 15, fontWeight: 700, color: overpaid > 0 ? (isGuestAcct ? '#15803d' : '#6b7280') : totalDue > 0 ? '#dc2626' : '#15803d' }}>
+            {overpaid > 0 ? (isGuestAcct ? `Credit $${(overpaid/100).toFixed(2)}` : `Change $${(overpaid/100).toFixed(2)}`) : `$${(totalDue/100).toFixed(2)}`}
           </div>
-          <div style={{ fontSize: 11, color: '#6b7280' }}>
-            {overpaid > 0 ? (folio?.folio_type === 'guest_account' ? 'credit on account' : 'give change') : totalDue > 0 ? 'balance due' : '✓ paid in full'}
+          <div style={{ fontSize: 11, color: '#9ca3af' }}>
+            {overpaid > 0 ? (isGuestAcct ? 'credit on account' : 'give change') : totalDue > 0 ? 'balance due' : '✓ paid in full'}
           </div>
         </div>
       </div>
 
       {/* Mobile tab switcher */}
-      <div style={{ display: 'flex', borderBottom: '1px solid #b8c4cc', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+      <div style={{ display: 'flex', borderBottom: '1px solid #ECE3D2', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
         <button
           onClick={() => setActiveTab('tab')}
           style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', borderBottom: activeTab === 'tab' ? '2px solid #15803d' : '2px solid transparent', color: activeTab === 'tab' ? '#15803d' : '#6b7280' }}
@@ -536,71 +614,56 @@ export default function FolioPage() {
       </div>
 
       <div style={{ display: 'flex', minHeight: 'calc(100vh - 120px)' }}>
-        {/* Left: Folio tab */}
-        <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none', background: '#C9D2D9' }}>
+        {/* Left: Folio tab — receipt style */}
+        <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none', background: '#FBF7EE' }}>
 
-          {/* Reservation balance */}
-          {reservation && reservationDisplayBalance > 0 && (
-            <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '0.875rem 1rem', marginBottom: 12 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>Reservation balance</div>
-                  <div style={{ fontSize: 12, color: '#92400e', marginTop: 2 }}>
-                    Total ${(reservation.total_price/100).toFixed(2)} · Paid ${(reservationEffectivePaid/100).toFixed(2)}
-                  </div>
-                </div>
-                <div style={{ fontWeight: 800, fontSize: 17, color: '#92400e' }}>${(reservationDisplayBalance/100).toFixed(2)}</div>
+          {/* CHARGES — reservation itemized first, then store items */}
+          {(reservation || activeItems.length > 0) && (
+            <div style={{ background: '#fff', border: '1px solid #ECE3D2', borderRadius: 12, marginBottom: 14, overflow: 'hidden' }}>
+              <div style={{ padding: '0.7rem 1rem', borderBottom: '1px solid #F3EEE2', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#A1937C' }}>
+                Charges
               </div>
-            </div>
-          )}
 
-          {reservation && reservationDisplayBalance === 0 && (
-            <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '0.75rem 1rem', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ color: '#15803d', fontWeight: 700 }}>✓</span>
-              <span style={{ fontSize: 14, color: '#15803d', fontWeight: 600 }}>Reservation paid in full</span>
-            </div>
-          )}
-
-          {/* Line items */}
-          {activeItems.length > 0 && (
-            <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
-              <div style={{ padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>
-                Additional Charges
-              </div>
-              {activeItems.map((item, i) => (
-                <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: i < activeItems.length - 1 ? '1px solid #f9fafb' : 'none' }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>{item.description}{item.quantity > 1 ? ` ×${item.quantity}` : ''}</div>
-                    {item.notes && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic' }}>{item.notes}</div>}
-                    {item.tax_amount > 0 && <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(item.tax_amount/100).toFixed(2)} tax</div>}
-                  </div>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>${(item.line_total/100).toFixed(2)}</div>
-                  <button onClick={() => removeLineItem(item.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
+              {/* Reservation lines */}
+              {reservation && resLines.map((l, i) => (
+                <div key={`r-${i}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 16px', fontSize: 14, borderBottom: '1px solid #FBF8F1' }}>
+                  <span style={{ color: l.negative ? '#15803d' : '#374151' }}>{l.label}</span>
+                  <span style={{ fontWeight: 500, color: l.negative ? '#15803d' : '#111827' }}>{l.negative ? '−' : ''}${(Math.abs(l.amount)/100).toFixed(2)}</span>
                 </div>
               ))}
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', borderTop: '1px solid #f3f4f6', fontWeight: 700, fontSize: 14 }}>
-                <span>Items subtotal</span>
-                <span>${(itemsTotal/100).toFixed(2)}</span>
-              </div>
-            </div>
-          )}
 
-          {/* Grand total row */}
-          {(reservationBalance > 0 || activeItems.length > 0) && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', background: '#f3f4f6', borderRadius: 8, marginBottom: 12, fontWeight: 700, fontSize: 15 }}>
-              <span>Grand total</span>
-              <span>${(grandTotal/100).toFixed(2)}</span>
+              {/* Store / added items */}
+              {activeItems.length > 0 && (
+                <>
+                  {reservation && (
+                    <div style={{ padding: '6px 16px 2px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#C2B7A1' }}>
+                      Store items
+                    </div>
+                  )}
+                  {activeItems.map((item) => (
+                    <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px', fontSize: 14, borderBottom: '1px solid #FBF8F1' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 500 }}>{item.description}{item.quantity > 1 ? ` ×${item.quantity}` : ''}</div>
+                        {item.notes && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic' }}>{item.notes}</div>}
+                        {item.tax_amount > 0 && <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(item.tax_amount/100).toFixed(2)} tax</div>}
+                      </div>
+                      <div style={{ fontWeight: 500 }}>${(item.line_total/100).toFixed(2)}</div>
+                      <button onClick={() => removeLineItem(item.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
           )}
 
           {/* Payments */}
           {payments.length > 0 && (
-            <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
-              <div style={{ padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>
+            <div style={{ background: '#fff', border: '1px solid #ECE3D2', borderRadius: 12, marginBottom: 14, overflow: 'hidden' }}>
+              <div style={{ padding: '0.7rem 1rem', borderBottom: '1px solid #F3EEE2', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#A1937C' }}>
                 Payments
               </div>
               {payments.map((p, i) => (
-                <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: i < payments.length - 1 ? '1px solid #f9fafb' : 'none' }}>
+                <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: i < payments.length - 1 ? '1px solid #FBF8F1' : 'none' }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 14, fontWeight: 500, textTransform: 'capitalize' }}>{p.method}</div>
                     {p.note && <div style={{ fontSize: 11, color: '#9ca3af' }}>{p.note}</div>}
@@ -628,38 +691,45 @@ export default function FolioPage() {
             </div>
           )}
 
-          {activeItems.length === 0 && payments.length === 0 && reservationBalance === 0 && (
+          {/* Empty state */}
+          {!reservation && activeItems.length === 0 && payments.length === 0 && (
             <div style={{ textAlign: 'center', color: '#9ca3af', padding: '3rem 0', fontSize: 14 }}>
               No charges yet. Tap "Add Items" to get started.
             </div>
           )}
 
-          {/* Collect payment button */}
-          {totalDue > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <button
-                onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setPaymentMethod('cash'); setWaiveFee(false); setFeeAlreadyIncluded(false); setShowPayment(true) }}
-                style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
-              >
-                Collect Payment · ${(totalDue/100).toFixed(2)}
-              </button>
+          {/* TOTALS — bottom line of the receipt */}
+          {(reservation || activeItems.length > 0 || payments.length > 0) && (
+            <div style={{ background: '#fff', border: '1px solid #ECE3D2', borderRadius: 12, padding: '0.9rem 1.1rem', marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', fontSize: 14 }}>
+                <span style={{ color: '#8A7E6B' }}>Total</span>
+                <span style={{ fontWeight: 600, color: '#111827' }}>${(fullCharges/100).toFixed(2)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', fontSize: 14 }}>
+                <span style={{ color: '#8A7E6B' }}>Paid</span>
+                <span style={{ fontWeight: 600, color: fullPaid > 0 ? '#15803d' : '#111827' }}>${(fullPaid/100).toFixed(2)}</span>
+              </div>
+              <div style={{ height: 1, background: '#ECE3D2', margin: '8px 0' }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                <span style={{ fontSize: 16, fontWeight: 700, color: '#4b3f30' }}>{balanceLabel}</span>
+                <span style={{ fontSize: 32, fontWeight: 800, color: balanceColor }}>${(balanceAmount/100).toFixed(2)}</span>
+              </div>
+              {overpaid > 0 && (
+                <div style={{ fontSize: 12, color: '#6b7280', textAlign: 'right', marginTop: 2 }}>
+                  {isGuestAcct ? 'This camper has a credit balance' : 'Folio complete'}
+                </div>
+              )}
             </div>
           )}
 
-          {overpaid > 0 && (
-            <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '1rem', marginTop: 8, textAlign: 'center' }}>
-              {folio?.folio_type === 'guest_account' ? (
-                <>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: '#15803d' }}>Credit on account: ${(overpaid/100).toFixed(2)}</div>
-                  <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>This camper has a credit balance</div>
-                </>
-              ) : (
-                <>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: '#15803d' }}>Give change: ${(overpaid/100).toFixed(2)}</div>
-                  <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>Folio complete</div>
-                </>
-              )}
-            </div>
+          {/* Collect payment button */}
+          {totalDue > 0 && (
+            <button
+              onClick={() => { setPaymentAmount((totalDue/100).toFixed(2)); setPaymentMethod('cash'); setWaiveFee(false); setFeeAlreadyIncluded(false); setShowPayment(true) }}
+              style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
+            >
+              Collect Payment · ${(totalDue/100).toFixed(2)}
+            </button>
           )}
 
           {/* Receipt buttons */}
@@ -669,11 +739,11 @@ export default function FolioPage() {
         </div>
 
         {/* Right: Product picker — only shown when POS enabled */}
-        <div style={{ flex: 1, background: '#C9D2D9', display: posEnabled && activeTab === 'items' ? 'flex' : 'none', flexDirection: 'column' }}>
+        <div style={{ flex: 1, background: '#FBF7EE', display: posEnabled && activeTab === 'items' ? 'flex' : 'none', flexDirection: 'column' }}>
           {/* Category or Items view */}
           {activeCategory === '' ? (
             <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10, alignContent: 'start' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#4a6275', marginBottom: 4 }}>Select a category</div>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#A1937C', marginBottom: 4 }}>Select a category</div>
               {categories.map(cat => (
                 <button
                   key={cat}
@@ -689,7 +759,7 @@ export default function FolioPage() {
             </div>
           ) : (
             <>
-              <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #b8c4cc', background: 'rgba(255,255,255,0.5)', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #ECE3D2', background: 'rgba(255,255,255,0.5)', display: 'flex', alignItems: 'center', gap: 10 }}>
                 <button
                   onClick={() => setActiveCategory('')}
                   style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
@@ -711,7 +781,7 @@ export default function FolioPage() {
             </>
           )}
 
-          <div style={{ borderTop: '1px solid #e5e7eb', padding: '0.875rem' }}>
+          <div style={{ borderTop: '1px solid #ECE3D2', padding: '0.875rem' }}>
             {!showCustomItem ? (
               <button onClick={() => setShowCustomItem(true)} style={{ width: '100%', background: 'none', border: '1px dashed #d1d5db', borderRadius: 8, padding: '10px', fontSize: 13, color: '#6b7280', cursor: 'pointer' }}>
                 + Custom charge
