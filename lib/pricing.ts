@@ -21,6 +21,8 @@ export interface PricingSettings {
   early_checkin_price?: number   // cents
   late_checkout_enabled?: boolean
   late_checkout_price?: number   // cents
+  deposit_type?: string          // 'first_night' | 'percentage' | 'flat' | 'full' (default first_night)
+  deposit_value?: number         // percentage: whole percent (50 = 50%); flat: cents. Ignored for first_night/full.
 }
 
 export interface PricingFee {
@@ -83,6 +85,8 @@ export interface PricingResult {
   cardSurchargePercent: number
   cardSurcharge: (amountCents: number) => number // surcharge for a given paid amount
   firstNightDeposit: number      // first night's base rate + proportional cash fees
+  deposit: number                // configured up-front deposit in cents (driven by deposit_type)
+  depositLabel: string           // dynamic button label, e.g. 'Deposit', '50% deposit', 'Pay in full'
 }
 
 function nightsBetween(arrival: string, departure: string): number {
@@ -159,6 +163,26 @@ export function computePricing(input: PricingInput): PricingResult {
   const proportionalFees = nights > 0 ? Math.round(feesTotalCash / nights) : 0
   const firstNightDeposit = site ? firstNightBase + proportionalFees : 0
 
+  // Configurable deposit. Defaults to first-night behavior, so any campground
+  // whose deposit_type column is null/absent (e.g. Cady today) is unchanged.
+  const depositType = settings.deposit_type || 'first_night'
+  const depositValue = settings.deposit_value || 0
+  let deposit: number
+  let depositLabel: string
+  if (depositType === 'percentage') {
+    deposit = Math.min(Math.round(cashTotal * depositValue / 100), cashTotal)
+    depositLabel = `${depositValue}% deposit`
+  } else if (depositType === 'flat') {
+    deposit = Math.min(depositValue, cashTotal)
+    depositLabel = 'Deposit'
+  } else if (depositType === 'full') {
+    deposit = cashTotal
+    depositLabel = 'Pay in full'
+  } else {
+    deposit = firstNightDeposit
+    depositLabel = 'First night'
+  }
+
   const lines: PricingLine[] = []
   if (site) {
     lines.push({ label: `${nights} night${nights !== 1 ? 's' : ''} × $${(nightlyRate / 100).toFixed(2)}`, amount: baseTotal })
@@ -177,6 +201,7 @@ export function computePricing(input: PricingInput): PricingResult {
     nights, nightlyRate, lines, baseTotal, extraGuestFee,
     feesTotalCash, cardOnlyFeesTotal, addonTotal, earlyFee, lateFee,
     cashTotal, cardSurchargePercent: pct, cardSurcharge, firstNightDeposit,
+    deposit, depositLabel,
   }
 }
 

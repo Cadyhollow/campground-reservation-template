@@ -52,6 +52,8 @@ const defaultSettings = {
   waiver_text: '',
   maintenance_mode: false,
   maintenance_message: 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
+  deposit_type: 'first_night',
+  deposit_value: 0,
 }
 
 export default function SettingsPage() {
@@ -122,6 +124,8 @@ export default function SettingsPage() {
         waiver_text: data.waiver_text || '',
         maintenance_mode: data.maintenance_mode || false,
         maintenance_message: data.maintenance_message || 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
+        deposit_type: data.deposit_type || 'first_night',
+        deposit_value: data.deposit_value || 0,
       })
     }
     setLoading(false)
@@ -194,6 +198,8 @@ export default function SettingsPage() {
       waiver_text: form.waiver_text,
       maintenance_mode: form.maintenance_mode,
       maintenance_message: form.maintenance_message,
+      deposit_type: form.deposit_type,
+      deposit_value: form.deposit_value || 0,
     }
     if (settingsId) {
       const { error } = await supabase.from('settings').update(payload).eq('id', settingsId)
@@ -371,6 +377,53 @@ export default function SettingsPage() {
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Extra Child Fee ($/night)</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.extra_child_fee} onChange={e => setForm({ ...form, extra_child_fee: e.target.value })} /></div>
             <div className="col-span-full"><label className="block text-sm font-medium text-gray-700 mb-1">Seasonal Camper Management</label><p className="text-xs text-gray-400 mb-2">Enable seasonal camper features — guest accounts, electric billing, seasonal reports (Summit plan only)</p><div className="flex items-center gap-3"><button type="button" onClick={() => setForm({...form, seasonal_enabled: !form.seasonal_enabled})} style={{width:44,height:24,borderRadius:12,border:'none',cursor:'pointer',backgroundColor:form.seasonal_enabled?'#15803d':'#d1d5db',position:'relative',flexShrink:0,transition:'background 0.2s'}}><span style={{position:'absolute',top:3,left:form.seasonal_enabled?23:3,width:18,height:18,borderRadius:'50%',backgroundColor:'white',transition:'left 0.2s'}}/></button><span className="text-sm text-gray-700">{form.seasonal_enabled ? 'Enabled' : 'Disabled'}</span></div></div><div className="col-span-full"><label className="block text-sm font-medium text-gray-700 mb-1">Automatic Guest Sync</label><p className="text-xs text-gray-400 mb-2">Automatically add guests to your Guest Directory as reservations come in. Leave this off while testing so test bookings don't get added — you can always use the manual Sync button.</p><div className="flex items-center gap-3"><button type="button" onClick={() => setForm({...form, auto_sync_guests: !form.auto_sync_guests})} style={{width:44,height:24,borderRadius:12,border:'none',cursor:'pointer',backgroundColor:form.auto_sync_guests?'#15803d':'#d1d5db',position:'relative',flexShrink:0,transition:'background 0.2s'}}><span style={{position:'absolute',top:3,left:form.auto_sync_guests?23:3,width:18,height:18,borderRadius:'50%',backgroundColor:'white',transition:'left 0.2s'}}/></button><span className="text-sm text-gray-700">{form.auto_sync_guests ? 'Enabled' : 'Disabled'}</span></div></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Maximum Credit Balance (seasonal campers)</label><p className="text-xs text-gray-400 mb-1">Allow seasonal campers to carry a credit balance up to this amount. Set to $0 to disallow credits — any overpayment will trigger a warning.</p><div className="flex items-center gap-2"><span className="text-sm text-gray-500">$</span><input type="number" min="0" step="1" className="w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.max_credit_amount / 100} onChange={e => setForm({ ...form, max_credit_amount: Math.round(parseFloat(e.target.value || '0') * 100) })} /></div><p className="text-xs text-gray-400 mt-1">{form.max_credit_amount === 0 ? 'Credits disabled — staff will be warned before recording an overpayment' : `Staff can record payments that leave up to $${(form.max_credit_amount/100).toFixed(2)} credit on account`}</p></div>
+          </div>
+        </div>
+
+        {/* Deposit */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-1">Deposit</h3>
+          <p className="text-sm text-gray-500 mb-4">Choose how much guests pay up front when booking. The remaining balance is collected at or before arrival.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Deposit Type</label>
+              <select
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                value={form.deposit_type}
+                onChange={e => setForm({ ...form, deposit_type: e.target.value, deposit_value: 0 })}
+              >
+                <option value="first_night">First night — first night&apos;s rate plus a share of fees</option>
+                <option value="percentage">Percentage of total — a set percent of the full reservation</option>
+                <option value="flat">Flat amount — a fixed dollar deposit</option>
+                <option value="full">Paid in full — guests pay the entire balance at booking</option>
+              </select>
+            </div>
+
+            {form.deposit_type === 'percentage' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Deposit Percentage</label>
+                <div className="flex items-center gap-2">
+                  <input type="number" min="0" max="100" step="1" className="w-28 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                    value={form.deposit_value}
+                    onChange={e => setForm({ ...form, deposit_value: Math.min(parseInt(e.target.value) || 0, 100) })} />
+                  <span className="text-sm text-gray-500">% of the reservation total</span>
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Example: 50 means guests pay half up front.</p>
+              </div>
+            )}
+
+            {form.deposit_type === 'flat' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Deposit Amount</label>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-500">$</span>
+                  <input type="number" min="0" step="1" className="w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                    value={form.deposit_value / 100}
+                    onChange={e => setForm({ ...form, deposit_value: Math.round(parseFloat(e.target.value || '0') * 100) })} />
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Capped at the reservation total so it never exceeds the balance.</p>
+              </div>
+            )}
           </div>
         </div>
 

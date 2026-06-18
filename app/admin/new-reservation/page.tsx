@@ -1139,7 +1139,7 @@ function StepReview({ form, set, pricing, settings, effectiveTotal, grandTotal, 
       <label className="text-[13px] text-gray-600 block mb-1">Amount paid today</label>
       <div className="flex items-center gap-2 flex-wrap mb-2">
         <input type="number" value={form.amount_paid} onChange={e => set({ amount_paid: e.target.value })} placeholder="0.00" className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white" />
-        <button onClick={() => setPaid(pricing?.firstNightDeposit || 0)} className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 bg-white hover:bg-gray-50">First night · {money(pricing?.firstNightDeposit || 0)}</button>
+        <button onClick={() => setPaid(pricing?.deposit || 0)} className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 bg-white hover:bg-gray-50">{pricing?.depositLabel || 'Deposit'} · {money(pricing?.deposit || 0)}</button>
         <button onClick={() => setPaid(grandTotal)} className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 bg-white hover:bg-gray-50">Full · {money(grandTotal)}</button>
         <button onClick={() => setPaid(0)} className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 bg-white hover:bg-gray-50">None</button>
       </div>
