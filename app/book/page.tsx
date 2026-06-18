@@ -193,7 +193,7 @@ function BookingForm() {
   async function fetchSettings() {
     const { data } = await supabase
       .from('settings')
-      .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message, early_checkin_enabled, early_checkin_price, early_checkin_time, early_checkin_show_customers, late_checkout_enabled, late_checkout_price, late_checkout_time, late_checkout_show_customers, check_in_time, check_out_time')
+      .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message, early_checkin_enabled, early_checkin_price, early_checkin_time, early_checkin_show_customers, late_checkout_enabled, late_checkout_price, late_checkout_time, late_checkout_show_customers, check_in_time, check_out_time, deposit_type, deposit_value')
       .limit(1)
       .single()
     if (data) {
@@ -400,7 +400,30 @@ function BookingForm() {
     : 0
   const total = Math.max(0, subtotal + feesTotal - discountAmount)
   const proportionalFees = site.nights > 0 ? Math.round(feesTotal / site.nights) : 0
-const deposit = site.nightly_rate + proportionalFees
+  const firstNightDeposit = site.nightly_rate + proportionalFees
+  const depositType = settings?.deposit_type || 'first_night'
+  const depositValue = settings?.deposit_value || 0
+  let deposit: number
+  let depositLabel: string
+  let depositSubtext: string
+  if (depositType === 'percentage') {
+    deposit = Math.min(Math.round(total * depositValue / 100), total)
+    depositLabel = `Pay ${depositValue}% Deposit`
+    depositSubtext = 'Balance due at check-in'
+  } else if (depositType === 'flat') {
+    deposit = Math.min(depositValue, total)
+    depositLabel = 'Pay Deposit'
+    depositSubtext = 'Balance due at check-in'
+  } else if (depositType === 'full') {
+    deposit = total
+    depositLabel = 'Pay in Full'
+    depositSubtext = ''
+  } else {
+    deposit = firstNightDeposit
+    depositLabel = 'Pay Deposit'
+    depositSubtext = 'First night only · Balance due at check-in'
+  }
+  const showDepositButton = depositType !== 'full'
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
 
@@ -789,15 +812,17 @@ const deposit = site.nightly_rate + proportionalFees
               {paymentError && <div className="rounded-lg p-4 bg-red-900 mb-4"><p className="text-red-300 text-sm">{paymentError}</p></div>}
               <div className="space-y-3">
                 <h3 className="text-white font-medium">Choose Payment Option</h3>
-                <button
-                  disabled={paymentLoading || !squareLoaded}
-                  className="w-full py-3 rounded-xl font-semibold border-2 transition-colors disabled:opacity-50"
-                  style={{ borderColor: 'var(--accent-color)', color: 'var(--accent-color)', backgroundColor: 'transparent' }}
-                  onClick={() => handlePayment('deposit')}
-                >
-                  {paymentLoading && selectedPaymentType === 'deposit' ? 'Processing...' : `Pay Deposit — $${(deposit / 100).toFixed(2)}`}
-                  <span className="block text-xs font-normal mt-0.5 text-gray-400">First night only · Balance due at check-in</span>
-                </button>
+                {showDepositButton && (
+                  <button
+                    disabled={paymentLoading || !squareLoaded}
+                    className="w-full py-3 rounded-xl font-semibold border-2 transition-colors disabled:opacity-50"
+                    style={{ borderColor: 'var(--accent-color)', color: 'var(--accent-color)', backgroundColor: 'transparent' }}
+                    onClick={() => handlePayment('deposit')}
+                  >
+                    {paymentLoading && selectedPaymentType === 'deposit' ? 'Processing...' : `${depositLabel} — $${(deposit / 100).toFixed(2)}`}
+                    {depositSubtext && <span className="block text-xs font-normal mt-0.5 text-gray-400">{depositSubtext}</span>}
+                  </button>
+                )}
                 <button
                   disabled={paymentLoading || !squareLoaded}
                   className="w-full py-3 rounded-xl text-white font-semibold transition-colors disabled:opacity-50"
