@@ -193,7 +193,7 @@ function BookingForm() {
   async function fetchSettings() {
     const { data } = await supabase
       .from('settings')
-      .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message, early_checkin_enabled, early_checkin_price, early_checkin_time, early_checkin_show_customers, late_checkout_enabled, late_checkout_price, late_checkout_time, late_checkout_show_customers, check_in_time, check_out_time, deposit_type, deposit_value')
+      .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message, early_checkin_enabled, early_checkin_price, early_checkin_time, early_checkin_show_customers, late_checkout_enabled, late_checkout_price, late_checkout_time, late_checkout_show_customers, check_in_time, check_out_time, deposit_type, deposit_value, base_occupancy_adults, base_occupancy_children, extra_adult_fee, extra_child_fee')
       .limit(1)
       .single()
     if (data) {
@@ -357,9 +357,13 @@ function BookingForm() {
     return sum + (addon ? addon.price * qty : 0)
   }, 0)
 
-  const extraAdults = Math.max(0, adults - 2)
-  const extraChildren = Math.max(0, children - 2)
-  const extraGuestFee = (extraAdults * 1000 + extraChildren * 500) * site.nights
+  const baseAdults = settings?.base_occupancy_adults ?? 2
+  const baseChildren = settings?.base_occupancy_children ?? 2
+  const extraAdultFee = settings?.extra_adult_fee ?? 0
+  const extraChildFee = settings?.extra_child_fee ?? 0
+  const extraAdults = Math.max(0, adults - baseAdults)
+  const extraChildren = Math.max(0, children - baseChildren)
+  const extraGuestFee = (extraAdults * extraAdultFee + extraChildren * extraChildFee) * site.nights
 
   function feeAppliesToSite(fee: Fee): boolean {
     if (fee.applies_to === 'all') return true
