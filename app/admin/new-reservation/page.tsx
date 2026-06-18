@@ -710,6 +710,7 @@ function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onCompl
   const fee = pricing ? pricing.cardSurcharge(cash) : 0
   const [editingTotal, setEditingTotal] = useState(false)
   const [draftTotal, setDraftTotal] = useState('')
+  const [confirmZero, setConfirmZero] = useState(false)
   const guests = `${form.num_adults} adult${form.num_adults !== 1 ? 's' : ''}${form.num_children ? `, ${form.num_children} child${form.num_children !== 1 ? 'ren' : ''}` : ''}`
   const name = `${form.guest_first} ${form.guest_last}`.trim()
   const continueDisabled =
@@ -798,7 +799,7 @@ function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onCompl
             </div>
           )}
           <button
-            onClick={onComplete}
+            onClick={() => { if (paidCents === 0) { setConfirmZero(true) } else { onComplete() } }}
             disabled={saving}
             className="w-full mt-4 px-5 py-2.5 text-sm rounded-lg bg-green-700 text-white hover:bg-green-800 disabled:opacity-50"
           >
@@ -813,6 +814,41 @@ function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onCompl
             </button>
           )}
           <button onClick={() => setStep((s: Step) => (Math.max(1, s - 1) as Step))} className="w-full mt-2 px-5 py-2 text-sm rounded-lg text-gray-500">Back</button>
+          {confirmZero && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center px-4"
+              style={{ background: 'rgba(0,0,0,0.45)' }}
+              onClick={() => setConfirmZero(false)}
+            >
+              <div
+                className="rounded-2xl p-6 shadow-xl"
+                style={{ background: '#FBF7EE', border: '1px solid #ECE3D2', width: '100%', maxWidth: 360 }}
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="text-lg font-semibold text-gray-800 mb-1.5">No payment today?</div>
+                <p className="text-sm text-gray-600 mb-1">
+                  You're recording <span className="font-semibold">$0.00</span> paid today.
+                </p>
+                <p className="text-sm text-gray-600 mb-5">
+                  The full <span className="font-semibold">{money(grandTotal)}</span> will carry to the folio as balance due. Is that right?
+                </p>
+                <button
+                  onClick={() => { setConfirmZero(false); onComplete() }}
+                  disabled={saving}
+                  className="w-full px-5 py-2.5 text-sm rounded-lg bg-green-700 text-white hover:bg-green-800 disabled:opacity-50 mb-2"
+                >
+                  {saving ? 'Saving…' : 'Yes — nothing paid today'}
+                </button>
+                <button
+                  onClick={() => setConfirmZero(false)}
+                  className="w-full px-5 py-2.5 text-sm rounded-lg border bg-white text-gray-700 hover:bg-gray-50"
+                  style={{ borderColor: '#ECE3D2' }}
+                >
+                  Go back — enter an amount
+                </button>
+              </div>
+            </div>
+          )}
         </>
       ) : (
         <>
@@ -1098,13 +1134,14 @@ function StepReview({ form, set, pricing, settings, effectiveTotal, grandTotal, 
         </div>
       )}
 
-      <div className="text-[13px] font-medium text-gray-600 mb-2.5">Payment</div>
+      <div className="rounded-xl border-2 p-4 mb-2" style={{ borderColor: '#ECE3D2', background: '#FBF7EE' }}>
+      <div className="text-[13px] font-semibold text-gray-700 mb-2.5">Payment</div>
       <label className="text-[13px] text-gray-600 block mb-1">Amount paid today</label>
       <div className="flex items-center gap-2 flex-wrap mb-2">
-        <input type="number" value={form.amount_paid} onChange={e => set({ amount_paid: e.target.value })} placeholder="0.00" className="w-28 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-        <button onClick={() => setPaid(pricing?.firstNightDeposit || 0)} className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 hover:bg-gray-50">First night · {money(pricing?.firstNightDeposit || 0)}</button>
-        <button onClick={() => setPaid(grandTotal)} className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 hover:bg-gray-50">Full · {money(grandTotal)}</button>
-        <button onClick={() => setPaid(0)} className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 hover:bg-gray-50">None</button>
+        <input type="number" value={form.amount_paid} onChange={e => set({ amount_paid: e.target.value })} placeholder="0.00" className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white" />
+        <button onClick={() => setPaid(pricing?.firstNightDeposit || 0)} className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 bg-white hover:bg-gray-50">First night · {money(pricing?.firstNightDeposit || 0)}</button>
+        <button onClick={() => setPaid(grandTotal)} className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 bg-white hover:bg-gray-50">Full · {money(grandTotal)}</button>
+        <button onClick={() => setPaid(0)} className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 bg-white hover:bg-gray-50">None</button>
       </div>
       <div className="text-xs text-gray-400 mb-4">Deposit options come from your settings.</div>
 
@@ -1112,7 +1149,7 @@ function StepReview({ form, set, pricing, settings, effectiveTotal, grandTotal, 
       <div className="flex gap-2 mb-3">
         {methods.map(m => (
           <button key={m.k} onClick={() => set({ payment_method: m.k })}
-            className={`flex-1 py-2 text-sm rounded-lg border ${form.payment_method === m.k ? 'border-2 border-green-600 bg-green-50 text-green-800' : 'border-gray-200 hover:bg-gray-50'}`}>
+            className={`flex-1 py-2 text-sm rounded-lg border ${form.payment_method === m.k ? 'border-2 border-green-600 bg-green-50 text-green-800' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
             {m.label}
           </button>
         ))}
@@ -1136,6 +1173,7 @@ function StepReview({ form, set, pricing, settings, effectiveTotal, grandTotal, 
           )}
         </div>
       )}
+      </div>
     </div>
   )
 }
