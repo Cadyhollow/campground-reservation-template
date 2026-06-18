@@ -53,6 +53,13 @@ type Folio = {
   notes: string
 }
 
+function fmtLedgerDate(ts: string) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return ''
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
 export default function WalkUpFolioPage() {
   const params = useParams()
   const router = useRouter()
@@ -78,6 +85,7 @@ export default function WalkUpFolioPage() {
   const [customDesc, setCustomDesc] = useState('')
   const [customPrice, setCustomPrice] = useState('')
   const [customQty, setCustomQty] = useState('1')
+  const [showEarlier, setShowEarlier] = useState(false)
 
   useEffect(() => { init() }, [folioId])
 
@@ -197,6 +205,45 @@ export default function WalkUpFolioPage() {
   const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
   const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(paymentAmountCents * (cardSurcharge / 100)) : 0
   const totalWithSurcharge = paymentAmountCents + surchargePreview
+  // ---- Chronological ledger: charges + payments interleaved with a running balance ----
+  type LedgerEvent = {
+    key: string
+    kind: 'charge' | 'payment'
+    ts: number
+    order: number
+    label: string
+    sub: string
+    note?: string | null
+    taxAmount?: number
+    amount: number
+    itemId?: string
+    paymentId?: string
+    balanceAfter: number
+  }
+  const ledgerEvents: LedgerEvent[] = []
+  let _lOrder = 0
+  lineItems.forEach((item) => {
+    ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, itemId: item.id, balanceAfter: 0 })
+  })
+  payments.forEach((p) => {
+    ledgerEvents.push({ key: `pay-${p.id}`, kind: 'payment', ts: p.paid_at ? new Date(p.paid_at).getTime() : 0, order: _lOrder++, label: p.method.charAt(0).toUpperCase() + p.method.slice(1), sub: fmtLedgerDate(p.paid_at), note: p.note, amount: p.amount - (p.surcharge_amount || 0), paymentId: p.id, balanceAfter: 0 })
+  })
+  ledgerEvents.sort((a, b) => a.ts - b.ts || a.order - b.order)
+  let _lBal = 0
+  ledgerEvents.forEach(ev => {
+    if (ev.kind === 'charge') _lBal += ev.amount
+    else _lBal -= ev.amount
+    ev.balanceAfter = _lBal
+  })
+  let ledgerFoldIndex = -1
+  for (let i = 0; i < ledgerEvents.length - 1; i++) {
+    if (ledgerEvents[i].balanceAfter === 0) ledgerFoldIndex = i
+  }
+  const ledgerHasFold = ledgerFoldIndex >= 0
+  const ledgerFoldedCount = ledgerHasFold ? ledgerFoldIndex + 1 : 0
+  const ledgerFoldDate = ledgerHasFold ? ledgerEvents[ledgerFoldIndex].sub : ''
+  const visibleLedger = ledgerHasFold && !showEarlier ? ledgerEvents.slice(ledgerFoldIndex + 1) : ledgerEvents
+
   const filteredProducts = products.filter(p => p.category === activeCategory)
 
   if (loading) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Loading folio...</div>
@@ -227,44 +274,76 @@ export default function WalkUpFolioPage() {
 
       <div style={{ display: 'flex', minHeight: 'calc(100vh - 120px)' }}>
         <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none', background: '#C9D2D9' }}>
-          {lineItems.length > 0 && (
+          {ledgerEvents.length > 0 && (
             <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
-              <div style={{ padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>Charges</div>
-              {lineItems.map((item, i) => (
-                <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: i < lineItems.length - 1 ? '1px solid #f9fafb' : 'none' }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>{item.description}{item.quantity > 1 ? ` ×${item.quantity}` : ''}</div>
-                    {item.notes && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 2 }}>{item.notes}</div>}
-                    {item.tax_amount > 0 && <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(item.tax_amount/100).toFixed(2)} tax</div>}
+              <div style={{ display: 'flex', alignItems: 'center', padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6' }}>
+                <div style={{ flex: 1, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>Account</div>
+                <div style={{ width: 80, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#9ca3af' }}>Amount</div>
+                <div style={{ width: 92, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#9ca3af' }}>Balance</div>
+                <div style={{ width: 28, flexShrink: 0 }} />
+              </div>
+
+              {ledgerHasFold && (
+                <button
+                  onClick={() => setShowEarlier(s => !s)}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: '#eef2f5', border: 'none', borderBottom: '1px solid #f3f4f6', cursor: 'pointer', textAlign: 'left', color: '#4a6275', fontSize: 13 }}
+                >
+                  <span style={{ fontSize: 12 }}>{showEarlier ? '▾' : '▸'}</span>
+                  <span>{showEarlier ? `Hide earlier activity · settled ${ledgerFoldDate}` : `Show earlier activity · settled ${ledgerFoldDate} · ${ledgerFoldedCount} ${ledgerFoldedCount === 1 ? 'entry' : 'entries'}`}</span>
+                </button>
+              )}
+
+              {visibleLedger.map((ev) => {
+                const isPay = ev.kind === 'payment'
+                const balPositive = ev.balanceAfter > 0
+                const balZero = ev.balanceAfter === 0
+                const balText = balZero ? 'settled' : balPositive ? 'balance due' : 'change'
+                const balColor = (balZero || !balPositive) ? '#15803d' : '#b45309'
+                return (
+                  <div key={ev.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid #f3f4f6', background: isPay ? '#f0fdf4' : '#fff', borderLeft: isPay ? '3px solid #15803d' : '3px solid transparent' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 500 }}>{ev.label}</div>
+                      <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.sub}{isPay ? ' · payment' : ' · charge'}</div>
+                      {ev.note && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 1 }}>{ev.note}</div>}
+                      {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
+                    </div>
+                    <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 600, color: isPay ? '#15803d' : '#111827' }}>
+                      {isPay ? '−' : ''}${(ev.amount/100).toFixed(2)}
+                    </div>
+                    <div style={{ width: 92, textAlign: 'right' }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: balColor }}>${(Math.abs(ev.balanceAfter)/100).toFixed(2)}</div>
+                      <div style={{ fontSize: 10, color: '#9ca3af' }}>{balText}</div>
+                    </div>
+                    <div style={{ width: 28, flexShrink: 0, textAlign: 'right' }}>
+                      {ev.itemId && (
+                        <button onClick={() => removeLineItem(ev.itemId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: '1' }}>×</button>
+                      )}
+                      {ev.paymentId && (
+                        <button onClick={() => voidPayment(ev.paymentId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: '1' }}>×</button>
+                      )}
+                    </div>
                   </div>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>${(item.line_total/100).toFixed(2)}</div>
-                  <button onClick={() => removeLineItem(item.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: '1' }}>×</button>
+                )
+              })}
+
+              <div style={{ borderTop: '1px solid #e5e7eb', padding: '10px 14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
+                  <span style={{ color: '#6b7280' }}>Total charges</span>
+                  <span style={{ fontWeight: 600 }}>${(itemsTotal/100).toFixed(2)}</span>
                 </div>
-              ))}
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', borderTop: '1px solid #f3f4f6', fontWeight: 700, fontSize: 14 }}>
-                <span>Total</span>
-                <span>${(itemsTotal/100).toFixed(2)}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
+                  <span style={{ color: '#6b7280' }}>Total payments</span>
+                  <span style={{ fontWeight: 600, color: '#15803d' }}>${(paymentsTotal/100).toFixed(2)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderTop: '1px solid #f3f4f6', marginTop: 6, paddingTop: 6 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#374151' }}>{overpaid > 0 ? 'Change due' : totalDue > 0 ? 'Balance due' : 'Settled'}</span>
+                  <span style={{ fontSize: 20, fontWeight: 800, color: totalDue > 0 ? '#dc2626' : overpaid > 0 ? '#6b7280' : '#15803d' }}>${((overpaid > 0 ? overpaid : totalDue)/100).toFixed(2)}</span>
+                </div>
               </div>
             </div>
           )}
 
-          {payments.length > 0 && (
-            <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
-              <div style={{ padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>Payments</div>
-              {payments.map((p, i) => (
-                <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: i < payments.length - 1 ? '1px solid #f9fafb' : 'none' }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 500, textTransform: 'capitalize' }}>{p.method}</div>
-                    {p.note && <div style={{ fontSize: 11, color: '#9ca3af' }}>{p.note}</div>}
-                  </div>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: '#15803d' }}>-${(p.amount/100).toFixed(2)}</div>
-                  <button onClick={() => voidPayment(p.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: '1' }}>×</button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {lineItems.length === 0 && (
+          {ledgerEvents.length === 0 && (
             <div style={{ textAlign: 'center', color: '#9ca3af', padding: '3rem 0', fontSize: 14 }}>No charges yet. Tap Add Items to get started.</div>
           )}
 

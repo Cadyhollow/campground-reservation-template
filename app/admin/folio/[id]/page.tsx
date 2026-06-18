@@ -75,6 +75,13 @@ type Folio = {
   notes: string
 }
 
+function fmtLedgerDate(ts: string) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return ''
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
 export default function FolioPage() {
   const params = useParams()
   const router = useRouter()
@@ -123,6 +130,7 @@ export default function FolioPage() {
   const [processingRefund, setProcessingRefund] = useState(false)
   const [refundError, setRefundError] = useState('')
   const [refundSuccess, setRefundSuccess] = useState(false)
+  const [showEarlier, setShowEarlier] = useState(false)
 
   useEffect(() => { init() }, [reservationId])
 
@@ -540,6 +548,56 @@ export default function FolioPage() {
     balanceColor = '#15803d'
   }
 
+  // ---- Chronological ledger: charges + payments interleaved with a running balance ----
+  type LedgerEvent = {
+    key: string
+    kind: 'charge' | 'payment'
+    ts: number
+    order: number
+    label: string
+    sub: string
+    note?: string | null
+    taxAmount?: number
+    amount: number
+    negative?: boolean
+    itemId?: string
+    payment?: Payment
+    isOpening?: boolean
+    balanceAfter: number
+  }
+  const LEDGER_OPENING_TS = -8640000000000000
+  const ledgerEvents: LedgerEvent[] = []
+  let _lOrder = 0
+  if (reservation) {
+    resLines.forEach((l, i) => {
+      ledgerEvents.push({ key: `res-${i}`, kind: 'charge', ts: LEDGER_OPENING_TS, order: _lOrder++, label: l.label, sub: 'At booking', amount: l.amount, negative: l.negative, isOpening: true, balanceAfter: 0 })
+    })
+    if (reservation.amount_paid > 0) {
+      ledgerEvents.push({ key: 'res-deposit', kind: 'payment', ts: LEDGER_OPENING_TS, order: _lOrder++, label: 'Paid at booking', sub: 'At booking', amount: reservation.amount_paid, isOpening: true, balanceAfter: 0 })
+    }
+  }
+  activeItems.forEach((item) => {
+    ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, itemId: item.id, balanceAfter: 0 })
+  })
+  payments.forEach((p) => {
+    ledgerEvents.push({ key: `pay-${p.id}`, kind: 'payment', ts: p.paid_at ? new Date(p.paid_at).getTime() : 0, order: _lOrder++, label: p.method.charAt(0).toUpperCase() + p.method.slice(1), sub: fmtLedgerDate(p.paid_at), note: p.note, amount: p.amount - (p.surcharge_amount || 0), payment: p, balanceAfter: 0 })
+  })
+  ledgerEvents.sort((a, b) => a.ts - b.ts || a.order - b.order)
+  let _lBal = 0
+  ledgerEvents.forEach(ev => {
+    if (ev.kind === 'charge') _lBal += ev.negative ? -ev.amount : ev.amount
+    else _lBal -= ev.amount
+    ev.balanceAfter = _lBal
+  })
+  let ledgerFoldIndex = -1
+  for (let i = 0; i < ledgerEvents.length - 1; i++) {
+    if (ledgerEvents[i].balanceAfter === 0) ledgerFoldIndex = i
+  }
+  const ledgerHasFold = ledgerFoldIndex >= 0
+  const ledgerFoldedCount = ledgerHasFold ? ledgerFoldIndex + 1 : 0
+  const ledgerFoldDate = ledgerHasFold ? (ledgerEvents[ledgerFoldIndex].isOpening ? 'at booking' : ledgerEvents[ledgerFoldIndex].sub) : ''
+  const visibleLedger = ledgerHasFold && !showEarlier ? ledgerEvents.slice(ledgerFoldIndex + 1) : ledgerEvents
+
   // Card surcharge preview
   const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
   const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee
@@ -617,70 +675,61 @@ export default function FolioPage() {
         {/* Left: Folio tab — receipt style */}
         <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none', background: '#FBF7EE' }}>
 
-          {/* CHARGES — reservation itemized first, then store items */}
-          {(reservation || activeItems.length > 0) && (
+          {/* LEDGER — charges & payments in chronological order with a running balance */}
+          {ledgerEvents.length > 0 && (
             <div style={{ background: '#fff', border: '1px solid #ECE3D2', borderRadius: 12, marginBottom: 14, overflow: 'hidden' }}>
-              <div style={{ padding: '0.7rem 1rem', borderBottom: '1px solid #F3EEE2', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#A1937C' }}>
-                Charges
+              <div style={{ display: 'flex', alignItems: 'center', padding: '0.7rem 1rem', borderBottom: '1px solid #F3EEE2' }}>
+                <div style={{ flex: 1, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#A1937C' }}>Account</div>
+                <div style={{ width: 80, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#C2B7A1' }}>Amount</div>
+                <div style={{ width: 92, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#C2B7A1' }}>Balance</div>
+                <div style={{ width: 78, flexShrink: 0 }} />
               </div>
 
-              {/* Reservation lines */}
-              {reservation && resLines.map((l, i) => (
-                <div key={`r-${i}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 16px', fontSize: 14, borderBottom: '1px solid #FBF8F1' }}>
-                  <span style={{ color: l.negative ? '#15803d' : '#374151' }}>{l.label}</span>
-                  <span style={{ fontWeight: 500, color: l.negative ? '#15803d' : '#111827' }}>{l.negative ? '−' : ''}${(Math.abs(l.amount)/100).toFixed(2)}</span>
-                </div>
-              ))}
-
-              {/* Store / added items */}
-              {activeItems.length > 0 && (
-                <>
-                  {reservation && (
-                    <div style={{ padding: '6px 16px 2px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#C2B7A1' }}>
-                      Store items
-                    </div>
-                  )}
-                  {activeItems.map((item) => (
-                    <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 16px', fontSize: 14, borderBottom: '1px solid #FBF8F1' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 500 }}>{item.description}{item.quantity > 1 ? ` ×${item.quantity}` : ''}</div>
-                        {item.notes && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic' }}>{item.notes}</div>}
-                        {item.tax_amount > 0 && <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(item.tax_amount/100).toFixed(2)} tax</div>}
-                      </div>
-                      <div style={{ fontWeight: 500 }}>${(item.line_total/100).toFixed(2)}</div>
-                      <button onClick={() => removeLineItem(item.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
-                    </div>
-                  ))}
-                </>
+              {ledgerHasFold && (
+                <button
+                  onClick={() => setShowEarlier(s => !s)}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 16px', background: '#FBF8F1', border: 'none', borderBottom: '1px solid #F3EEE2', cursor: 'pointer', textAlign: 'left', color: '#8A7E6B', fontSize: 13 }}
+                >
+                  <span style={{ fontSize: 12 }}>{showEarlier ? '▾' : '▸'}</span>
+                  <span>{showEarlier ? `Hide earlier activity · settled ${ledgerFoldDate}` : `Show earlier activity · settled ${ledgerFoldDate} · ${ledgerFoldedCount} ${ledgerFoldedCount === 1 ? 'entry' : 'entries'}`}</span>
+                </button>
               )}
-            </div>
-          )}
 
-          {/* Payments */}
-          {payments.length > 0 && (
-            <div style={{ background: '#fff', border: '1px solid #ECE3D2', borderRadius: 12, marginBottom: 14, overflow: 'hidden' }}>
-              <div style={{ padding: '0.7rem 1rem', borderBottom: '1px solid #F3EEE2', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#A1937C' }}>
-                Payments
-              </div>
-              {payments.map((p, i) => (
-                <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: i < payments.length - 1 ? '1px solid #FBF8F1' : 'none' }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 500, textTransform: 'capitalize' }}>{p.method}</div>
-                    {p.note && <div style={{ fontSize: 11, color: '#9ca3af' }}>{p.note}</div>}
+              {visibleLedger.map((ev) => {
+                const isPay = ev.kind === 'payment'
+                const balPositive = ev.balanceAfter > 0
+                const balZero = ev.balanceAfter === 0
+                const balText = balZero ? 'settled' : balPositive ? 'balance due' : (isGuestAcct ? 'credit' : 'change')
+                const balColor = (balZero || !balPositive) ? '#15803d' : '#b45309'
+                return (
+                  <div key={ev.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: '1px solid #FBF8F1', background: isPay ? '#F4FBF6' : '#fff', borderLeft: isPay ? '3px solid #15803d' : '3px solid transparent' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 500, color: ev.negative ? '#15803d' : '#374151' }}>{ev.label}</div>
+                      <div style={{ fontSize: 11, color: isPay ? '#7BA88C' : '#A1937C' }}>{ev.sub}{ev.isOpening ? '' : (isPay ? ' · payment' : ' · charge')}</div>
+                      {ev.note && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 1 }}>{ev.note}</div>}
+                      {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
+                    </div>
+                    <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 500, color: isPay ? '#15803d' : (ev.negative ? '#15803d' : '#111827') }}>
+                      {(isPay || ev.negative) ? '−' : ''}${(ev.amount/100).toFixed(2)}
+                    </div>
+                    <div style={{ width: 92, textAlign: 'right' }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: balColor }}>${(Math.abs(ev.balanceAfter)/100).toFixed(2)}</div>
+                      <div style={{ fontSize: 10, color: '#A1937C' }}>{balText}</div>
+                    </div>
+                    <div style={{ width: 78, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                      {ev.itemId && (
+                        <button onClick={() => removeLineItem(ev.itemId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
+                      )}
+                      {ev.payment && ev.payment.status === 'completed' && (
+                        <>
+                          <button onClick={() => openRefund(ev.payment)} style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 5, color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontWeight: 600 }}>Refund</button>
+                          <button onClick={() => voidPayment(ev.payment!.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: p.status === 'refunded' ? '#dc2626' : '#15803d' }}>
-                    {p.status === 'refunded' ? '' : '-'}${(Math.abs(p.amount)/100).toFixed(2)}
-                    {p.status === 'refunded' && <span style={{ fontSize: 10, marginLeft: 4, color: '#dc2626' }}>REFUND</span>}
-                    {p.status === 'partially_refunded' && <span style={{ fontSize: 10, marginLeft: 4, color: '#f59e0b' }}>PARTIAL</span>}
-                  </div>
-                  {p.status === 'completed' && (
-                    <button onClick={() => openRefund(p)} style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 5, color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontWeight: 600 }}>Refund</button>
-                  )}
-                  {p.status !== 'refunded' && (
-                    <button onClick={() => voidPayment(p.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
-                  )}
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
 
