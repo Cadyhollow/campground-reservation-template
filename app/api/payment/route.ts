@@ -39,6 +39,8 @@ export async function POST(request: NextRequest) {
       nights,
       waiverSigned,
       signatureData,
+      feesTotal = 0,
+      surchargeAmount = 0,
     } = body
 
     // Double-check availability before charging
@@ -78,7 +80,7 @@ export async function POST(request: NextRequest) {
           source_id: sourceId,
           idempotency_key: `res-${Date.now()}`,
           amount_money: {
-            amount: amountToPay,
+            amount: amountToPay + (surchargeAmount || 0),
             currency: 'USD',
           },
           location_id: process.env.SQUARE_LOCATION_ID,
@@ -124,6 +126,8 @@ export async function POST(request: NextRequest) {
       discount_amount: discountAmount,
       total_price: totalPrice,
       amount_paid: amountToPay,
+      fees_total: feesTotal || 0,
+      surcharge_amount: surchargeAmount || 0,
       payment_type: paymentType,
       square_payment_id: squarePaymentId,
       waiver_signed: waiverSigned || false,
