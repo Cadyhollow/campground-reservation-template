@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
@@ -100,42 +101,108 @@ export async function POST(request: NextRequest) {
     const squarePaymentId = squareData.payment.id
 
     // Create reservation in database
-    const { data: reservation, error: reservationError } = await supabase
-      .from('reservations')
-      .insert({
-        site_id: siteId,
-        status: 'confirmed',
-        arrival_date: arrival,
-        departure_date: departure,
-        num_adults: adults,
-        num_children: children,
-        guest_name: guestName,
-        guest_email: guestEmail,
-        guest_phone: guestPhone,
-        camper_type: camperType || '',
-        camper_length: camperLength || 0,
-        camper_amperage: camperAmperage || '',
-        base_nightly_rate: nightlyRate,
-        extra_guest_fee_total: extraGuestFee,
-        addons_total: addonTotal,
-        early_checkin: earlyCheckin,
-        early_checkin_fee: earlyCheckinFee,
-        late_checkout: lateCheckout,
-        late_checkout_fee: lateCheckoutFee,
-        discount_amount: discountAmount,
-        total_price: totalPrice,
-        amount_paid: amountToPay,
-        payment_type: paymentType,
-        square_payment_id: squarePaymentId,
-        waiver_signed: waiverSigned || false,
-      })
-      .select()
-      .single()
+    const reservationPayload = {
+      site_id: siteId,
+      status: 'confirmed',
+      arrival_date: arrival,
+      departure_date: departure,
+      num_adults: adults,
+      num_children: children,
+      guest_name: guestName,
+      guest_email: guestEmail,
+      guest_phone: guestPhone,
+      camper_type: camperType || '',
+      camper_length: camperLength || 0,
+      camper_amperage: camperAmperage || '',
+      base_nightly_rate: nightlyRate,
+      extra_guest_fee_total: extraGuestFee,
+      addons_total: addonTotal,
+      early_checkin: earlyCheckin,
+      early_checkin_fee: earlyCheckinFee,
+      late_checkout: lateCheckout,
+      late_checkout_fee: lateCheckoutFee,
+      discount_amount: discountAmount,
+      total_price: totalPrice,
+      amount_paid: amountToPay,
+      payment_type: paymentType,
+      square_payment_id: squarePaymentId,
+      waiver_signed: waiverSigned || false,
+    }
+
+    // Insert the reservation, retrying once on a transient failure.
+    let reservation: any = null
+    let reservationError: any = null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await supabase
+        .from('reservations')
+        .insert(reservationPayload)
+        .select()
+        .single()
+      reservation = result.data
+      reservationError = result.error
+      if (!reservationError) break
+      console.error(`Reservation insert attempt ${attempt + 1} failed:`, reservationError)
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 400))
+    }
 
     if (reservationError) {
-      console.error('Reservation error:', reservationError)
+      console.error('Reservation error (after retry):', reservationError)
+      const errMsg = reservationError.message || String(reservationError)
+
+      try {
+        await supabase.from('failed_bookings').insert({
+          guest_name: guestName,
+          guest_email: guestEmail,
+          guest_phone: guestPhone,
+          amount_paid: amountToPay,
+          square_payment_id: squarePaymentId,
+          error_message: errMsg,
+          attempted_arrival: arrival,
+          attempted_departure: departure,
+          site_id: siteId,
+        })
+      } catch (logErr) {
+        console.error('Could not write to failed_bookings:', logErr)
+      }
+
+      try {
+        const { data: alertSettings } = await supabase
+          .from('settings')
+          .select('park_name, park_email')
+          .single()
+        const parkName = alertSettings?.park_name || 'Campground'
+        const recipients = ['resonationsystems@gmail.com']
+        if (alertSettings?.park_email) recipients.unshift(alertSettings.park_email)
+
+        const resend = new Resend(process.env.RESEND_API_KEY)
+        await resend.emails.send({
+          from: 'ResoNation Alerts <alerts@myresonation.com>',
+          to: recipients,
+          subject: `\u26a0\ufe0f Charged but NO booking at ${parkName}: ${guestName} ($${(amountToPay / 100).toFixed(2)})`,
+          html: `<h2>Online booking failed after the card was charged</h2>
+<p>A guest's card was charged on <strong>${parkName}</strong>'s booking system, but the reservation could not be created. The guest has <strong>not</strong> received a confirmation. <strong>Do not charge them again.</strong></p>
+<ul>
+<li><strong>Guest:</strong> ${guestName}</li>
+<li><strong>Email:</strong> ${guestEmail || 'N/A'}</li>
+<li><strong>Phone:</strong> ${guestPhone || 'N/A'}</li>
+<li><strong>Amount charged:</strong> $${(amountToPay / 100).toFixed(2)}</li>
+<li><strong>Square payment ID:</strong> ${squarePaymentId}</li>
+<li><strong>Dates:</strong> ${arrival} &rarr; ${departure}</li>
+<li><strong>Error:</strong> ${errMsg}</li>
+</ul>
+<p>Next step: create the reservation manually (record this payment as already collected &mdash; do not re-charge), or refund the Square payment above.</p>`,
+        })
+      } catch (alertErr) {
+        console.error('Could not send orphaned-charge alert:', alertErr)
+      }
+
       return NextResponse.json(
-        { error: 'Payment succeeded but reservation creation failed. Please contact us immediately.' },
+        {
+          error: `Your card was charged $${(amountToPay / 100).toFixed(2)}, but something went wrong finalizing your reservation. Please call the campground to confirm your booking \u2014 do NOT pay again. (Reference: ${squarePaymentId})`,
+          chargedButNoReservation: true,
+          paymentId: squarePaymentId,
+          detail: errMsg,
+        },
         { status: 500 }
       )
     }
