@@ -267,6 +267,7 @@ export async function POST(request: NextRequest) {
           camperAmperage: camperAmperage || '',
           totalPrice,
           amountPaid: amountToPay,
+          surchargeAmount: surchargeAmount || 0,
           paymentType,
           confirmationNumber: reservation.id.slice(0, 8).toUpperCase(),
           addonDetails,

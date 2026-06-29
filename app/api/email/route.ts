@@ -35,6 +35,7 @@ export async function POST(request: NextRequest) {
       camperAmperage = '',
       totalPrice,
       amountPaid,
+      surchargeAmount = 0,
       paymentType,
       confirmationNumber,
       addonDetails = [],
@@ -217,8 +218,18 @@ export async function POST(request: NextRequest) {
                   <td style="padding:8px 0 6px;color:#ffffff;font-size:15px;font-weight:bold;text-align:right;">$${(totalPrice / 100).toFixed(2)}</td>
                 </tr>
                 <tr>
-                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;">Paid Today</td>
-                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">$${(amountPaid / 100).toFixed(2)}</td>
+                ${surchargeAmount > 0 ? `
+                <tr>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:13px;">Stay payment</td>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:13px;text-align:right;">$${(amountPaid / 100).toFixed(2)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:13px;">Card processing fee</td>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:13px;text-align:right;">$${(surchargeAmount / 100).toFixed(2)}</td>
+                </tr>` : ''}
+                <tr>
+                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;font-weight:bold;">Paid Today</td>
+                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;font-weight:bold;text-align:right;">$${((amountPaid + surchargeAmount) / 100).toFixed(2)}</td>
                 </tr>
                 ${balanceDue > 0 ? `
                 <tr>

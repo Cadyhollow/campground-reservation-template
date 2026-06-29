@@ -81,6 +81,7 @@ export default function ReportsPage() {
   // Booking payments recorded on reservations (deposits / online), keyed by created_at.
   // Disjoint from folio_payments, so safe to add to payment-date revenue.
   const [bookingPaymentsTotal, setBookingPaymentsTotal] = useState(0)
+  const [bookingSurchargeTotal, setBookingSurchargeTotal] = useState(0)
   const [guestAccountLineItems, setGuestAccountLineItems] = useState<LineItemRow[]>([])
   const [seasonalCampers, setSeasonalCampers] = useState<SeasonalCamper[]>([])
   const [monthlyRevenue, setMonthlyRevenue] = useState(0)
@@ -247,7 +248,7 @@ export default function ReportsPage() {
     // Reservation booking payments (deposits / online) within the payment window.
     const { data: bookingPmts } = await supabase
       .from('reservations')
-      .select('amount_paid, created_at')
+      .select('amount_paid, surcharge_amount, created_at')
       .gt('amount_paid', 0)
       .neq('status', 'cancelled')
       .gte('created_at', startISO)
@@ -392,7 +393,7 @@ export default function ReportsPage() {
   const totalCash = allPayments.filter(t=>t.method==='cash').reduce((s,t)=>s+t.amount,0)/100
   const totalCard = allPayments.filter(t=>t.method==='card').reduce((s,t)=>s+t.amount,0)/100
   const totalCheck = allPayments.filter(t=>t.method==='check').reduce((s,t)=>s+t.amount,0)/100
-  const totalSurcharge = allPayments.reduce((s,t)=>s+(t.surcharge_amount||0),0)/100
+  const totalSurcharge = (allPayments.reduce((s,t)=>s+(t.surcharge_amount||0),0) + bookingSurchargeTotal)/100
   const outstandingBalance = seasonalCampers.reduce((s,c)=>s+Math.max(0,c.balance),0)/100
   const creditBalance = seasonalCampers.reduce((s,c)=>s+Math.abs(Math.min(0,c.balance)),0)/100
   const overdueCampers = seasonalCampers.filter(c=>c.balance>0)
