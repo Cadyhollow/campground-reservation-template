@@ -331,7 +331,10 @@ function BookingForm() {
   }
 
   function proceedFromAddons() {
-    if (!waiverEnabled) {
+    // Advance whenever the waiver UI isn't being shown (waiver off, or no waiver
+    // text configured). Mirrors the button's own render condition so it can't
+    // render an inert button.
+    if (!waiverEnabled || !waiverText) {
       setWaiverSigned(true)
       setStep(3)
     }
