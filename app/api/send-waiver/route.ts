@@ -7,7 +7,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
-const resend = new Resend(process.env.RESEND_API_KEY)
+function getResend() { return new Resend(process.env.RESEND_API_KEY) }
 
 // POST /api/send-waiver
 // body: { reservationId, sendEmail?: boolean }
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
       const replyToEmail = settings?.park_email || process.env.RESEND_FROM_EMAIL || 'info@example.com'
 
       try {
-        const { error: sendErr } = await resend.emails.send({
+        const { error: sendErr } = await getResend().emails.send({
           from: `${campgroundName} <${fromEmail}>`,
           replyTo: replyToEmail,
           to: reservation.guest_email,

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
+function getResend() { return new Resend(process.env.RESEND_API_KEY) }
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -125,7 +125,7 @@ export async function POST(request: NextRequest) {
 </body>
 </html>`
 
-      await resend.emails.send({
+      await getResend().emails.send({
         from: `${campgroundName} <${fromEmail}>`,
         replyTo: replyToEmail,
         to: folio.guest_email,
@@ -157,7 +157,7 @@ ${campgroundName}`
 
       const gmailFrom = process.env.RESEND_GMAIL_FROM || fromEmail
 
-      await resend.emails.send({
+      await getResend().emails.send({
         from: `${campgroundName} <${gmailFrom}>`,
         replyTo: replyToEmail,
         to: folio.guest_email,
