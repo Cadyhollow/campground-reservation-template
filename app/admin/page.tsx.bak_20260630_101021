@@ -41,7 +41,6 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true)
   const [dashboardView, setDashboardView] = useState<'owner'|'staff'>('staff')
   const [slideOut, setSlideOut] = useState<'arrivals'|'departures'|null>(null)
-  const [departuresToday, setDeparturesToday] = useState<any[]>([])
   const [walkinCountToday, setWalkinCountToday] = useState(0)
   const [sitesAvailableTonight, setSitesAvailableTonight] = useState(0)
 
@@ -59,21 +58,11 @@ export default function AdminDashboard() {
   useEffect(() => { fetchAll() }, [])
 
   async function fetchAll() {
-    const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    const now = new Date()
-    const today = ymd(now)
-    const firstOfMonth = ymd(new Date(now.getFullYear(), now.getMonth(), 1))
-    const lastOfMonth = ymd(new Date(now.getFullYear(), now.getMonth() + 1, 0))
+    const today = new Date().toISOString().split('T')[0]
+    const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
+    const lastOfMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0]
 
-    const [
-      { data: settingsData },
-      { data: resData },
-      { data: todayArrivals },
-      { data: todayDepartures },
-      { data: monthData },
-      { data: upcomingData },
-      { count: occupiedCount },
-    ] = await Promise.all([
+    const [{ data: settingsData }, { data: resData }, { data: todayArrivals }] = await Promise.all([
       supabase.from('settings').select('*').limit(1).single(),
       supabase.from('reservations')
         .select('*, sites(site_number, site_type)')
@@ -84,29 +73,8 @@ export default function AdminDashboard() {
         .select('*, sites(site_number, site_type)')
         .eq('arrival_date', today)
         .neq('status', 'cancelled'),
-      supabase.from('reservations')
-        .select('*, sites(site_number, site_type)')
-        .eq('departure_date', today)
-        .neq('status', 'cancelled'),
-      supabase.from('reservations')
-        .select('id, amount_paid, arrival_date')
-        .gte('arrival_date', firstOfMonth)
-        .lte('arrival_date', lastOfMonth)
-        .neq('status', 'cancelled'),
-      supabase.from('reservations')
-        .select('*, sites(site_number, site_type)')
-        .gte('arrival_date', today)
-        .neq('status', 'cancelled')
-        .order('arrival_date', { ascending: true })
-        .limit(5),
-      supabase.from('reservations')
-        .select('id', { count: 'exact', head: true })
-        .lt('arrival_date', today)
-        .gt('departure_date', today)
-        .neq('status', 'cancelled'),
     ])
 
-    setDeparturesToday(todayDepartures || [])
     if (settingsData) {
       setSettings(settingsData)
       if (settingsData.plan) setPlan(settingsData.plan)
@@ -117,13 +85,13 @@ export default function AdminDashboard() {
       // webhook amount_paid mirror doesn't drop folio money. Single source of
       // truth: amount_paid (booking) + folio_payments (folio/walk-in/POS),
       // counted net of card surcharge to match the arrivals bridge.
-      const foldIds = Array.from(new Set([...(monthData || []).map((r: any) => r.id), ...(upcomingData || []).map((r: any) => r.id)]))
+      const resIds = resData.map((r: any) => r.id)
       const folioPaidByRes: Record<string, number> = {}
-      if (foldIds.length > 0) {
+      if (resIds.length > 0) {
         const { data: dashFolios } = await supabase
           .from('folios')
           .select('id, reservation_id')
-          .in('reservation_id', foldIds)
+          .in('reservation_id', resIds)
         const dashFolioList = dashFolios || []
         const dashFolioIds = dashFolioList.map((f: any) => f.id)
         if (dashFolioIds.length > 0) {
@@ -141,24 +109,32 @@ export default function AdminDashboard() {
           }
         }
       }
-      const thisMonth = monthData || []
+      const thisMonth = resData.filter((r: any) =>
+        r.arrival_date >= firstOfMonth && r.arrival_date <= lastOfMonth
+      )
+      const arrivals = resData.filter((r: any) => r.arrival_date === today)
+      const departures = resData.filter((r: any) => r.departure_date === today)
       const revenue = thisMonth.reduce((sum: number, r: any) => sum + (r.amount_paid || 0) + (folioPaidByRes[r.id] || 0), 0)
 
       setStats({
         totalThisMonth: thisMonth.length,
-        arrivalsToday: (todayArrivals || []).length,
-        departuresToday: (todayDepartures || []).length,
+        arrivalsToday: arrivals.length,
+        departuresToday: departures.length,
         revenueThisMonth: revenue,
       })
       setRecentReservations(resData.slice(0, 8))
-      const upcoming = (upcomingData || [])
+      const upcoming = resData
+        .filter((r: any) => r.arrival_date >= today)
+        .sort((a: any, b: any) => a.arrival_date.localeCompare(b.arrival_date))
+        .slice(0, 5)
         .map((r: any) => ({ ...r, total_paid: (r.amount_paid || 0) + (folioPaidByRes[r.id] || 0) }))
       setUpcomingReservations(upcoming)
-      setOccupancyTonight({
-        arriving: (todayArrivals || []).length,
-        occupied: occupiedCount || 0,
-        departing: (todayDepartures || []).length,
-      })
+      const occupiedTonight = resData.filter((r: any) =>
+        r.arrival_date < today && r.departure_date > today
+      ).length
+      const arrivingTonight = resData.filter((r: any) => r.arrival_date === today).length
+      const departingTonight = resData.filter((r: any) => r.departure_date === today).length
+      setOccupancyTonight({ arriving: arrivingTonight, occupied: occupiedTonight, departing: departingTonight })
     }
     const { count } = await supabase
       .from('sites')
@@ -610,9 +586,9 @@ export default function AdminDashboard() {
                 })
               )}
               {slideOut==='departures' && (
-                departuresToday.length===0 ? (
+                recentReservations.filter(r=>r.departure_date===new Date().toISOString().split('T')[0]).length===0 ? (
                   <p className="text-gray-400 text-sm text-center py-12">No departures today</p>
-                ) : departuresToday.map((r:any)=>(
+                ) : recentReservations.filter(r=>r.departure_date===new Date().toISOString().split('T')[0]).map((r:any)=>(
                   <div key={r.id} className="px-6 py-4 border-b border-gray-50">
                     <div className="flex items-center justify-between mb-1">
                       <span className="font-semibold text-gray-900">{r.guest_name}</span>

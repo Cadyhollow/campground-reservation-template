@@ -477,12 +477,6 @@ export default function NewReservationWizard() {
   }
 
   function resetWizard() {
-    // Tear down the Square card so the next booking re-initializes cleanly.
-    // Without this, cardLoadingRef stays true from the prior booking and the
-    // payment step's loadSquareCard() bails at its guard -> blank card area.
-    if (squareCardRef) { try { squareCardRef.destroy() } catch {} }
-    setSquareCardRef(null)
-    cardLoadingRef.current = false
     setConfirmation(null)
     setNewReservationId(null)
     setNewFolioId(null)
