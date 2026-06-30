@@ -72,7 +72,7 @@ export default function AdminDashboard() {
       { data: todayDepartures },
       { data: monthData },
       { data: upcomingData },
-      { count: occupiedCount },
+      { count: occupiedTonightCount },
     ] = await Promise.all([
       supabase.from('settings').select('*').limit(1).single(),
       supabase.from('reservations')
@@ -156,7 +156,7 @@ export default function AdminDashboard() {
       setUpcomingReservations(upcoming)
       setOccupancyTonight({
         arriving: (todayArrivals || []).length,
-        occupied: occupiedCount || 0,
+        occupied: occupiedTonightCount || 0,
         departing: (todayDepartures || []).length,
       })
     }
