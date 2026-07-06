@@ -1,4 +1,5 @@
 'use client'
+import { allPaymentMethods, methodLabel } from '@/lib/transactions'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
@@ -99,12 +100,14 @@ export default function ElectricBillingPage() {
   const router = useRouter()
 
   useEffect(() => {
-    supabase.from('settings').select('plan, pos_enabled, seasonal_enabled').single().then(({ data }) => {
+    supabase.from('settings').select('plan, pos_enabled, seasonal_enabled, custom_payment_methods').single().then(({ data }) => {
+      setCustomMethods((data as any)?.custom_payment_methods || [])
       if (data?.plan !== 'summit' || !data?.seasonal_enabled) router.replace('/admin')
     })
   }, [])
 
   const [campers, setCampers] = useState<CamperRow[]>([])
+  const [customMethods, setCustomMethods] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [ratePerKwh, setRatePerKwh] = useState('0.27')
   const [minimumCharge, setMinimumCharge] = useState('15.00')
@@ -695,10 +698,7 @@ export default function ElectricBillingPage() {
                             <div>
                               <label style={{ ...lbl, marginTop: 0 }}>Method</label>
                               <select style={{ ...si, width: 120 }} value={row.paymentMethod} onChange={e => updatePaymentField(i, 'paymentMethod', e.target.value)}>
-                                <option value='cash'>Cash</option>
-                                <option value='check'>Check</option>
-                                <option value='card'>Card</option>
-                                <option value='venmo'>Venmo</option>
+                                {allPaymentMethods(customMethods).map(m => <option key={m} value={m}>{methodLabel(m)}</option>)}
                                 <option value='other'>Other</option>
                               </select>
                               {row.paymentMethod === 'card' && (

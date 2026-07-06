@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
+import { Resend } from 'resend'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -40,6 +40,7 @@ export async function POST(request: NextRequest) {
       waiverSigned,
       signatureData,
       feesTotal = 0,
+      cardOnlyFeesTotal = 0,
       surchargeAmount = 0,
     } = body
 
@@ -85,7 +86,8 @@ export async function POST(request: NextRequest) {
           },
           location_id: process.env.SQUARE_LOCATION_ID,
           buyer_email_address: guestEmail,
-          note: `Campground Reservation`,
+          note: `${guestName} | Site ${siteData?.site_number || siteId} | ${arrival} to ${departure}`,
+          reference_id: `${guestName.replace(/\s+/g, '-').toUpperCase()}-${arrival}`,
         }),
       }
     )
@@ -118,6 +120,8 @@ export async function POST(request: NextRequest) {
       camper_amperage: camperAmperage || '',
       base_nightly_rate: nightlyRate,
       extra_guest_fee_total: extraGuestFee,
+      fees_total: feesTotal || 0,
+      surcharge_amount: surchargeAmount || 0,
       addons_total: addonTotal,
       early_checkin: earlyCheckin,
       early_checkin_fee: earlyCheckinFee,
@@ -126,14 +130,15 @@ export async function POST(request: NextRequest) {
       discount_amount: discountAmount,
       total_price: totalPrice,
       amount_paid: amountToPay,
-      fees_total: feesTotal || 0,
-      surcharge_amount: surchargeAmount || 0,
       payment_type: paymentType,
+      payment_method: 'card', // online bookings are always paid by card
       square_payment_id: squarePaymentId,
       waiver_signed: waiverSigned || false,
     }
 
-    // Insert the reservation, retrying once on a transient failure.
+    // Insert the reservation, retrying once on a transient failure. Brief Supabase
+    // connection blips are common and usually clear on a second attempt — this turns
+    // most would-be "charged but no booking" cases back into successful bookings.
     let reservation: any = null
     let reservationError: any = null
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -149,6 +154,10 @@ export async function POST(request: NextRequest) {
       if (attempt === 0) await new Promise((r) => setTimeout(r, 400))
     }
 
+    // If the insert STILL failed after the retry, the card was already charged but
+    // no reservation exists. We do NOT auto-refund. Instead we record the orphaned
+    // charge to failed_bookings and email staff so it can be completed by hand or
+    // refunded from Square.
     if (reservationError) {
       console.error('Reservation error (after retry):', reservationError)
       const errMsg = reservationError.message || String(reservationError)
@@ -170,21 +179,14 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        const { data: alertSettings } = await supabase
-          .from('settings')
-          .select('park_name, park_email')
-          .single()
-        const parkName = alertSettings?.park_name || 'Campground'
-        const recipients = ['resonationsystems@gmail.com']
-        if (alertSettings?.park_email) recipients.unshift(alertSettings.park_email)
-
         const resend = new Resend(process.env.RESEND_API_KEY)
+        const alertFrom = 'alerts@cadyhollow.com'
         await resend.emails.send({
-          from: 'ResoNation Alerts <alerts@myresonation.com>',
-          to: recipients,
-          subject: `\u26a0\ufe0f Charged but NO booking at ${parkName}: ${guestName} ($${(amountToPay / 100).toFixed(2)})`,
+          from: `Cady Hollow Alerts <${alertFrom}>`,
+          to: 'cadyhollowcg@gmail.com',
+          subject: `\u26a0\ufe0f Charged but NO booking: ${guestName} ($${(amountToPay / 100).toFixed(2)})`,
           html: `<h2>Online booking failed after the card was charged</h2>
-<p>A guest's card was charged on <strong>${parkName}</strong>'s booking system, but the reservation could not be created. The guest has <strong>not</strong> received a confirmation. <strong>Do not charge them again.</strong></p>
+<p>A guest's card was charged but the reservation could not be created. They have <strong>not</strong> received a confirmation. <strong>Do not charge them again.</strong></p>
 <ul>
 <li><strong>Guest:</strong> ${guestName}</li>
 <li><strong>Email:</strong> ${guestEmail || 'N/A'}</li>
@@ -265,6 +267,8 @@ export async function POST(request: NextRequest) {
           camperType: camperType || '',
           camperLength: camperLength || 0,
           camperAmperage: camperAmperage || '',
+          earlyCheckin, earlyCheckinFee,
+          lateCheckout, lateCheckoutFee,
           totalPrice,
           amountPaid: amountToPay,
           surchargeAmount: surchargeAmount || 0,
@@ -274,6 +278,7 @@ export async function POST(request: NextRequest) {
           extraGuestFee,
           discountAmount,
           discountCode: discountCode || null,
+          feesTotal: feesTotal || 0,
         }),
       })
     } catch (e) {

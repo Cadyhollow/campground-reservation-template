@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import { fetchUnifiedTransactions, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
 
 type Reservation = {
   id: string
@@ -76,6 +77,8 @@ export default function ReportsPage() {
   const [cancelledReservations, setCancelledReservations] = useState<Reservation[]>([])
   const [resPayments, setResPayments] = useState<PaymentRow[]>([])
   const [transactions, setTransactions] = useState<PaymentRow[]>([])
+  const [unifiedTx, setUnifiedTx] = useState<UnifiedPayment[]>([])
+  const [customMethods, setCustomMethods] = useState<string[]>([])
   const [lineItems, setLineItems] = useState<LineItemRow[]>([])
   const [guestAccountPayments, setGuestAccountPayments] = useState<PaymentRow[]>([])
   // Booking payments recorded on reservations (deposits / online), keyed by created_at.
@@ -165,7 +168,8 @@ export default function ReportsPage() {
     const today = new Date().toISOString().split('T')[0]
 
     // Load settings for total_sites and total_cabins
-    const { data: settingsData } = await supabase.from('settings').select('total_sites, total_cabins').single()
+    const { data: settingsData } = await supabase.from('settings').select('total_sites, total_cabins, custom_payment_methods').single()
+    setCustomMethods(settingsData?.custom_payment_methods || [])
     const configuredSites = settingsData?.total_sites || 84
     const configuredCabins = settingsData?.total_cabins || 3
     setTotalSites(configuredSites)
@@ -254,6 +258,7 @@ export default function ReportsPage() {
       .gte('created_at', startISO)
       .lte('created_at', endISO)
     setBookingPaymentsTotal((bookingPmts || []).reduce((sum: number, r: any) => sum + (r.amount_paid || 0), 0))
+    setBookingSurchargeTotal((bookingPmts || []).reduce((sum: number, r: any) => sum + (r.surcharge_amount || 0), 0))
 
     // Store line items — fetch ALL line items in date range, exclude guest_account folios
     const guestAccountFolioIdSet = new Set(allGaFolioIds)
@@ -326,6 +331,9 @@ export default function ReportsPage() {
     const typedPmtData = pmtData as any[]
     setResPayments(typedPmtData.filter((p:any)=>p.folios?.reservation_id!==null&&p.folios?.folio_type!=='guest_account'))
     setTransactions(typedPmtData)
+    // Unified transaction log (folio + booking payments) — same source as /admin/transactions
+    const uni = await fetchUnifiedTransactions(start + 'T00:00:00', end + 'T23:59:59')
+    setUnifiedTx(uni)
     setGuestAccountPayments(typedPmtData.filter((p:any)=>p.folios?.folio_type==='guest_account'))
     setLoading(false)
   }
@@ -390,9 +398,12 @@ export default function ReportsPage() {
   const totalCombined = resRevenue + (posEnabled?posRevenue:0) + electricRevenue + otherGuestRevenue
   // All payments for method breakdown
   const allPayments = [...transactions]
-  const totalCash = allPayments.filter(t=>t.method==='cash').reduce((s,t)=>s+t.amount,0)/100
-  const totalCard = allPayments.filter(t=>t.method==='card').reduce((s,t)=>s+t.amount,0)/100
-  const totalCheck = allPayments.filter(t=>t.method==='check').reduce((s,t)=>s+t.amount,0)/100
+  const methods = allPaymentMethods(customMethods)
+  // Method breakdown from the UNIFIED list (folio + booking payments) — gross amounts
+  const methodTotals = methods.map(m => ({
+    method: m,
+    value: unifiedTx.filter(t => t.method === m).reduce((s, t) => s + t.amount, 0) / 100,
+  }))
   const totalSurcharge = (allPayments.reduce((s,t)=>s+(t.surcharge_amount||0),0) + bookingSurchargeTotal)/100
   const outstandingBalance = seasonalCampers.reduce((s,c)=>s+Math.max(0,c.balance),0)/100
   const creditBalance = seasonalCampers.reduce((s,c)=>s+Math.abs(Math.min(0,c.balance)),0)/100
@@ -445,17 +456,18 @@ export default function ReportsPage() {
   // Average days between when a booking was made (created_at) and arrival — booking lead time.
   const avgLeadTime = reservations.length>0 ? reservations.reduce((sum,r)=>{ const days=Math.round((new Date(r.arrival_date+'T12:00:00').getTime()-new Date(r.created_at).getTime())/86400000); return sum+Math.max(0,days) },0)/reservations.length : 0
 
-  // Transactions filtering
-  const filteredTransactions = transactions.filter(t => {
-    const folio = t.folios as any
-    const matchSearch = txSearch===''||((folio?.guest_name||'').toLowerCase().includes(txSearch.toLowerCase()))
+  // Transactions filtering — unified source (folio + booking payments)
+  const filteredTransactions = unifiedTx.filter(t => {
+    const matchSearch = txSearch===''||t.guest_name.toLowerCase().includes(txSearch.toLowerCase())
     const matchMethod = txMethodFilter==='all'||t.method===txMethodFilter
-    const matchType = txTypeFilter==='all'||(txTypeFilter==='reservation'&&folio?.reservation_id!==null)||(txTypeFilter==='walkin'&&folio?.reservation_id===null)
+    const matchType = txTypeFilter==='all'
+      ||(txTypeFilter==='reservation'&&(t.folio_type==='reservation'||t.is_reservation_payment))
+      ||(txTypeFilter==='walkin'&&(t.folio_type==='walkin'||t.folio_type==='walkup'))
     const matchDateFrom = !txDateFrom || (t.paid_at && t.paid_at >= txDateFrom)
     const matchDateTo = !txDateTo || (t.paid_at && t.paid_at <= txDateTo+'T23:59:59')
     return matchSearch&&matchMethod&&matchType&&matchDateFrom&&matchDateTo
   })
-  const txByDay: { [day: string]: PaymentRow[] } = {}
+  const txByDay: { [day: string]: UnifiedPayment[] } = {}
   filteredTransactions.forEach(t => {
     if (!t.paid_at) return
     const day = new Date(t.paid_at).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'})
@@ -693,8 +705,9 @@ export default function ReportsPage() {
               <div className="bg-white rounded-2xl border border-gray-200 p-5">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">Payment Methods</h2>
                 <div className="space-y-3">
-                  {[{label:'Cash',value:totalCash,color:'#f59e0b'},{label:'Card',value:totalCard,color:'#8b5cf6'},{label:'Check',value:totalCheck,color:'#6b7280'}].map(m=>{
-                    const total=totalCash+totalCard+totalCheck
+                  {methodTotals.map(mt=>{
+                    const m={label:methodLabel(mt.method),value:mt.value,color:methodColor(mt.method,customMethods)}
+                    const total=methodTotals.reduce((s,x)=>s+x.value,0)
                     const pct=total>0?Math.round((m.value/total)*100):0
                     return (
                       <div key={m.label}>
@@ -911,10 +924,7 @@ export default function ReportsPage() {
                 <input type="text" placeholder="Search guest name..." className="border border-gray-200 rounded-lg px-3 py-2 text-sm flex-1 min-w-40" value={txSearch} onChange={e=>setTxSearch(e.target.value)}/>
                 <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white" value={txMethodFilter} onChange={e=>setTxMethodFilter(e.target.value)}>
                   <option value="all">All Methods</option>
-                  <option value="cash">Cash</option>
-                  <option value="card">Card</option>
-                  <option value="check">Check</option>
-                  <option value="venmo">Venmo</option>
+                  {methods.map(m=><option key={m} value={m}>{methodLabel(m)}</option>)}
                 </select>
                 <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white" value={txTypeFilter} onChange={e=>setTxTypeFilter(e.target.value)}>
                   <option value="all">All Types</option>
@@ -929,11 +939,12 @@ export default function ReportsPage() {
             </div>
 
             {/* Summary */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 gap-4" data-txcards>
+              <style>{`@media (min-width: 768px) { [data-txcards] { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)) !important; } }`}</style>
               <KPICard label="Total Collected" value={'$'+(filteredTransactions.reduce((s,t)=>s+t.amount,0)/100).toFixed(2)} sub="all methods"/>
-              <KPICard label="Cash" value={'$'+(filteredTransactions.filter(t=>t.method==='cash').reduce((s,t)=>s+t.amount,0)/100).toFixed(2)}/>
-              <KPICard label="Card" value={'$'+(filteredTransactions.filter(t=>t.method==='card').reduce((s,t)=>s+t.amount,0)/100).toFixed(2)}/>
-              <KPICard label="Check" value={'$'+(filteredTransactions.filter(t=>t.method==='check').reduce((s,t)=>s+t.amount,0)/100).toFixed(2)}/>
+              {methods.map(m=>(
+                <KPICard key={m} label={methodLabel(m)} value={'$'+(filteredTransactions.filter(t=>t.method===m).reduce((s,t)=>s+t.amount,0)/100).toFixed(2)}/>
+              ))}
             </div>
 
             {/* Transaction log */}
@@ -953,18 +964,19 @@ export default function ReportsPage() {
                         </div>
                         <div className="space-y-1">
                           {dayTx.map(t=>{
-                            const folio=t.folios as any
                             const timeStr=t.paid_at?new Date(t.paid_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):''
-                            const isWalkup=folio?.reservation_id===null
+                            const isWalkup=t.folio_type==='walkin'||t.folio_type==='walkup'
+                            const isBooking=t.is_reservation_payment
                             return (
-                              <div key={t.id} onClick={()=>openTransaction(t)}
+                              <div key={t.id} onClick={()=>isBooking?router.push('/admin/reservations?id='+t.reservation_id):openTransaction(t as any)}
                                 className="flex items-center justify-between py-2.5 px-3 rounded-xl hover:bg-blue-50 cursor-pointer border border-transparent hover:border-blue-100 transition-all">
                                 <div className="flex items-center gap-3 min-w-0">
-                                  <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${t.method==='cash'?'bg-amber-400':t.method==='card'?'bg-purple-400':t.method==='venmo'?'bg-blue-400':'bg-gray-400'}`}/>
+                                  <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{background:methodColor(t.method,customMethods)}}/>
                                   <div className="min-w-0">
                                     <div className="text-sm font-medium text-gray-900 truncate">
-                                      {folio?.guest_name||'Walk-up Guest'}
+                                      {t.guest_name||'Walk-up Guest'}
                                       {isWalkup&&<span className="ml-2 text-xs text-blue-600 font-normal bg-blue-50 px-1.5 py-0.5 rounded">Walk-up</span>}
+                                      {isBooking&&<span className="ml-2 text-xs text-emerald-600 font-normal bg-emerald-50 px-1.5 py-0.5 rounded">Online</span>}
                                     </div>
                                     <div className="text-xs text-gray-400">{timeStr} · {t.method}</div>
                                   </div>
@@ -1167,7 +1179,7 @@ export default function ReportsPage() {
             {/* Panel header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-white">
               <div>
-                <h2 className="text-lg font-bold text-gray-900">{(selectedTx.folios as any)?.guest_name||'Walk-up Guest'}</h2>
+                <h2 className="text-lg font-bold text-gray-900">{(selectedTx as any).guest_name||(selectedTx.folios as any)?.guest_name||'Walk-up Guest'}</h2>
                 <p className="text-xs text-gray-400 mt-0.5">
                   {selectedTx.paid_at?new Date(selectedTx.paid_at).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}):''} · {selectedTx.method}
                 </p>
@@ -1222,7 +1234,7 @@ export default function ReportsPage() {
                             <div className="flex items-center justify-between">
                               <div>
                                 <div className="flex items-center gap-2">
-                                  <div className={`w-2 h-2 rounded-full ${p.method==='cash'?'bg-amber-400':p.method==='card'?'bg-purple-400':'bg-gray-400'}`}/>
+                                  <div className="w-2 h-2 rounded-full" style={{background:methodColor(p.method,customMethods)}}/>
                                   <span className="text-sm font-medium text-gray-900 capitalize">{p.method}</span>
                                   {p.status==='refunded'&&<span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-semibold">Refunded</span>}
                                   {p.status==='partially_refunded'&&<span className="text-xs bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded font-semibold">Partial Refund</span>}

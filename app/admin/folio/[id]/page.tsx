@@ -1,4 +1,5 @@
 'use client'
+import { allPaymentMethods } from '@/lib/transactions'
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
@@ -103,6 +104,8 @@ export default function FolioPage() {
   const [activeTab, setActiveTab] = useState<'tab'|'items'>('tab')
   const [showPayment, setShowPayment] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState('cash')
+  const [customMethods, setCustomMethods] = useState<string[]>([])
+  useEffect(() => { supabase.from('settings').select('custom_payment_methods').single().then(({ data }) => setCustomMethods((data as any)?.custom_payment_methods || [])) }, [])
   const [paymentAmount, setPaymentAmount] = useState('')
   const [paymentNote, setPaymentNote] = useState('')
   const [savingPayment, setSavingPayment] = useState(false)
@@ -951,7 +954,7 @@ export default function FolioPage() {
 
             <label style={ml}>Payment method</label>
             <div style={{ display: 'grid', gridTemplateColumns: feeAlreadyIncluded ? (paymentMethod === 'card' ? '1fr' : '1fr 1fr') : '1fr 1fr 1fr', gap: 8, marginBottom: 16 }}>
-              {(feeAlreadyIncluded ? (paymentMethod === 'card' ? ['card'] : ['cash', 'check']) : ['cash', 'card', 'check']).map(m => (
+              {(feeAlreadyIncluded ? (paymentMethod === 'card' ? ['card'] : allPaymentMethods(customMethods).filter(m => m !== 'card')) : allPaymentMethods(customMethods)).map(m => (
                 <button key={m} onClick={() => setPaymentMethod(m)} style={{ padding: '12px', border: `2px solid ${paymentMethod === m ? '#2E6B8A' : '#e5e7eb'}`, borderRadius: 8, background: paymentMethod === m ? '#e8f2f7' : '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer', textTransform: 'capitalize', color: paymentMethod === m ? '#2E6B8A' : '#374151' }}>
                   {m}
                 </button>

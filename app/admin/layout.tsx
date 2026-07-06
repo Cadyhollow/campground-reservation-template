@@ -40,8 +40,6 @@ const navGroups: NavGroup[] = [
       { name: 'Reservations', href: '/admin/reservations', icon: '📋' },
       { name: 'Calendar', href: '/admin/calendar', icon: '📅' },
       { name: 'Park Map', href: '/admin/map', icon: '🗺️', minPlan: 'ridgeline' as const },
-      { name: 'Manual Booking', href: '/admin/manual-booking', icon: '✍️' },
-      { name: 'Walk-In Booking', href: '/admin/walkin-booking', icon: '🚶' },
     ],
   },
   {

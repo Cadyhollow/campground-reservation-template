@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { methodLabel } from '@/lib/transactions'
 import { supabase } from '@/lib/supabase'
 import { computePricing, siteFitsCamper } from '@/lib/pricing'
 import type { PricingSite, PricingSettings, PricingFee, PricingRule } from '@/lib/pricing'
@@ -270,7 +271,7 @@ export default function NewReservationWizard() {
           fees_total: p.feesTotalCash,
           amount_paid: 0,
           payment_type: 'unpaid',
-          payment_method: form.payment_method,
+          payment_method: form.payment_method === 'terminal' ? 'card' : form.payment_method, // terminal is a card tender for reporting
           notes: overrideNote,
           addonItems,
         }),
@@ -1078,10 +1079,12 @@ function StepReview({ form, set, pricing, settings, effectiveTotal, grandTotal, 
   }
   const setQty = (idx: number, q: number) =>
     setPosCart((cart: any[]) => q <= 0 ? cart.filter((_, i) => i !== idx) : cart.map((e, i) => i === idx ? { ...e, quantity: q } : e))
+  const customMethods: string[] = settings?.custom_payment_methods || []
   const methods = [
     { k: 'cash', label: 'Cash' },
     { k: 'card', label: 'Card' },
     { k: 'check', label: 'Check' },
+    ...customMethods.map((m: string) => ({ k: m, label: methodLabel(m) })),
     { k: 'terminal', label: 'Terminal' },
   ]
   return (

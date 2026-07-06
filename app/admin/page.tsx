@@ -1,12 +1,15 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { ymd } from '@/lib/transactions'
 import Image from 'next/image'
 import Link from 'next/link'
 
 type ArrivalGuest = {
   id: string
   guest_name: string
+  arrival_date: string
+  departure_date: string
   site_number: string
   site_type: string
   total_price: number
@@ -38,6 +41,7 @@ export default function AdminDashboard() {
   const [occupancyTonight, setOccupancyTonight] = useState({ arriving: 0, occupied: 0, departing: 0 })
   const [plan, setPlan] = useState<string>('summit')
   const [arrivalsToday, setArrivalsToday] = useState<ArrivalGuest[]>([])
+  const [arrivalsDate, setArrivalsDate] = useState<string>(() => ymd(new Date()))
   const [loading, setLoading] = useState(true)
   const [dashboardView, setDashboardView] = useState<'owner'|'staff'>('staff')
   const [slideOut, setSlideOut] = useState<'arrivals'|'departures'|null>(null)
@@ -57,6 +61,7 @@ export default function AdminDashboard() {
   }, [])
 
   useEffect(() => { fetchAll() }, [])
+  useEffect(() => { fetchArrivalsFor(arrivalsDate) }, [arrivalsDate])
 
   async function fetchAll() {
     const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -117,7 +122,7 @@ export default function AdminDashboard() {
       // webhook amount_paid mirror doesn't drop folio money. Single source of
       // truth: amount_paid (booking) + folio_payments (folio/walk-in/POS),
       // counted net of card surcharge to match the arrivals bridge.
-      const foldIds = Array.from(new Set([...(monthData || []).map((r: any) => r.id), ...(upcomingData || []).map((r: any) => r.id)]))
+      const foldIds = Array.from(new Set((upcomingData || []).map((r: any) => r.id)))
       const folioPaidByRes: Record<string, number> = {}
       if (foldIds.length > 0) {
         const { data: dashFolios } = await supabase
@@ -142,7 +147,24 @@ export default function AdminDashboard() {
         }
       }
       const thisMonth = monthData || []
-      const revenue = thisMonth.reduce((sum: number, r: any) => sum + (r.amount_paid || 0) + (folioPaidByRes[r.id] || 0), 0)
+      // Revenue This Month = money actually RECEIVED this month to date, across
+      // everything: booking payments (by created_at) + folio payments (walk-in /
+      // POS / seasonal / electric, by paid_at). Both net of card surcharge —
+      // amount_paid is already cash-canonical post-Option-B.
+      const monthStartISO = firstOfMonth + 'T00:00:00'
+      const [{ data: monthBookingPmts }, { data: monthFolioPmts }] = await Promise.all([
+        supabase.from('reservations')
+          .select('amount_paid')
+          .gt('amount_paid', 0)
+          .neq('status', 'cancelled')
+          .gte('created_at', monthStartISO),
+        supabase.from('folio_payments')
+          .select('amount, surcharge_amount')
+          .eq('status', 'completed')
+          .gte('paid_at', monthStartISO),
+      ])
+      const revenue = (monthBookingPmts || []).reduce((s: number, r: any) => s + (r.amount_paid || 0), 0)
+        + (monthFolioPmts || []).reduce((s: number, p: any) => s + (p.amount || 0) - (p.surcharge_amount || 0), 0)
 
       setStats({
         totalThisMonth: thisMonth.length,
@@ -165,73 +187,6 @@ export default function AdminDashboard() {
       .select('*', { count: 'exact', head: true })
       .eq('is_available', true)
     setTotalActiveSites(count || 0)
-
-    if (todayArrivals && todayArrivals.length > 0) {
-      const ids = todayArrivals.map((r: any) => r.id)
-      const { data: addonData } = await supabase
-        .from('reservation_addons')
-        .select('reservation_id, addon_id, quantity')
-        .in('reservation_id', ids)
-
-      const addonIds = [...new Set(addonData?.map(r => r.addon_id) || [])]
-      const { data: addonNames } = addonIds.length > 0
-        ? await supabase.from('addons').select('id, name').in('id', addonIds)
-        : { data: [] }
-
-      const nameMap: Record<string, string> = {}
-      addonNames?.forEach((a: any) => { nameMap[a.id] = a.name })
-
-      const addonMap: Record<string, { name: string; quantity: number }[]> = {}
-      addonData?.forEach((row: any) => {
-        if (!addonMap[row.reservation_id]) addonMap[row.reservation_id] = []
-        addonMap[row.reservation_id].push({ name: nameMap[row.addon_id] || 'Add-on', quantity: row.quantity })
-      })
-
-      // Fold in folio-collected payments so "Paid" reflects BOTH sources
-      // (reservations.amount_paid for booking-flow + folio_payments for walk-in/POS).
-      // Display-only: we never write folio money into amount_paid (would double-count in reports).
-      const arrivalResIds = todayArrivals.map((r: any) => r.id)
-      const arrFolioPaidByRes: Record<string, number> = {}
-      if (arrivalResIds.length > 0) {
-        const { data: arrFolios } = await supabase
-          .from('folios')
-          .select('id, reservation_id')
-          .in('reservation_id', arrivalResIds)
-        const arrFolioList = arrFolios || []
-        const arrFolioIds = arrFolioList.map((f: any) => f.id)
-        if (arrFolioIds.length > 0) {
-          const { data: arrPmts } = await supabase
-            .from('folio_payments')
-            .select('folio_id, amount, surcharge_amount, status')
-            .in('folio_id', arrFolioIds)
-            .eq('status', 'completed')
-          const arrPaidByFolio: Record<string, number> = {}
-          for (const pm of (arrPmts || [])) {
-            arrPaidByFolio[pm.folio_id] = (arrPaidByFolio[pm.folio_id] || 0) + (pm.amount - (pm.surcharge_amount || 0))
-          }
-          for (const f of arrFolioList) {
-            if (f.reservation_id) arrFolioPaidByRes[f.reservation_id] = (arrFolioPaidByRes[f.reservation_id] || 0) + (arrPaidByFolio[f.id] || 0)
-          }
-        }
-      }
-      setArrivalsToday(todayArrivals.map((r: any) => ({
-        id: r.id,
-        guest_name: r.guest_name,
-        site_number: r.sites?.site_number || '—',
-        site_type: r.sites?.site_type || '',
-        total_price: r.total_price,
-        amount_paid: r.amount_paid,
-        total_paid: (r.amount_paid || 0) + (arrFolioPaidByRes[r.id] || 0),
-        num_adults: r.num_adults,
-        num_children: r.num_children,
-        addons: addonMap[r.id] || [],
-        checkedIn: r.checked_in || false,
-        waiver_signed: r.waiver_signed || false,
-        guest_email: r.guest_email || '',
-        early_checkin: r.early_checkin || false,
-        late_checkout: r.late_checkout || false,
-      })))
-    }
 
     // Walk-in sales count today
     const { count: walkinCount } = await supabase
@@ -256,6 +211,79 @@ export default function AdminDashboard() {
     setSitesAvailableTonight(Math.max(0, (totalSitesCount || 0) - (occupiedCount || 0)))
 
     setLoading(false)
+  }
+
+  async function fetchArrivalsFor(dateStr: string) {
+    const { data: dayArrivals } = await supabase
+      .from('reservations')
+      .select('*, sites(site_number, site_type)')
+      .eq('arrival_date', dateStr)
+      .neq('status', 'cancelled')
+
+    if (!dayArrivals || dayArrivals.length === 0) { setArrivalsToday([]); return }
+
+    const ids = dayArrivals.map((r: any) => r.id)
+    const { data: addonData } = await supabase
+      .from('reservation_addons')
+      .select('reservation_id, addon_id, quantity')
+      .in('reservation_id', ids)
+
+    const addonIds = [...new Set(addonData?.map(r => r.addon_id) || [])]
+    const { data: addonNames } = addonIds.length > 0
+      ? await supabase.from('addons').select('id, name').in('id', addonIds)
+      : { data: [] }
+
+    const nameMap: Record<string, string> = {}
+    addonNames?.forEach((a: any) => { nameMap[a.id] = a.name })
+
+    const addonMap: Record<string, { name: string; quantity: number }[]> = {}
+    addonData?.forEach((row: any) => {
+      if (!addonMap[row.reservation_id]) addonMap[row.reservation_id] = []
+      addonMap[row.reservation_id].push({ name: nameMap[row.addon_id] || 'Add-on', quantity: row.quantity })
+    })
+
+    // Fold in folio-collected payments so "Paid" reflects BOTH sources.
+    // Display-only: never written back to amount_paid (would double-count in reports).
+    const arrFolioPaidByRes: Record<string, number> = {}
+    const { data: arrFolios } = await supabase
+      .from('folios')
+      .select('id, reservation_id')
+      .in('reservation_id', ids)
+    const arrFolioList = arrFolios || []
+    const arrFolioIds = arrFolioList.map((f: any) => f.id)
+    if (arrFolioIds.length > 0) {
+      const { data: arrPmts } = await supabase
+        .from('folio_payments')
+        .select('folio_id, amount, surcharge_amount, status')
+        .in('folio_id', arrFolioIds)
+        .eq('status', 'completed')
+      const arrPaidByFolio: Record<string, number> = {}
+      for (const pm of (arrPmts || [])) {
+        arrPaidByFolio[pm.folio_id] = (arrPaidByFolio[pm.folio_id] || 0) + (pm.amount - (pm.surcharge_amount || 0))
+      }
+      for (const f of arrFolioList) {
+        if (f.reservation_id) arrFolioPaidByRes[f.reservation_id] = (arrFolioPaidByRes[f.reservation_id] || 0) + (arrPaidByFolio[f.id] || 0)
+      }
+    }
+    setArrivalsToday(dayArrivals.map((r: any) => ({
+      id: r.id,
+      guest_name: r.guest_name,
+      arrival_date: r.arrival_date,
+      departure_date: r.departure_date,
+      site_number: r.sites?.site_number || '—',
+      site_type: r.sites?.site_type || '',
+      total_price: r.total_price,
+      amount_paid: r.amount_paid,
+      total_paid: (r.amount_paid || 0) + (arrFolioPaidByRes[r.id] || 0),
+      num_adults: r.num_adults,
+      num_children: r.num_children,
+      addons: addonMap[r.id] || [],
+      checkedIn: r.checked_in || false,
+      waiver_signed: r.waiver_signed || false,
+      guest_email: r.guest_email || '',
+      early_checkin: r.early_checkin || false,
+      late_checkout: r.late_checkout || false,
+    })))
   }
 
   async function toggleCheckIn(id: string) {
@@ -285,6 +313,7 @@ export default function AdminDashboard() {
   )
 
   const checkedInCount = arrivalsToday.filter(g => g.checkedIn).length
+  const todayYmd = ymd(new Date())
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -306,6 +335,7 @@ export default function AdminDashboard() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">{settings?.park_name || 'Campground'}</h1>
           <p className="text-sm text-gray-500">{settings?.park_location || ''} · Admin Dashboard</p>
+          <p className="text-sm font-semibold text-gray-700 mt-0.5">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
         </div>
       </div>
 
@@ -344,6 +374,7 @@ export default function AdminDashboard() {
           <div className="rounded-xl border p-4 shadow-sm" style={{background:'#f0fdf4',borderColor:'#bbf7d0'}}>
             <p className="text-xs font-semibold mb-1" style={{color:'#14532d'}}>Revenue This Month</p>
             <p className="text-3xl font-bold" style={{color:'#14532d'}}>${(stats.revenueThisMonth / 100).toLocaleString('en-US', { minimumFractionDigits: 0 })}</p>
+            <p className="text-xs mt-1" style={{color:'#16a34a'}}>collected this month · net of card fees</p>
           </div>
         ) : (
           <div className="rounded-xl border p-4 shadow-sm" style={{background:'#faf5ff',borderColor:'#e9d5ff'}}>
@@ -356,10 +387,8 @@ export default function AdminDashboard() {
       {/* Quick links */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         {[
-          { label: 'New Reservation', href: '/admin/new-reservation', icon: '✨' },
-          { label: 'New Booking', href: '/admin/manual-booking', icon: '➕' },
+          { label: 'New Reservation', href: '/admin/new-reservation', icon: '➕' },
           ...(settings?.pos_enabled ? [{ label: 'Walk-Up Sale', href: '/admin/folio/new', icon: '🛒' }] : []),
-          { label: 'Walk-In Booking', href: '/admin/walkin-booking', icon: '🏕️' },
           { label: 'Guest Directory', href: '/admin/guests', icon: '👥' },
           { label: 'Calendar', href: '/admin/calendar', icon: '📅' },
           ...(plan === 'ridgeline' || plan === 'summit' ? [{ label: 'Park Map', href: '/admin/map', icon: '🗺️' }] : []),
@@ -376,31 +405,43 @@ export default function AdminDashboard() {
 
       {/* Today's Check-In List */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm mb-8">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-gray-100">
           <div>
-            <h2 className="text-base font-semibold text-gray-900">Today's Arrivals</h2>
+            <h2 className="text-base font-semibold text-gray-900">
+              {arrivalsDate === todayYmd
+                ? "Today's Arrivals"
+                : `Arrivals — ${new Date(arrivalsDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}`}
+            </h2>
             <p className="text-xs text-gray-500 mt-0.5">
               {arrivalsToday.length === 0
-                ? 'No arrivals today'
-                : `${checkedInCount} of ${arrivalsToday.length} checked in`}
+                ? 'No arrivals'
+                : checkedInCount === arrivalsToday.length
+                ? `✓ All ${arrivalsToday.length} checked in`
+                : `${checkedInCount} of ${arrivalsToday.length} checked in · ${arrivalsToday.length - checkedInCount} remaining`}
             </p>
           </div>
-          {arrivalsToday.length > 0 && (
-            <div className="text-sm text-gray-500">
-              {checkedInCount === arrivalsToday.length
-                ? <span className="text-green-600 font-medium">✓ All checked in!</span>
-                : <span>{arrivalsToday.length - checkedInCount} remaining</span>}
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            <input type="date" value={arrivalsDate}
+              onChange={e => e.target.value && setArrivalsDate(e.target.value)}
+              className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+            {arrivalsDate !== todayYmd && (
+              <button onClick={() => setArrivalsDate(todayYmd)}
+                className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border transition-colors"
+                style={{ background: '#f0fdfa', color: '#0f766e', borderColor: '#99f6e4' }}>
+                Today
+              </button>
+            )}
+          </div>
         </div>
 
         {arrivalsToday.length === 0 ? (
-          <p className="text-gray-400 text-sm text-center py-8">No arrivals scheduled for today.</p>
+          <p className="text-gray-400 text-sm text-center py-8">No arrivals scheduled for this date.</p>
         ) : (
           <div className="divide-y divide-gray-50">
             {arrivalsToday.map(guest => {
               const balance = guest.total_price - (guest.total_paid ?? guest.amount_paid)
               const paidInFull = balance <= 0
+              const nights = Math.round((new Date(guest.departure_date).getTime() - new Date(guest.arrival_date).getTime()) / 86400000)
               return (
                 <div
                   key={guest.id}
@@ -429,7 +470,13 @@ export default function AdminDashboard() {
                       </div>
 
                       <p className="text-xs text-gray-500 mt-0.5">
-                        {guest.num_adults} adult{guest.num_adults !== 1 ? 's' : ''}
+                        <span className="font-medium text-gray-600">
+                          {new Date(guest.arrival_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          {' → '}
+                          {new Date(guest.departure_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </span>
+                        {' · '}{nights} night{nights !== 1 ? 's' : ''}
+                        {' · '}{guest.num_adults} adult{guest.num_adults !== 1 ? 's' : ''}
                         {guest.num_children > 0 ? `, ${guest.num_children} child${guest.num_children !== 1 ? 'ren' : ''}` : ''}
                       </p>
                       <WaiverActions reservationId={guest.id} guestEmail={guest.guest_email} signed={guest.waiver_signed} />
