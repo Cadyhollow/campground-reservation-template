@@ -54,6 +54,7 @@ const defaultSettings = {
   maintenance_message: 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
   deposit_type: 'first_night',
   deposit_value: 0,
+  custom_payment_methods: [],
 }
 
 export default function SettingsPage() {
@@ -61,7 +62,7 @@ export default function SettingsPage() {
   const [settingsId, setSettingsId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [squareConnected, setSquareConnected] = useState<boolean | null>(null)
+  const [newMethod, setNewMethod] = useState('')
   const [plan, setPlan] = useState('trailhead')
   const [earlyPriceInput, setEarlyPriceInput] = useState('0.00')
   const [latePriceInput, setLatePriceInput] = useState('0.00')
@@ -126,6 +127,7 @@ export default function SettingsPage() {
         maintenance_message: data.maintenance_message || 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
         deposit_type: data.deposit_type || 'first_night',
         deposit_value: data.deposit_value || 0,
+        custom_payment_methods: data.custom_payment_methods || [],
       })
     }
     setLoading(false)
@@ -200,6 +202,7 @@ export default function SettingsPage() {
       maintenance_message: form.maintenance_message,
       deposit_type: form.deposit_type,
       deposit_value: form.deposit_value || 0,
+      custom_payment_methods: form.custom_payment_methods || [],
     }
     if (settingsId) {
       const { error } = await supabase.from('settings').update(payload).eq('id', settingsId)
@@ -213,13 +216,6 @@ export default function SettingsPage() {
     setSaving(false)
     fetchSettings()
   }
-
-  useEffect(() => {
-    fetch('/api/square/status')
-      .then(res => res.json())
-      .then(data => setSquareConnected(!!data.connected))
-      .catch(() => setSquareConnected(false))
-  }, [])
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="text-gray-500">Loading settings...</div></div>
 
@@ -238,30 +234,6 @@ export default function SettingsPage() {
 
       <div className="space-y-6">
 
-        {/* Square Payments */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div className="flex-1 min-w-0">
-              <h3 className="text-lg font-semibold text-gray-900 mb-1">Square Payments</h3>
-              <p className="text-sm text-gray-500 mb-3">Connect your Square account so guests can pay for reservations online.</p>
-              {squareConnected === true && (
-                <div className="inline-flex items-center gap-2 text-sm text-green-700">
-                  <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                  Connected
-                </div>
-              )}
-              {squareConnected === false && (
-                <div className="inline-flex items-center gap-2 text-sm text-gray-500">
-                  <div className="w-2 h-2 rounded-full bg-gray-300"></div>
-                  Not connected
-                </div>
-              )}
-            </div>
-            <a href="/admin/settings/square" className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 whitespace-nowrap">
-              {squareConnected ? 'Manage' : 'Connect Square'}
-            </a>
-          </div>
-        </div>
         {/* Logo */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Logo</h3>
@@ -425,6 +397,80 @@ export default function SettingsPage() {
               </div>
             )}
           </div>
+        </div>
+
+        {/* Payment Methods */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-1">Payment Methods</h3>
+          <p className="text-sm text-gray-500 mb-4">Cash, Card, and Check are always available. Add any other ways your guests pay — like Venmo, PayPal, Cash App, or Zelle — and they’ll appear as options everywhere you record a payment.</p>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">Always available</label>
+            <div className="flex flex-wrap gap-2">
+              {['Cash', 'Card', 'Check'].map(m => (
+                <span key={m} className="inline-flex items-center gap-1 text-sm bg-gray-100 text-gray-500 px-3 py-1.5 rounded-full font-medium">
+                  {m}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">Your additional methods</label>
+            {form.custom_payment_methods.length === 0 ? (
+              <p className="text-sm text-gray-400 italic">None yet — add one below.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {form.custom_payment_methods.map((m: string) => (
+                  <span key={m} className="inline-flex items-center gap-2 text-sm bg-green-50 text-green-800 border border-green-200 px-3 py-1.5 rounded-full font-medium capitalize">
+                    {m}
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, custom_payment_methods: form.custom_payment_methods.filter((x: string) => x !== m) })}
+                      className="text-green-600 hover:text-green-900 font-bold leading-none"
+                      aria-label={'Remove ' + m}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              placeholder="e.g. PayPal"
+              className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+              value={newMethod}
+              onChange={e => setNewMethod(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  const v = newMethod.trim().toLowerCase()
+                  if (v && !['cash','card','check'].includes(v) && !form.custom_payment_methods.includes(v)) {
+                    setForm({ ...form, custom_payment_methods: [...form.custom_payment_methods, v] })
+                  }
+                  setNewMethod('')
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const v = newMethod.trim().toLowerCase()
+                if (v && !['cash','card','check'].includes(v) && !form.custom_payment_methods.includes(v)) {
+                  setForm({ ...form, custom_payment_methods: [...form.custom_payment_methods, v] })
+                }
+                setNewMethod('')
+              }}
+              className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800"
+            >
+              Add
+            </button>
+          </div>
+          <p className="text-xs text-gray-400 mt-2">Remember to click Save at the bottom to apply your changes.</p>
         </div>
 
         {/* Season Dates */}
