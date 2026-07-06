@@ -54,7 +54,7 @@ const defaultSettings = {
   maintenance_message: 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
   deposit_type: 'first_night',
   deposit_value: 0,
-  custom_payment_methods: [],
+  custom_payment_methods: [] as string[],
 }
 
 export default function SettingsPage() {
