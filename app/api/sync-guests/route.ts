@@ -21,14 +21,14 @@ export async function POST() {
     // Get all existing guests
     const { data: existingGuests, error: guestError } = await supabase
       .from('guests')
-      .select('id, email, last_visit')
+      .select('id, email, last_visit, is_seasonal')
 
     if (guestError) throw guestError
 
     // Build a map of email -> guest for fast lookup
-    const existingMap: { [email: string]: { id: string; last_visit: string | null } } = {}
+    const existingMap: { [email: string]: { id: string; last_visit: string | null; is_seasonal: boolean } } = {}
     for (const g of existingGuests || []) {
-      if (g.email) existingMap[g.email.toLowerCase()] = { id: g.id, last_visit: g.last_visit }
+      if (g.email) existingMap[g.email.toLowerCase()] = { id: g.id, last_visit: g.last_visit, is_seasonal: !!g.is_seasonal }
     }
 
     // Build best record per email from reservations
@@ -80,11 +80,14 @@ export async function POST() {
         // Existing guest — only update last_visit and site_number if more recent
         const existingLastVisit = existing.last_visit || '0000-00-00'
         if (record.last_visit > existingLastVisit) {
+          // SEASONAL PROTECTION: a seasonal guest's site_number is hand-maintained
+          // truth and must NEVER be overwritten by sync. Family members often book
+          // other sites using the seasonal camper's email — that reservation keeps
+          // its own contact email, but the guest record's site stays put.
+          const updatePayload: Record<string, any> = { last_visit: record.last_visit }
+          if (!existing.is_seasonal) updatePayload.site_number = record.site_number
           await supabase.from('guests')
-            .update({
-              last_visit: record.last_visit,
-              site_number: record.site_number,
-            })
+            .update(updatePayload)
             .eq('id', existing.id)
           updated++
         }

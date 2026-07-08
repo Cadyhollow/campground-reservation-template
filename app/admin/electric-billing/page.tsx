@@ -393,6 +393,7 @@ export default function ElectricBillingPage() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         guestName: row.guest.name, guestEmail: emailToUse, siteNumber: row.guest.site_number,
+        folioId: row.folioId,
         billingMonth, emailMessage, electricAmount,
         newCharges: newLineItems, paymentsReceived: paymentsReceivedAmt,
         totalBalance: liveBalanceResend, balanceForward: balanceForwardResend,
@@ -479,6 +480,7 @@ export default function ElectricBillingPage() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number,
+        folioId,
         billingMonth, emailMessage, electricAmount: finalAmountCents,
         newCharges, paymentsReceived: paymentsReceivedAmount,
         totalBalance: liveBalance, balanceForward,
@@ -579,47 +581,47 @@ export default function ElectricBillingPage() {
 
                       {!row.skip && (
                         <div style={{ padding: '0 14px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                          {/* Bill Electric — the ONLY charge-creating action; once a month, with confirm */}
                           {!row.sent ? (
                             <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: true }; return u })}
                               disabled={row.sending || !row.finalAmount}
                               style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: !row.finalAmount ? 'default' : 'pointer', opacity: !row.finalAmount ? 0.5 : 1 }}>
-                              {row.sending ? 'Sending...' : '✉ Send Bill'}
+                              {row.sending ? 'Billing...' : '⚡ Bill Electric'}
                             </button>
                           ) : (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                              <span style={{ fontSize: 13, color: '#15803d', fontWeight: 600 }}>✓ Sent!</span>
-                              {!row.editEmailMode ? (
-                                <>
-                                  <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: true }; return u })}
-                                    style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                                    Re-send
-                                  </button>
-                                  <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailMode: true, editEmailValue: row.guest.email }; return u })}
-                                    style={{ background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                                    Edit & Re-send
-                                  </button>
-                                  <button onClick={() => { if (confirm('Send a second bill for ' + billingMonth + ' to ' + row.guest.name + '?')) { setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], sent: false }; return u }) } }}
-                                    style={{ background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                                    + Send Another
-                                  </button>
-                                </>
-                              ) : (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  <input type='email' value={row.editEmailValue}
-                                    onChange={e => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailValue: e.target.value }; return u })}
-                                    style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '5px 10px', fontSize: 13, width: 200 }}
-                                    placeholder='Email address' />
-                                  <button onClick={() => resendBill(i, row.editEmailValue)}
-                                    style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                                    Send
-                                  </button>
-                                  <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailMode: false }; return u })}
-                                    style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 7, padding: '5px 10px', fontSize: 12, color: '#6b7280', cursor: 'pointer' }}>
-                                    Cancel
-                                  </button>
-                                </div>
-                              )}
+                            <span style={{ fontSize: 13, color: '#15803d', fontWeight: 600 }}>✓ Billed</span>
+                          )}
+
+                          {/* Send Statement — always available, emails the live ledger, NEVER creates a charge */}
+                          {!row.editEmailMode ? (
+                            <button onClick={() => resendBill(i)}
+                              disabled={row.sending || !row.guest.email}
+                              style={{ background: '#e8f2f7', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: (row.sending || !row.guest.email) ? 'default' : 'pointer', opacity: (row.sending || !row.guest.email) ? 0.6 : 1 }}>
+                              {row.sending ? 'Sending...' : '✉ Send Statement'}
+                            </button>
+                          ) : (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <input type='email' value={row.editEmailValue}
+                                onChange={e => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailValue: e.target.value }; return u })}
+                                style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '5px 10px', fontSize: 13, width: 200 }}
+                                placeholder='Email address' />
+                              <button onClick={() => resendBill(i, row.editEmailValue)}
+                                style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                                Send
+                              </button>
+                              <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailMode: false }; return u })}
+                                style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 7, padding: '5px 10px', fontSize: 12, color: '#6b7280', cursor: 'pointer' }}>
+                                Cancel
+                              </button>
                             </div>
+                          )}
+
+                          {/* Secondary: send the statement to a corrected address */}
+                          {!row.editEmailMode && (
+                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailMode: true, editEmailValue: row.guest.email }; return u })}
+                              style={{ background: 'none', border: 'none', color: '#9ca3af', fontSize: 12, textDecoration: 'underline', cursor: 'pointer', padding: '0 2px' }}>
+                              wrong email?
+                            </button>
                           )}
 
                           {row.folioBalance > 0 && !row.showPayment && (
@@ -650,15 +652,15 @@ export default function ElectricBillingPage() {
                       {row.showBillConfirm && (
                         <div style={{ margin: '0 14px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '14px' }}>
                           <div style={{ fontSize: 13, fontWeight: 700, color: '#1e40af', marginBottom: 6 }}>
-                            {row.sent ? 'Re-send electric bill to ' + row.guest.name + '?' : 'Send electric bill to ' + row.guest.name + '?'}
+                            Bill electric to {row.guest.name}?
                           </div>
                           <div style={{ fontSize: 13, color: '#1e3a8a', marginBottom: 12 }}>
-                            A <strong>{billingMonth} electric bill for ${row.finalAmount}</strong> will be sent to <strong>{row.guest.email}</strong>
+                            This creates a <strong>{billingMonth} electric charge of ${row.finalAmount}</strong> on their account and emails their statement to <strong>{row.guest.email}</strong>.
                           </div>
                           <div style={{ display: 'flex', gap: 10 }}>
-                            <button onClick={() => { setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false }; return u }); row.sent ? resendBill(i) : sendBill(i) }}
+                            <button onClick={() => { setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false }; return u }); sendBill(i) }}
                               style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                              Yes, Send Bill
+                              Yes, Bill Electric
                             </button>
                             <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false }; return u })}
                               style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, color: '#6b7280', cursor: 'pointer' }}>
