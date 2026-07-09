@@ -55,10 +55,11 @@ export default function ReportsPage() {
   const router = useRouter()
 
   useEffect(() => {
-    supabase.from('settings').select('plan, pos_enabled, seasonal_enabled').single().then(({ data }) => {
+    supabase.from('settings').select('plan, pos_enabled').single().then(({ data }) => {
       if (data?.plan && !['ridgeline','summit'].includes(data.plan)) router.replace('/admin')
       if (data?.pos_enabled) setPosEnabled(true)
-      if (data?.seasonal_enabled) setSeasonalEnabled(true)
+      // Seasonal reporting is a Summit feature (governed by plan, not a separate flag)
+      if (data?.plan === 'summit') setSeasonalEnabled(true)
     })
   }, [])
 

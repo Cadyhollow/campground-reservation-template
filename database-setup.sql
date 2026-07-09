@@ -323,7 +323,6 @@ CREATE TABLE IF NOT EXISTS settings (
   pos_enabled boolean DEFAULT false,
   total_sites integer DEFAULT 0,
   total_cabins integer DEFAULT 0,
-  seasonal_enabled boolean DEFAULT false,
   max_credit_amount integer DEFAULT 0,
   auto_sync_guests boolean DEFAULT false
 );
