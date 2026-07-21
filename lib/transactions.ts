@@ -24,7 +24,25 @@ export function ymd(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-// startISO/endISO: local timestamps like '2026-07-01T00:00:00' / '2026-07-06T23:59:59'
+// Map a LOCAL calendar day ('YYYY-MM-DD') to the correct UTC-instant window boundaries.
+// Postgres compares timestamptz columns (paid_at, created_at, charged_at) against a naive
+// string as UTC, so a bare 'date T00:00:00' silently shifts the window by the local offset
+// (the ~8pm-ET rollover bug). Building the boundary from new Date(y, m-1, d, ...) — which is
+// LOCAL time — then .toISOString() yields the real UTC instant of local midnight / end-of-day.
+// Uses browser-local time, consistent with ymd() and the display grouping (a per-campground
+// timezone setting is the long-term fix; see the reports page design note).
+export function dayStartUTC(localDate: string): string {
+  const [y, m, d] = localDate.split('-').map(Number)
+  return new Date(y, m - 1, d, 0, 0, 0, 0).toISOString()
+}
+export function dayEndUTC(localDate: string): string {
+  const [y, m, d] = localDate.split('-').map(Number)
+  return new Date(y, m - 1, d, 23, 59, 59, 999).toISOString()
+}
+
+// startISO/endISO must be UTC-instant ISO strings (with a 'Z'/offset), e.g. from
+// dayStartUTC(localDate) / dayEndUTC(localDate). Passing a naive local string here compares
+// as UTC in Postgres and drops/misattributes payments near the local-day boundary.
 export async function fetchUnifiedTransactions(startISO: string, endISO: string): Promise<UnifiedPayment[]> {
   const [{ data: pmtData }, { data: resData }] = await Promise.all([
     supabase

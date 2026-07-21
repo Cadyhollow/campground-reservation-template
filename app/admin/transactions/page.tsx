@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useRouter } from 'next/navigation'
-import { fetchUnifiedTransactions, ymd, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
+import { fetchUnifiedTransactions, ymd, dayStartUTC, dayEndUTC, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -88,7 +88,7 @@ export default function TransactionsPage() {
     const { start, end } = getDateBounds()
     // One shared source (folio payments + booking payments) — same data as Reports.
     const [all, { data: settingsData }] = await Promise.all([
-      fetchUnifiedTransactions(start + 'T00:00:00', end + 'T23:59:59'),
+      fetchUnifiedTransactions(dayStartUTC(start), dayEndUTC(end)),
       supabase.from('settings').select('custom_payment_methods').single(),
     ])
     setCustomMethods(settingsData?.custom_payment_methods || [])

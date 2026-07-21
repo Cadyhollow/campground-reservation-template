@@ -1,6 +1,7 @@
 'use client'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { methodLabel } from '@/lib/transactions'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
+import { methodLabel, ymd } from '@/lib/transactions'
 import { supabase } from '@/lib/supabase'
 import { computePricing, siteFitsCamper } from '@/lib/pricing'
 import type { PricingSite, PricingSettings, PricingFee, PricingRule } from '@/lib/pricing'
@@ -31,7 +32,8 @@ const siteTypeLabel = (t: string) =>
 const fmtDate = (s: string) =>
   s ? new Date(s + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'
 
-export default function NewReservationWizard() {
+function NewReservationWizardInner() {
+  const searchParams = useSearchParams()
   const [step, setStep] = useState<Step>(1)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -57,6 +59,7 @@ export default function NewReservationWizard() {
   const [showPOS, setShowPOS] = useState(false)
   const [posCart, setPosCart] = useState<any[]>([])
   const [unavailableIds, setUnavailableIds] = useState<Set<string>>(new Set())
+  const [siteClearedNote, setSiteClearedNote] = useState(false)
 
   const [form, setForm] = useState({
     arrival_date: '',
@@ -117,6 +120,33 @@ export default function NewReservationWizard() {
       setUnavailableIds(new Set((data || []).map((r: any) => r.site_id)))
     })()
   }, [form.arrival_date, form.departure_date])
+
+  // Prefill from the park map (or any deep link): ?site_id=…&arrival=YYYY-MM-DD.
+  // Default departure = arrival + 1 night; staff can change it. Runs once on mount.
+  useEffect(() => {
+    const siteId = searchParams.get('site_id')
+    const arrival = searchParams.get('arrival')
+    const patch: Partial<typeof form> = {}
+    if (arrival) {
+      patch.arrival_date = arrival
+      patch.departure_date = ymd(new Date(new Date(arrival + 'T12:00:00').getTime() + 86400000))
+    }
+    if (siteId) patch.site_id = siteId
+    if (Object.keys(patch).length) set(patch)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Keep the chosen site unless it's actually unavailable for the current range.
+  // Replaces the old unconditional site clears on every date/rig change (which wiped a
+  // valid selection — and would wipe the map's preselect). Rig fit is a soft override
+  // in selectSite, not an availability constraint, so only date-overlap clears here.
+  useEffect(() => {
+    if (form.site_id && unavailableIds.has(form.site_id)) {
+      set({ site_id: '' })
+      setSiteClearedNote(true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unavailableIds])
 
   useEffect(() => {
     if (step === 4 && form.payment_method === 'card') {
@@ -199,6 +229,7 @@ export default function NewReservationWizard() {
       if (!ok) return
     }
     set({ site_id: s.id })
+    setSiteClearedNote(false)
   }
 
   async function handleComplete() {
@@ -574,6 +605,7 @@ export default function NewReservationWizard() {
                 available={available}
                 camper={camper}
                 onSelectSite={selectSite}
+                siteClearedNote={siteClearedNote}
               />
             )}
             {step === 2 && (
@@ -618,7 +650,7 @@ function Stepper({ step }: { step: Step }) {
   )
 }
 
-function StepDatesSite({ form, set, available, camper, onSelectSite }: any) {
+function StepDatesSite({ form, set, available, camper, onSelectSite, siteClearedNote }: any) {
   const rv = available.filter((s: any) => s.site_type === 'rv_site')
   const fittingRv = rv.filter((s: any) => siteFitsCamper(s, camper).fits)
   const otherRv = rv.filter((s: any) => !siteFitsCamper(s, camper).fits)
@@ -652,11 +684,11 @@ function StepDatesSite({ form, set, available, camper, onSelectSite }: any) {
       <div className="grid grid-cols-2 gap-3 mb-4">
         <label className="block">
           <span className="text-[13px] text-gray-600 block mb-1">Arrival</span>
-          <input type="date" value={form.arrival_date} onChange={e => set({ arrival_date: e.target.value, site_id: '' })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+          <input type="date" value={form.arrival_date} onChange={e => set({ arrival_date: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
         </label>
         <label className="block">
           <span className="text-[13px] text-gray-600 block mb-1">Departure</span>
-          <input type="date" value={form.departure_date} onChange={e => set({ departure_date: e.target.value, site_id: '' })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+          <input type="date" value={form.departure_date} onChange={e => set({ departure_date: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
         </label>
       </div>
 
@@ -673,11 +705,11 @@ function StepDatesSite({ form, set, available, camper, onSelectSite }: any) {
           </label>
           <label className="block">
             <span className="text-xs text-gray-600 block mb-1">Length (ft)</span>
-            <input type="number" value={form.camper_length} onChange={e => set({ camper_length: e.target.value, site_id: '' })} className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm" />
+            <input type="number" value={form.camper_length} onChange={e => set({ camper_length: e.target.value })} className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm" />
           </label>
           <label className="block">
             <span className="text-xs text-gray-600 block mb-1">Amperage</span>
-            <select value={form.camper_amperage} onChange={e => set({ camper_amperage: e.target.value as any, site_id: '' })} className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm">
+            <select value={form.camper_amperage} onChange={e => set({ camper_amperage: e.target.value as any })} className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm">
               <option value="">—</option><option value="50amp">50 amp</option><option value="30amp">30 amp</option>
             </select>
           </label>
@@ -688,6 +720,11 @@ function StepDatesSite({ form, set, available, camper, onSelectSite }: any) {
         <div className="text-sm text-gray-400 text-center py-8">Pick dates to see available sites.</div>
       ) : (
         <>
+          {siteClearedNote && (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+              Your selected site isn’t available for these dates — pick another below.
+            </div>
+          )}
           {rv.length > 0 && (
             <>
               <div className="text-[13px] font-medium text-gray-600 mt-3 mb-2">RV sites <span className="text-gray-400 font-normal">· {fittingRv.length} fit the rig</span></div>
@@ -1226,5 +1263,15 @@ function ProductTile({ product, onAdd, cartQty, onMinus }: { product: any; onAdd
       <div className="text-sm">{product.name}</div>
       <div className="text-xs text-gray-400 mt-0.5">{money(product.price)}</div>
     </button>
+  )
+}
+
+// useSearchParams (the ?site_id/?arrival prefill) must sit inside a Suspense boundary,
+// mirroring app/admin/map/page.tsx.
+export default function NewReservationWizard() {
+  return (
+    <Suspense fallback={<div className="p-6 text-gray-500">Loading…</div>}>
+      <NewReservationWizardInner />
+    </Suspense>
   )
 }
