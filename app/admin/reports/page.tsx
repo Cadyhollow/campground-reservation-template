@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
-import { fetchUnifiedTransactions, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
+import { fetchUnifiedTransactions, ymd, dayStartUTC, dayEndUTC, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
 
 type Reservation = {
   id: string
@@ -130,43 +130,43 @@ export default function ReportsPage() {
   function getDateBounds(range: string, customS: string, customE: string) {
     const now = new Date()
     if (range === 'custom' && customS && customE) return { start: customS, end: customE }
-    if (range === 'today') { const d = now.toISOString().split('T')[0]; return { start: d, end: d } }
+    if (range === 'today') { const d = ymd(now); return { start: d, end: d } }
     if (range === 'this_week') {
       const day = now.getDay()
       const mon = new Date(now); mon.setDate(now.getDate() - day + (day === 0 ? -6 : 1))
-      return { start: mon.toISOString().split('T')[0], end: now.toISOString().split('T')[0] }
+      return { start: ymd(mon), end: ymd(now) }
     }
-    if (range === 'this_month') return { start: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0], end: now.toISOString().split('T')[0] }
+    if (range === 'this_month') return { start: ymd(new Date(now.getFullYear(), now.getMonth(), 1)), end: ymd(now) }
     if (range === 'last_month') {
       const first = new Date(now.getFullYear(), now.getMonth() - 1, 1)
       const last = new Date(now.getFullYear(), now.getMonth(), 0)
-      return { start: first.toISOString().split('T')[0], end: last.toISOString().split('T')[0] }
+      return { start: ymd(first), end: ymd(last) }
     }
-    if (range === 'last_year') return { start: new Date(now.getFullYear()-1,0,1).toISOString().split('T')[0], end: new Date(now.getFullYear()-1,11,31).toISOString().split('T')[0] }
-    return { start: new Date(now.getFullYear(),0,1).toISOString().split('T')[0], end: now.toISOString().split('T')[0] }
+    if (range === 'last_year') return { start: ymd(new Date(now.getFullYear()-1,0,1)), end: ymd(new Date(now.getFullYear()-1,11,31)) }
+    return { start: ymd(new Date(now.getFullYear(),0,1)), end: ymd(now) }
   }
 
   function getStayDateEnd(range: string, customE: string) {
     const now = new Date()
     if (range === 'custom' && customE) return customE
-    if (range === 'this_month') return new Date(now.getFullYear(), now.getMonth()+1, 0).toISOString().split('T')[0]
-    if (range === 'last_month') return new Date(now.getFullYear(), now.getMonth(), 0).toISOString().split('T')[0]
-    if (range === 'this_year') return new Date(now.getFullYear(), 11, 31).toISOString().split('T')[0]
-    if (range === 'last_year') return new Date(now.getFullYear()-1, 11, 31).toISOString().split('T')[0]
+    if (range === 'this_month') return ymd(new Date(now.getFullYear(), now.getMonth()+1, 0))
+    if (range === 'last_month') return ymd(new Date(now.getFullYear(), now.getMonth(), 0))
+    if (range === 'this_year') return ymd(new Date(now.getFullYear(), 11, 31))
+    if (range === 'last_year') return ymd(new Date(now.getFullYear()-1, 11, 31))
     if (range === 'this_week') {
       const day = now.getDay(); const sun = new Date(now); sun.setDate(now.getDate() + (day===0?0:7-day))
-      return sun.toISOString().split('T')[0]
+      return ymd(sun)
     }
-    return now.toISOString().split('T')[0]
+    return ymd(now)
   }
 
   async function fetchAll() {
     setLoading(true)
     const { start, end } = getDateBounds(dateRange, customStart, customEnd)
-    const startISO = start + 'T00:00:00.000Z'
-    const endISO = end + 'T23:59:59.999Z'
+    const startISO = dayStartUTC(start)
+    const endISO = dayEndUTC(end)
     const stayEnd = getStayDateEnd(dateRange, customEnd)
-    const today = new Date().toISOString().split('T')[0]
+    const today = ymd(new Date())
 
     // Load settings for total_sites and total_cabins
     const { data: settingsData } = await supabase.from('settings').select('total_sites, total_cabins, custom_payment_methods').single()
@@ -192,7 +192,7 @@ export default function ReportsPage() {
     setFutureCount(futureRes || 0)
 
     // Monthly occupancy trend
-    const { data: allRes } = await supabase.from('reservations').select('arrival_date, departure_date, sites(site_type)').neq('status','cancelled').gte('arrival_date', new Date(new Date().getFullYear(),0,1).toISOString().split('T')[0]).lte('arrival_date', new Date(new Date().getFullYear(),11,31).toISOString().split('T')[0])
+    const { data: allRes } = await supabase.from('reservations').select('arrival_date, departure_date, sites(site_type)').neq('status','cancelled').gte('arrival_date', ymd(new Date(new Date().getFullYear(),0,1))).lte('arrival_date', ymd(new Date(new Date().getFullYear(),11,31)))
     const monthOcc: {[key:string]:{label:string;sites:number;cabins:number;days:number}} = {}
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
     for (let m=0; m<12; m++) {
@@ -266,8 +266,8 @@ export default function ReportsPage() {
     const { data: allLiData } = await supabase
       .from('folio_line_items')
       .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at')
-      .gte('charged_at', start + 'T00:00:00')
-      .lte('charged_at', end + 'T23:59:59')
+      .gte('charged_at', startISO)
+      .lte('charged_at', endISO)
     // Exclude electric billing and seasonal account charges — keep all real store/POS items
     const storeItems = (allLiData || []).filter((li: any) => {
       if (guestAccountFolioIdSet.has(li.folio_id)) return false
@@ -333,7 +333,7 @@ export default function ReportsPage() {
     setResPayments(typedPmtData.filter((p:any)=>p.folios?.reservation_id!==null&&p.folios?.folio_type!=='guest_account'))
     setTransactions(typedPmtData)
     // Unified transaction log (folio + booking payments) — same source as /admin/transactions
-    const uni = await fetchUnifiedTransactions(start + 'T00:00:00', end + 'T23:59:59')
+    const uni = await fetchUnifiedTransactions(startISO, endISO)
     setUnifiedTx(uni)
     setGuestAccountPayments(typedPmtData.filter((p:any)=>p.folios?.folio_type==='guest_account'))
     setLoading(false)
@@ -411,9 +411,10 @@ export default function ReportsPage() {
   const overdueCampers = seasonalCampers.filter(c=>c.balance>0)
   const creditCampers = seasonalCampers.filter(c=>c.balance<0)
 
-  // Today's revenue
-  const todayStr = new Date().toISOString().split('T')[0]
-  const todayRevenue = allPayments.filter(t=>t.paid_at?.startsWith(todayStr)).reduce((s,t)=>s+(t.amount||0)-(t.surcharge_amount||0),0)/100
+  // Today's revenue — from the UNIFIED list (folio + online booking payments) so online
+  // reservations count, bucketed by LOCAL day (not the UTC calendar day), net of surcharge.
+  const todayStr = ymd(new Date())
+  const todayRevenue = unifiedTx.filter(t=>t.paid_at && ymd(new Date(t.paid_at))===todayStr).reduce((s,t)=>s+(t.amount||0)-(t.surcharge_amount||0),0)/100
 
   // Monthly chart
   const monthlyMap: { [key: string]: { label: string; value: number } } = {}
