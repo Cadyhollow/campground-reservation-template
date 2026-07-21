@@ -98,7 +98,7 @@ function AdminMapInner() {
     const status = siteStatuses[site.site_number]
 
     if (status === 'available') {
-      router.push(`/admin/manual-booking?site_id=${site.id}`)
+      router.push(`/admin/new-reservation?site_id=${site.id}&arrival=${selectedDate}`)
       return
     }
 
