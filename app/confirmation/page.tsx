@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
-import Image from 'next/image'
+import LogoBadge from '@/app/components/LogoBadge'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 
@@ -35,7 +35,7 @@ function ConfirmationContent() {
   }, [reservationId])
 
   async function fetchSettings() {
-    const { data } = await supabase.from('settings').select('check_in_time, check_out_time').limit(1).single()
+    const { data } = await supabase.from('settings').select('check_in_time, check_out_time, park_name, logo_url, logo_shape, accent_color').limit(1).single()
     setSettings(data || null)
   }
 
@@ -76,16 +76,15 @@ function ConfirmationContent() {
     <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
       {/* Header */}
       <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: '#2B2B2B' }}>
-        <Image
-          src="/images/logo.png"
-          alt="Campground Logo"
-          width={48}
-          height={48}
-          className="rounded-full"
-          style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }}
+        <LogoBadge
+          logoUrl={settings?.logo_url}
+          parkName={settings?.park_name}
+          shape={settings?.logo_shape}
+          accentColor={settings?.accent_color}
+          size={48}
         />
         <div>
-          <h1 className="text-white font-bold">Campground</h1>
+          <h1 className="text-white font-bold">{settings?.park_name || 'Campground'}</h1>
           <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Reservation Confirmed</p>
         </div>
       </div>

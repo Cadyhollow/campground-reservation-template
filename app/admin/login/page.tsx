@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import Image from 'next/image'
+import LogoBadge from '@/app/components/LogoBadge'
 import { supabase } from '@/lib/supabase'
 
 export default function AdminLoginPage() {
@@ -13,7 +13,7 @@ export default function AdminLoginPage() {
   const router = useRouter()
 
   useEffect(() => {
-    supabase.from('settings').select('park_name, logo_url').limit(1).single().then(({ data }) => {
+    supabase.from('settings').select('park_name, logo_url, logo_shape, accent_color').limit(1).single().then(({ data }) => {
       if (data) setSettings(data)
     })
   }, [])
@@ -48,13 +48,13 @@ export default function AdminLoginPage() {
       <div className="w-full max-w-sm px-4">
         {/* Logo */}
         <div className="text-center mb-8">
-          <Image
-            src={settings?.logo_url || '/images/logo.png'}
-            alt={settings?.park_name || 'Campground Logo'}
-            width={100}
-            height={100}
-            className="rounded-full mx-auto mb-4"
-            style={{ filter: 'hue-rotate(20deg) saturate(1.2)' }}
+          <LogoBadge
+            logoUrl={settings?.logo_url}
+            parkName={settings?.park_name}
+            shape={settings?.logo_shape}
+            accentColor={settings?.accent_color}
+            size={100}
+            className="mx-auto mb-4"
           />
           <h1 className="text-white font-bold text-xl">{settings?.park_name || 'Campground'}</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--accent-color)' }}>Admin Dashboard</p>
