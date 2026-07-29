@@ -9,7 +9,14 @@ export type LedgerLineItem = {
   quantity?: number | null
   line_total: number
   charged_at?: string | null
+  voided?: boolean | null
 }
+
+// The single void-filter idiom, imported wherever a folio balance is summed. Applied at
+// the SUM step (never at the query) so admin views can still DISPLAY voided rows as the
+// audit trail while excluding them from totals. `voided !== true` treats null/undefined/
+// false all as active, so it's safe against any row (or select) missing the column.
+export const notVoided = (i: { voided?: boolean | null }): boolean => i.voided !== true
 
 export type LedgerPayment = {
   id: string
