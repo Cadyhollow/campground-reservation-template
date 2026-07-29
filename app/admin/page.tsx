@@ -2,8 +2,14 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { ymd } from '@/lib/transactions'
+import { planAtLeast, normalizePlan } from '@/lib/plan'
 import Image from 'next/image'
 import Link from 'next/link'
+import {
+  PlusCircleIcon, ShoppingBagIcon, CreditCardIcon,
+  CalendarIcon, ClipboardDocumentListIcon, UsersIcon, BoltIcon, MapIcon,
+  Cog6ToothIcon,
+} from '@heroicons/react/24/outline'
 
 type ArrivalGuest = {
   id: string
@@ -39,7 +45,7 @@ export default function AdminDashboard() {
   const [upcomingReservations, setUpcomingReservations] = useState<any[]>([])
   const [totalActiveSites, setTotalActiveSites] = useState(0)
   const [occupancyTonight, setOccupancyTonight] = useState({ arriving: 0, occupied: 0, departing: 0 })
-  const [plan, setPlan] = useState<string>('summit')
+  const [plan, setPlan] = useState<string>('trailhead') // fail closed — lowest tier until settings load
   const [arrivalsToday, setArrivalsToday] = useState<ArrivalGuest[]>([])
   const [arrivalsDate, setArrivalsDate] = useState<string>(() => ymd(new Date()))
   const [loading, setLoading] = useState(true)
@@ -48,6 +54,7 @@ export default function AdminDashboard() {
   const [departuresToday, setDeparturesToday] = useState<any[]>([])
   const [walkinCountToday, setWalkinCountToday] = useState(0)
   const [sitesAvailableTonight, setSitesAvailableTonight] = useState(0)
+  const [seasonalStats, setSeasonalStats] = useState<{ season_year: number; total: number; signed: number; unsigned: number } | null>(null)
 
   useEffect(() => {
     const stored = localStorage.getItem('resonation_dashboard_view')
@@ -64,6 +71,14 @@ export default function AdminDashboard() {
   useEffect(() => { fetchArrivalsFor(arrivalsDate) }, [arrivalsDate])
 
   async function fetchAll() {
+    // Owner seasonal-contracts card (summit only). Fired here so it runs in PARALLEL
+    // with the main dashboard load below and never blocks it — no await. 403s cheaply
+    // on non-summit; the card renders only for owner + summit once this resolves.
+    fetch('/api/seasonals/unsigned-count')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d) setSeasonalStats(d) })
+      .catch(() => {})
+
     const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     const now = new Date()
     const today = ymd(now)
@@ -114,7 +129,7 @@ export default function AdminDashboard() {
     setDeparturesToday(todayDepartures || [])
     if (settingsData) {
       setSettings(settingsData)
-      if (settingsData.plan) setPlan(settingsData.plan)
+      setPlan(normalizePlan(settingsData.plan))
     }
 
     if (resData) {
@@ -384,21 +399,52 @@ export default function AdminDashboard() {
         )}
       </div>
 
-      {/* Quick links */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+      {/* Owner-only seasonal contracts card — summit-gated. Hidden for staff view,
+          non-summit plans, and when there are no seasonal campers. */}
+      {dashboardView === 'owner' && planAtLeast(plan, 'summit') && seasonalStats && seasonalStats.total > 0 && (
+        <Link href="/admin/seasonals" className="block mb-8">
+          <div className="rounded-xl border p-4 shadow-sm hover:shadow-md transition-all flex items-center justify-between"
+            style={{ background: seasonalStats.unsigned > 0 ? '#fffbeb' : '#f0fdf4', borderColor: seasonalStats.unsigned > 0 ? '#fde68a' : '#bbf7d0' }}>
+            <div>
+              <p className="text-xs font-semibold mb-1" style={{ color: seasonalStats.unsigned > 0 ? '#92400e' : '#14532d' }}>
+                Seasonal Contracts · {seasonalStats.season_year}
+              </p>
+              {seasonalStats.unsigned > 0 ? (
+                <p className="text-2xl font-bold" style={{ color: '#92400e' }}>
+                  {seasonalStats.unsigned} <span className="text-base font-semibold">of {seasonalStats.total} unsigned</span>
+                </p>
+              ) : (
+                <p className="text-2xl font-bold" style={{ color: '#14532d' }}>All {seasonalStats.total} signed 🎉</p>
+              )}
+            </div>
+            <span className="text-sm font-semibold" style={{ color: seasonalStats.unsigned > 0 ? '#b45309' : '#15803d' }}>Review →</span>
+          </div>
+        </Link>
+      )}
+
+      {/* Quick links — color-coded by task type (money → lookup → admin), one soft
+          family extended from the info tiles, heroicons, fixed placement so staff
+          learn color + position. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-5 mb-8">
         {[
-          { label: 'New Reservation', href: '/admin/new-reservation', icon: '➕' },
-          ...(settings?.pos_enabled ? [{ label: 'Walk-Up Sale', href: '/admin/folio/new', icon: '🛒' }] : []),
-          { label: 'Guest Directory', href: '/admin/guests', icon: '👥' },
-          { label: 'Calendar', href: '/admin/calendar', icon: '📅' },
-          ...(plan === 'ridgeline' || plan === 'summit' ? [{ label: 'Park Map', href: '/admin/map', icon: '🗺️' }] : []),
-          { label: 'Reservations', href: '/admin/reservations', icon: '📋' },
-          { label: 'Settings', href: '/admin/settings', icon: '⚙️' },
+          // Everyday money — warm hues, most prominent (first)
+          { label: 'New Reservation', href: '/admin/new-reservation', Icon: PlusCircleIcon, bg: '#dcfce7', border: '#86efac', text: '#15803d' },
+          ...(settings?.pos_enabled ? [{ label: 'Walk-Up Sale', href: '/admin/folio/new', Icon: ShoppingBagIcon, bg: '#ffedd5', border: '#fdba74', text: '#c2410c' }] : []),
+          { label: 'Take a Payment', href: '/admin/guests?mode=payment', Icon: CreditCardIcon, bg: '#ffe4e6', border: '#fda4af', text: '#be123c' },
+          // Lookup — cooler hues
+          { label: 'Calendar', href: '/admin/calendar', Icon: CalendarIcon, bg: '#e0f2fe', border: '#7dd3fc', text: '#0369a1' },
+          { label: 'Reservations', href: '/admin/reservations', Icon: ClipboardDocumentListIcon, bg: '#e0e7ff', border: '#a5b4fc', text: '#4338ca' },
+          { label: 'Guest Directory', href: '/admin/guests', Icon: UsersIcon, bg: '#ccfbf1', border: '#5eead4', text: '#0f766e' },
+          ...(planAtLeast(plan, 'summit') ? [{ label: 'Electric Bills', href: '/admin/electric-billing', Icon: BoltIcon, bg: '#fef9c3', border: '#fde047', text: '#a16207' }] : []),
+          ...(settings && planAtLeast(plan, 'ridgeline') ? [{ label: 'Park Map', href: '/admin/map', Icon: MapIcon, bg: '#f3e8ff', border: '#d8b4fe', text: '#7e22ce' }] : []),
+          // Admin — muted, tucked last
+          { label: 'Settings', href: '/admin/settings', Icon: Cog6ToothIcon, bg: '#f1f5f9', border: '#cbd5e1', text: '#475569' },
         ].map(link => (
           <Link key={link.href} href={link.href}
-            className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm text-center hover:border-gray-300 transition-colors">
-            <div className="text-2xl mb-1">{link.icon}</div>
-            <p className="text-sm font-medium text-gray-700">{link.label}</p>
+            className="rounded-2xl border p-5 shadow-sm hover:shadow-md transition-shadow flex flex-col gap-2.5"
+            style={{ background: link.bg, borderColor: link.border, color: link.text }}>
+            <link.Icon className="w-8 h-8" aria-hidden="true" />
+            <p className="text-base font-bold" style={{ color: link.text }}>{link.label}</p>
           </Link>
         ))}
       </div>
