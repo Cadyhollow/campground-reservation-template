@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import Image from 'next/image'
+import { planAtLeast, normalizePlan } from '@/lib/plan'
 
 type NavItem = {
   name: string
@@ -21,16 +22,8 @@ type NavGroup = {
   items: NavItem[]
 }
 
-// Plan hierarchy for comparison
-const PLAN_LEVELS: { [key: string]: number } = {
-  trailhead: 1,
-  ridgeline: 2,
-  summit: 3,
-}
-
-function planAtLeast(current: string, required: 'ridgeline' | 'summit'): boolean {
-  return (PLAN_LEVELS[current] || 1) >= (PLAN_LEVELS[required] || 99)
-}
+// Plan gating comes from lib/plan (shared with the dashboard) — it fails closed, so an
+// unset or unrecognized plan can never satisfy a gate.
 
 const navGroups: NavGroup[] = [
   {
@@ -97,6 +90,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [settings, setSettings] = useState<any>(null)
   const [posEnabled, setPosEnabled] = useState(false)
+  const [settingsLoaded, setSettingsLoaded] = useState(false) // gate plan-dependent nav until first fetch resolves
 
   // Find which group contains the active page and open only that one
   const getActiveGroup = () => {
@@ -112,7 +106,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   const [openGroup, setOpenGroup] = useState<string | null>(null)
 
-  const [plan, setPlan] = useState<string>('summit') // default to summit for Cady Hollow
+  const [plan, setPlan] = useState<string>('trailhead') // fail closed — lowest tier until settings load
   const [dashboardView, setDashboardView] = useState<'owner'|'staff'>('staff')
 
   useEffect(() => {
@@ -146,8 +140,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         if (data) {
           setSettings(data)
           setPosEnabled(!!data.pos_enabled)
-          if (data.plan) setPlan(data.plan)
+          setPlan(normalizePlan(data.plan))
         }
+        setSettingsLoaded(true) // resolve even on null/failed fetch so the nav never sticks on skeleton
       })
   }, [])
 
@@ -170,8 +165,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     .map(g => ({
       ...g,
       items: g.items.filter(item => {
-        if (item.href === '/admin/electric-billing') return planAtLeast(plan, 'summit')
-        return true
+        // minPlan is always enforced; POS (an add-on) governs only posOnly groups, never plan gates
+        return !item.minPlan || planAtLeast(plan, item.minPlan)
       })
     }))
     .filter(g => g.items.length > 0)
@@ -215,6 +210,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           Dashboard
         </Link>
 
+        {/* Plan-dependent nav is held behind a skeleton until settings resolve, so gated
+            items can never flash before the plan is known. */}
+        {!settingsLoaded ? (
+          <div className="space-y-1.5 px-1 pt-1" aria-hidden>
+            {[0, 1, 2, 3, 4].map(i => (
+              <div key={i} style={{ height: 44, borderRadius: 12, background: 'rgba(255,255,255,0.06)' }} />
+            ))}
+          </div>
+        ) : (<>
         {visibleGroups.map((group) => {
           const active = isGroupActive(group)
           const open = openGroup === group.label
@@ -236,7 +240,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               </button>
               {open && (
                 <div className="mt-0.5 space-y-0.5 pb-1">
-                  {group.items.filter(item => !item.minPlan || planAtLeast(plan, item.minPlan) || posEnabled).map((item) => {
+                  {group.items.map((item) => {
                     const itemActive = item.href === pathname || (item.href !== '/admin' && pathname.startsWith(item.href))
                     return (
                       <Link key={item.name} href={item.href} onClick={() => setSidebarOpen(false)}
@@ -271,6 +275,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             Reports
           </Link>
         )}
+        </>)}
       </nav>
 
       {/* Footer */}
