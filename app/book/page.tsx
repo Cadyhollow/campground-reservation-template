@@ -305,7 +305,7 @@ function BookingForm() {
     const ctx = canvas.getContext('2d')!
     ctx.lineWidth = 2
     ctx.lineCap = 'round'
-    ctx.strokeStyle = '#ffffff'
+    ctx.strokeStyle = '#1F2620'
     const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left
     const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top
     ctx.lineTo(x, y)
@@ -524,23 +524,23 @@ function BookingForm() {
 
   if (sameDayBlocked) {
     return (
-      <main className="min-h-screen flex flex-col" style={{ backgroundColor: '#1C1C1C' }}>
-        <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: '#2B2B2B' }}>
+      <main className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--surface-bg)' }}>
+        <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: 'var(--surface-card)' }}>
           {settings?.logo_url && (
             <div className={`w-12 h-12 overflow-hidden flex items-center justify-center shrink-0 ${logoShapeClass}`}>
               <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={48} height={48} className="object-contain w-full h-full" />
             </div>
           )}
           <div>
-            <h1 className="text-white font-bold">{settings?.park_name || 'Campground'}</h1>
+            <h1 className="text-[var(--text-primary)] font-bold">{settings?.park_name || 'Campground'}</h1>
             <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Online Reservations</p>
           </div>
         </div>
         <div className="flex-1 flex items-center justify-center px-4 py-16">
-          <div className="max-w-md w-full rounded-2xl p-8 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+          <div className="max-w-md w-full rounded-2xl p-8 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
             <div className="text-5xl mb-4">📞</div>
-            <h2 className="text-white text-2xl font-bold mb-3">Same-Day Reservations</h2>
-            <p className="text-gray-300 text-base leading-relaxed">{sameDayMessage}</p>
+            <h2 className="text-[var(--text-primary)] text-2xl font-bold mb-3">Same-Day Reservations</h2>
+            <p className="text-[var(--text-muted)] text-base leading-relaxed">{sameDayMessage}</p>
             <button onClick={() => window.history.back()} className="mt-8 px-6 py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>← Go Back</button>
           </div>
         </div>
@@ -549,16 +549,16 @@ function BookingForm() {
   }
 
   return (
-    <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
+    <main className="min-h-screen" style={{ backgroundColor: 'var(--surface-bg)' }}>
       {/* Header */}
-      <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: '#2B2B2B' }}>
+      <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: 'var(--surface-card)' }}>
         {settings?.logo_url && (
           <div className={`w-12 h-12 overflow-hidden flex items-center justify-center shrink-0 ${logoShapeClass}`}>
             <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={48} height={48} className="object-contain w-full h-full" />
           </div>
         )}
         <div>
-          <h1 className="text-white font-bold">{settings?.park_name || 'Campground'}</h1>
+          <h1 className="text-[var(--text-primary)] font-bold">{settings?.park_name || 'Campground'}</h1>
           <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Complete your reservation</p>
         </div>
       </div>
@@ -567,28 +567,28 @@ function BookingForm() {
         <div className="lg:col-span-2 space-y-6">
 
           {/* Step 1 - Guest Details */}
-          <div className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
-            <h2 className="text-white font-bold text-lg mb-4">{step === 1 ? '1. Your Information' : '✓ Your Information'}</h2>
+          <div className="rounded-2xl p-6" style={{ backgroundColor: 'var(--surface-card)' }}>
+            <h2 className="text-[var(--text-primary)] font-bold text-lg mb-4">{step === 1 ? '1. Your Information' : '✓ Your Information'}</h2>
             {step === 1 ? (
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1">Full Name *</label>
-                  <input className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="Jane Smith" value={form.guest_name} onChange={e => setForm({ ...form, guest_name: e.target.value })} />
+                  <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Full Name *</label>
+                  <input className="w-full themed-input border rounded-lg px-3 py-2 text-[var(--text-primary)] text-sm" placeholder="Jane Smith" value={form.guest_name} onChange={e => setForm({ ...form, guest_name: e.target.value })} />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1">Email Address *</label>
-                  <input className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="jane@email.com" type="email" value={form.guest_email} onChange={e => setForm({ ...form, guest_email: e.target.value })} />
+                  <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Email Address *</label>
+                  <input className="w-full themed-input border rounded-lg px-3 py-2 text-[var(--text-primary)] text-sm" placeholder="jane@email.com" type="email" value={form.guest_email} onChange={e => setForm({ ...form, guest_email: e.target.value })} />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1">Phone Number *</label>
-                  <input className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm" placeholder="(555) 555-5555" type="tel" value={form.guest_phone} onChange={e => setForm({ ...form, guest_phone: e.target.value })} />
+                  <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Phone Number *</label>
+                  <input className="w-full themed-input border rounded-lg px-3 py-2 text-[var(--text-primary)] text-sm" placeholder="(555) 555-5555" type="tel" value={form.guest_phone} onChange={e => setForm({ ...form, guest_phone: e.target.value })} />
                 </div>
 
                 {/* Camper Type Visual Selector — RV sites only */}
                 {isRvSite && (
                   <>
                     <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">Camper Type *</label>
+                      <label className="block text-sm font-medium text-[var(--text-muted)] mb-2">Camper Type *</label>
                       <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
                         {CAMPER_TYPES.map(type => (
                           <button
@@ -597,9 +597,9 @@ function BookingForm() {
                             onClick={() => setForm({ ...form, camper_type: type.value })}
                             className="flex flex-col items-center gap-1.5 p-2 rounded-xl border-2 transition-all"
                             style={{
-                              borderColor: form.camper_type === type.value ? 'var(--accent-color)' : '#4B5563',
-                              backgroundColor: form.camper_type === type.value ? 'rgba(var(--accent-rgb, 45,106,79), 0.15)' : '#374151',
-                              color: form.camper_type === type.value ? 'var(--accent-color)' : '#9CA3AF',
+                              borderColor: form.camper_type === type.value ? 'var(--accent-color)' : 'var(--border)',
+                              backgroundColor: form.camper_type === type.value ? 'rgba(var(--accent-rgb, 45,106,79), 0.15)' : 'var(--surface-input)',
+                              color: form.camper_type === type.value ? 'var(--accent-color)' : 'var(--text-muted)',
                             }}
                           >
                             <div className="w-14 h-8">{type.svg}</div>
@@ -612,9 +612,9 @@ function BookingForm() {
                     {/* Camper Length + Amperage */}
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-1">Camper Length (ft) *</label>
+                        <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Camper Length (ft) *</label>
                         <input
-                          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                          className="w-full themed-input border rounded-lg px-3 py-2 text-[var(--text-primary)] text-sm"
                           placeholder="e.g. 32"
                           type="number"
                           min="1"
@@ -624,9 +624,9 @@ function BookingForm() {
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-1">Amperage *</label>
+                        <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Amperage *</label>
                         <select
-                          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                          className="w-full themed-input border rounded-lg px-3 py-2 text-[var(--text-primary)] text-sm"
                           value={form.camper_amperage}
                           onChange={e => setForm({ ...form, camper_amperage: e.target.value })}
                         >
@@ -645,11 +645,11 @@ function BookingForm() {
                 </button>
               </div>
             ) : (
-              <div className="text-gray-300 text-sm space-y-1">
-                <p className="text-white font-medium">{form.guest_name}</p>
+              <div className="text-[var(--text-muted)] text-sm space-y-1">
+                <p className="text-[var(--text-primary)] font-medium">{form.guest_name}</p>
                 <p>{form.guest_email}</p>
                 <p>{form.guest_phone}</p>
-                {isRvSite && form.camper_type && <p className="text-gray-400">{camperTypeLabel(form.camper_type)} · {form.camper_length} ft · {form.camper_amperage.replace('amp', ' Amp')}</p>}
+                {isRvSite && form.camper_type && <p className="text-[var(--text-muted)]">{camperTypeLabel(form.camper_type)} · {form.camper_length} ft · {form.camper_amperage.replace('amp', ' Amp')}</p>}
                 <button onClick={() => { setStep(1); setWaiverSigned(false) }} className="text-xs mt-2" style={{ color: 'var(--accent-color)' }}>Edit</button>
               </div>
             )}
@@ -657,22 +657,22 @@ function BookingForm() {
 
           {/* Step 2 - Add-Ons, Discount & Waiver */}
           {step >= 2 && (
-            <div className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
-              <h2 className="text-white font-bold text-lg mb-4">2. Add-Ons (Optional)</h2>
+            <div className="rounded-2xl p-6" style={{ backgroundColor: 'var(--surface-card)' }}>
+              <h2 className="text-[var(--text-primary)] font-bold text-lg mb-4">2. Add-Ons (Optional)</h2>
               {addons.length === 0 ? (
-                <p className="text-gray-400 text-sm mb-6">No add-ons available.</p>
+                <p className="text-[var(--text-muted)] text-sm mb-6">No add-ons available.</p>
               ) : (
                 <div className="space-y-3 mb-6">
                   {addons.map(addon => (
-                    <div key={addon.id} className="flex items-center justify-between p-3 rounded-lg bg-gray-800">
+                    <div key={addon.id} className="flex items-center justify-between p-3 rounded-lg bg-[var(--surface-input)]">
                       <div>
-                        <p className="text-white font-medium text-sm">{addon.name}</p>
-                        {addon.description && <p className="text-gray-400 text-xs">{addon.description}</p>}
+                        <p className="text-[var(--text-primary)] font-medium text-sm">{addon.name}</p>
+                        {addon.description && <p className="text-[var(--text-muted)] text-xs">{addon.description}</p>}
                         <p className="text-sm mt-0.5" style={{ color: 'var(--accent-color)' }}>${(addon.price / 100).toFixed(2)}</p>
                       </div>
                       <div className="flex items-center gap-2">
-                        <button onClick={() => setSelectedAddons(prev => ({ ...prev, [addon.id]: Math.max(0, (prev[addon.id] || 0) - 1) }))} className="w-8 h-8 rounded-full bg-gray-700 text-white font-bold hover:bg-gray-600">-</button>
-                        <span className="text-white w-6 text-center">{selectedAddons[addon.id] || 0}</span>
+                        <button onClick={() => setSelectedAddons(prev => ({ ...prev, [addon.id]: Math.max(0, (prev[addon.id] || 0) - 1) }))} className="w-8 h-8 rounded-full bg-[var(--surface-input)] text-[var(--text-primary)] font-bold hover:opacity-80">-</button>
+                        <span className="text-[var(--text-primary)] w-6 text-center">{selectedAddons[addon.id] || 0}</span>
                         <button onClick={() => setSelectedAddons(prev => ({ ...prev, [addon.id]: (prev[addon.id] || 0) + 1 }))} className="w-8 h-8 rounded-full text-white font-bold" style={{ backgroundColor: 'var(--accent-color)' }}>+</button>
                       </div>
                     </div>
@@ -681,10 +681,10 @@ function BookingForm() {
               )}
 
               {settings?.early_checkin_enabled && settings?.early_checkin_show_customers && (
-                <div className={`flex items-center justify-between p-3 rounded-lg mb-3 ${earlyBlocked ? 'bg-gray-800 opacity-50' : 'bg-gray-800'}`}>
+                <div className={`flex items-center justify-between p-3 rounded-lg mb-3 ${earlyBlocked ? 'bg-[var(--surface-input)] opacity-50' : 'bg-[var(--surface-input)]'}`}>
                   <div>
-                    <p className="text-white font-medium text-sm">Early Check-In</p>
-                    <p className="text-gray-400 text-xs">Arrive as early as {fmtTime(settings.early_checkin_time)}</p>
+                    <p className="text-[var(--text-primary)] font-medium text-sm">Early Check-In</p>
+                    <p className="text-[var(--text-muted)] text-xs">Arrive as early as {fmtTime(settings.early_checkin_time)}</p>
                     <p className="text-sm mt-0.5" style={{ color: 'var(--accent-color)' }}>${(settings.early_checkin_price / 100).toFixed(2)}</p>
                     {earlyBlocked && <p className="text-amber-400 text-xs mt-1">Not available for these dates — another guest is using this site.</p>}
                   </div>
@@ -693,10 +693,10 @@ function BookingForm() {
               )}
 
               {settings?.late_checkout_enabled && settings?.late_checkout_show_customers && (
-                <div className={`flex items-center justify-between p-3 rounded-lg mb-3 ${lateBlocked ? 'bg-gray-800 opacity-50' : 'bg-gray-800'}`}>
+                <div className={`flex items-center justify-between p-3 rounded-lg mb-3 ${lateBlocked ? 'bg-[var(--surface-input)] opacity-50' : 'bg-[var(--surface-input)]'}`}>
                   <div>
-                    <p className="text-white font-medium text-sm">Late Check-Out</p>
-                    <p className="text-gray-400 text-xs">Stay until {fmtTime(settings.late_checkout_time)}</p>
+                    <p className="text-[var(--text-primary)] font-medium text-sm">Late Check-Out</p>
+                    <p className="text-[var(--text-muted)] text-xs">Stay until {fmtTime(settings.late_checkout_time)}</p>
                     <p className="text-sm mt-0.5" style={{ color: 'var(--accent-color)' }}>${(settings.late_checkout_price / 100).toFixed(2)}</p>
                     {lateBlocked && <p className="text-amber-400 text-xs mt-1">Not available for these dates — another guest is using this site.</p>}
                   </div>
@@ -705,10 +705,10 @@ function BookingForm() {
               )}
 
               {/* Discount Code */}
-              <div className="pt-4 border-t border-gray-700 mb-6">
-                <h3 className="text-white font-medium mb-3">Discount Code</h3>
+              <div className="pt-4 border-t border-[var(--border)] mb-6">
+                <h3 className="text-[var(--text-primary)] font-medium mb-3">Discount Code</h3>
                 <div className="flex gap-2">
-                  <input className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm uppercase" placeholder="Enter code..." value={discountCode} onChange={e => { setDiscountCode(e.target.value.toUpperCase()); setDiscountResult(null); setDiscountError('') }} />
+                  <input className="flex-1 themed-input border rounded-lg px-3 py-2 text-[var(--text-primary)] text-sm uppercase" placeholder="Enter code..." value={discountCode} onChange={e => { setDiscountCode(e.target.value.toUpperCase()); setDiscountResult(null); setDiscountError('') }} />
                   <button onClick={checkDiscount} disabled={checkingDiscount} className="px-4 py-2 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: 'var(--accent-color)' }}>{checkingDiscount ? '...' : 'Apply'}</button>
                 </div>
                 {discountError && <p className="text-red-400 text-sm mt-2">{discountError}</p>}
@@ -717,23 +717,23 @@ function BookingForm() {
 
               {/* Waiver */}
               {waiverEnabled && !waiverSigned && waiverText && (
-                <div className="pt-4 border-t border-gray-700">
-                  <h3 className="text-white font-bold text-lg mb-3">3. Liability Waiver</h3>
-                  <p className="text-gray-400 text-sm mb-3">Please read and sign the following waiver before proceeding to payment.</p>
-                  <div className="bg-gray-800 rounded-lg p-4 mb-4 h-48 overflow-y-auto">
-                    <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{waiverText}</p>
+                <div className="pt-4 border-t border-[var(--border)]">
+                  <h3 className="text-[var(--text-primary)] font-bold text-lg mb-3">3. Liability Waiver</h3>
+                  <p className="text-[var(--text-muted)] text-sm mb-3">Please read and sign the following waiver before proceeding to payment.</p>
+                  <div className="bg-[var(--surface-input)] rounded-lg p-4 mb-4 h-48 overflow-y-auto">
+                    <p className="text-[var(--text-muted)] text-xs leading-relaxed whitespace-pre-line">{waiverText}</p>
                   </div>
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
-                      <label className="text-sm font-medium text-gray-300">Sign below:</label>
-                      <button onClick={clearSignature} className="text-xs text-gray-400 hover:text-white">Clear</button>
+                      <label className="text-sm font-medium text-[var(--text-muted)]">Sign below:</label>
+                      <button onClick={clearSignature} className="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">Clear</button>
                     </div>
                     <canvas
                       ref={signatureCanvasRef}
                       width={600}
                       height={150}
-                      className="w-full rounded-lg border border-gray-600 cursor-crosshair touch-none"
-                      style={{ backgroundColor: '#1a1a2e' }}
+                      className="w-full rounded-lg border border-[var(--border)] cursor-crosshair touch-none"
+                      style={{ backgroundColor: '#FFFFFF' }}
                       onMouseDown={startDrawing}
                       onMouseMove={draw}
                       onMouseUp={stopDrawing}
@@ -742,7 +742,7 @@ function BookingForm() {
                       onTouchMove={draw}
                       onTouchEnd={stopDrawing}
                     />
-                    {!hasSignature && <p className="text-gray-500 text-xs mt-1">Draw your signature above using your mouse or finger</p>}
+                    {!hasSignature && <p className="text-[var(--text-muted)] text-xs mt-1">Draw your signature above using your mouse or finger</p>}
                   </div>
                   <div className="flex items-start gap-3 mb-4">
                     <button
@@ -751,9 +751,9 @@ function BookingForm() {
                       className="w-5 h-5 mt-0.5 shrink-0 rounded border-2 flex items-center justify-center transition-colors"
                       style={{ borderColor: waiverChecked ? '#14b8a6' : '#6b7280', backgroundColor: waiverChecked ? '#14b8a6' : 'transparent' }}
                     >
-                      {waiverChecked && <span className="text-white text-xs font-bold">✓</span>}
+                      {waiverChecked && <span className="text-[var(--text-primary)] text-xs font-bold">✓</span>}
                     </button>
-                    <label className="text-gray-300 text-sm">
+                    <label className="text-[var(--text-muted)] text-sm">
                       I have read, understand, and agree to the {settings?.park_name || 'Campground'} Liability Waiver above. I acknowledge that my electronic signature is legally binding.
                     </label>
                   </div>
@@ -764,7 +764,7 @@ function BookingForm() {
               )}
 
               {(!waiverEnabled || !waiverText) && !waiverSigned && (
-                <div className="pt-4 border-t border-gray-700">
+                <div className="pt-4 border-t border-[var(--border)]">
                   <button onClick={proceedFromAddons} className="w-full py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>
                     Continue to Payment →
                   </button>
@@ -772,7 +772,7 @@ function BookingForm() {
               )}
 
               {waiverEnabled && waiverSigned && (
-                <div className="pt-4 border-t border-gray-700">
+                <div className="pt-4 border-t border-[var(--border)]">
                   <p className="text-green-400 font-medium">✓ Liability waiver signed</p>
                   <button onClick={() => { setWaiverSigned(false); setStep(2) }} className="text-xs mt-1" style={{ color: 'var(--accent-color)' }}>Re-sign</button>
                 </div>
@@ -782,38 +782,38 @@ function BookingForm() {
 
           {/* Step 3 - Payment */}
           {step >= 3 && waiverSigned && (
-            <div className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
-              <h2 className="text-white font-bold text-lg mb-4">{waiverEnabled ? '4. Payment' : '3. Payment'}</h2>
+            <div className="rounded-2xl p-6" style={{ backgroundColor: 'var(--surface-card)' }}>
+              <h2 className="text-[var(--text-primary)] font-bold text-lg mb-4">{waiverEnabled ? '4. Payment' : '3. Payment'}</h2>
               <div className="mb-6 space-y-2 text-sm">
-                <div className="flex justify-between text-gray-300">
+                <div className="flex justify-between text-[var(--text-muted)]">
                   <span>{siteTypeLabel(site.site_type)} {site.site_number} × {site.nights} nights</span>
                   <span>${(site.total_price / 100).toFixed(2)}</span>
                 </div>
-                {extraGuestFee > 0 && <div className="flex justify-between text-gray-300"><span>Extra guest fees</span><span>${(extraGuestFee / 100).toFixed(2)}</span></div>}
+                {extraGuestFee > 0 && <div className="flex justify-between text-[var(--text-muted)]"><span>Extra guest fees</span><span>${(extraGuestFee / 100).toFixed(2)}</span></div>}
                 {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
                   const addon = addons.find(a => a.id === id)
                   if (!addon) return null
                   return (
                     <div key={id} className="flex justify-between">
-                      <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
-                      <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
+                      <p className="text-[var(--text-muted)]">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
+                      <p className="text-[var(--text-primary)] font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
                     </div>
                   )
                 })}
                 {feeBreakdown.map(fee => (
-                  <div key={fee.id} className="flex justify-between text-gray-300">
+                  <div key={fee.id} className="flex justify-between text-[var(--text-muted)]">
                     <span>{fee.name}</span>
                     <span>${(fee.calculatedAmount / 100).toFixed(2)}</span>
                   </div>
                 ))}
                 {discountAmount > 0 && <div className="flex justify-between text-green-400"><span>Discount ({discountResult.code})</span><span>-${(discountAmount / 100).toFixed(2)}</span></div>}
-                <div className="border-t border-gray-700 pt-2 flex justify-between text-white font-bold">
+                <div className="border-t border-[var(--border)] pt-2 flex justify-between text-[var(--text-primary)] font-bold">
                   <span>Total</span><span>${(total / 100).toFixed(2)}</span>
                 </div>
               </div>
-              <div className="rounded-lg p-4 bg-gray-800 mb-6">
-                <p className="text-gray-300 text-xs leading-relaxed">
-                  <span className="text-white font-medium">Cancellation Policy: </span>
+              <div className="rounded-lg p-4 bg-[var(--surface-input)] mb-6">
+                <p className="text-[var(--text-muted)] text-xs leading-relaxed">
+                  <span className="text-[var(--text-primary)] font-medium">Cancellation Policy: </span>
                   {cancellationPolicy ? cancellationPolicy.policy_text : 'Cancellations must be made at least 7 days before arrival. A 10% booking fee is retained on all cancellations.'}
                 </p>
                 {cancellationPolicy && !cancellationPolicy.deposit_refundable && (
@@ -821,13 +821,13 @@ function BookingForm() {
                 )}
               </div>
               <div className="mb-6">
-                <h3 className="text-white font-medium mb-3">Card Details</h3>
+                <h3 className="text-[var(--text-primary)] font-medium mb-3">Card Details</h3>
                 <div id="square-card-container" className="rounded-lg overflow-hidden" style={{ minHeight: '89px' }} />
-                {!squareLoaded && <p className="text-gray-400 text-sm mt-2">Loading payment form...</p>}
+                {!squareLoaded && <p className="text-[var(--text-muted)] text-sm mt-2">Loading payment form...</p>}
               </div>
               {paymentError && <div className="rounded-lg p-4 bg-red-900 mb-4"><p className="text-red-300 text-sm">{paymentError}</p></div>}
               <div className="space-y-3">
-                <h3 className="text-white font-medium">Choose Payment Option</h3>
+                <h3 className="text-[var(--text-primary)] font-medium">Choose Payment Option</h3>
                 {showDepositButton && (
                   <button
                     disabled={paymentLoading || !squareLoaded}
@@ -836,12 +836,12 @@ function BookingForm() {
                     onClick={() => handlePayment('deposit')}
                   >
                     {paymentLoading && selectedPaymentType === 'deposit' ? 'Processing...' : `${depositLabel} — $${(depositDisplay / 100).toFixed(2)}`}
-                    {depositSubtext && <span className="block text-xs font-normal mt-0.5 text-gray-400">{depositSubtext}</span>}
+                    {depositSubtext && <span className="block text-xs font-normal mt-0.5 text-[var(--text-muted)]">{depositSubtext}</span>}
                   </button>
                 )}
                 <button
                   disabled={paymentLoading || !squareLoaded}
-                  className="w-full py-3 rounded-xl text-white font-semibold transition-colors disabled:opacity-50"
+                  className="w-full py-3 rounded-xl text-[var(--text-primary)] font-semibold transition-colors disabled:opacity-50"
                   style={{ backgroundColor: 'var(--accent-color)' }}
                   onClick={() => handlePayment('full')}
                 >
@@ -854,20 +854,20 @@ function BookingForm() {
 
         {/* Sidebar */}
         <div className="lg:col-span-1">
-          <div className="rounded-2xl p-6 sticky top-6" style={{ backgroundColor: '#2B2B2B' }}>
-            <h3 className="text-white font-bold mb-4">Booking Summary</h3>
+          <div className="rounded-2xl p-6 sticky top-6" style={{ backgroundColor: 'var(--surface-card)' }}>
+            <h3 className="text-[var(--text-primary)] font-bold mb-4">Booking Summary</h3>
             <div className="space-y-3 text-sm">
-              <div><p className="text-gray-400">Site</p><p className="text-white font-medium">{siteTypeLabel(site.site_type)} {site.site_number}</p></div>
-              <div><p className="text-gray-400">Arrival</p><p className="text-white font-medium">{arrival}</p><p className="text-gray-300 text-xs">Check-in: {settings?.check_in_time || '2:00 PM'}</p></div>
-              <div><p className="text-gray-400">Departure</p><p className="text-white font-medium">{departure}</p><p className="text-gray-300 text-xs">Check-out: {settings?.check_out_time || '12:00 PM'}</p></div>
-              <div><p className="text-gray-400">Guests</p><p className="text-white font-medium">{adults} adult{adults !== 1 ? 's' : ''}{children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}</p></div>
-              <div><p className="text-gray-400">Duration</p><p className="text-white font-medium">{site.nights} night{site.nights !== 1 ? 's' : ''}</p></div>
-              <div className="border-t border-gray-700 pt-3"><p className="text-gray-400">Rate</p><p className="text-white font-medium">${(site.nightly_rate / 100).toFixed(2)}/night</p></div>
+              <div><p className="text-[var(--text-muted)]">Site</p><p className="text-[var(--text-primary)] font-medium">{siteTypeLabel(site.site_type)} {site.site_number}</p></div>
+              <div><p className="text-[var(--text-muted)]">Arrival</p><p className="text-[var(--text-primary)] font-medium">{arrival}</p><p className="text-[var(--text-muted)] text-xs">Check-in: {settings?.check_in_time || '2:00 PM'}</p></div>
+              <div><p className="text-[var(--text-muted)]">Departure</p><p className="text-[var(--text-primary)] font-medium">{departure}</p><p className="text-[var(--text-muted)] text-xs">Check-out: {settings?.check_out_time || '12:00 PM'}</p></div>
+              <div><p className="text-[var(--text-muted)]">Guests</p><p className="text-[var(--text-primary)] font-medium">{adults} adult{adults !== 1 ? 's' : ''}{children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}</p></div>
+              <div><p className="text-[var(--text-muted)]">Duration</p><p className="text-[var(--text-primary)] font-medium">{site.nights} night{site.nights !== 1 ? 's' : ''}</p></div>
+              <div className="border-t border-[var(--border)] pt-3"><p className="text-[var(--text-muted)]">Rate</p><p className="text-[var(--text-primary)] font-medium">${(site.nightly_rate / 100).toFixed(2)}/night</p></div>
               {isRvSite && form.camper_type && (
-                <div className="border-t border-gray-700 pt-3">
-                  <p className="text-gray-400">Camper</p>
-                  <p className="text-white font-medium">{camperTypeLabel(form.camper_type)}</p>
-                  {form.camper_length && <p className="text-gray-400 text-xs">{form.camper_length} ft · {form.camper_amperage.replace('amp', ' Amp')}</p>}
+                <div className="border-t border-[var(--border)] pt-3">
+                  <p className="text-[var(--text-muted)]">Camper</p>
+                  <p className="text-[var(--text-primary)] font-medium">{camperTypeLabel(form.camper_type)}</p>
+                  {form.camper_length && <p className="text-[var(--text-muted)] text-xs">{form.camper_length} ft · {form.camper_amperage.replace('amp', ' Amp')}</p>}
                 </div>
               )}
               {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
@@ -875,27 +875,27 @@ function BookingForm() {
                 if (!addon) return null
                 return (
                   <div key={id} className="flex justify-between">
-                    <p className="text-gray-400">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
-                    <p className="text-white font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
+                    <p className="text-[var(--text-muted)]">{addon.name}{qty > 1 ? ` ×${qty}` : ''}</p>
+                    <p className="text-[var(--text-primary)] font-medium">${((addon.price * qty) / 100).toFixed(2)}</p>
                   </div>
                 )
               })}
               {earlyFee > 0 && (
                 <div className="flex justify-between">
-                  <p className="text-gray-400">Early Check-In</p>
-                  <p className="text-white font-medium">${(earlyFee / 100).toFixed(2)}</p>
+                  <p className="text-[var(--text-muted)]">Early Check-In</p>
+                  <p className="text-[var(--text-primary)] font-medium">${(earlyFee / 100).toFixed(2)}</p>
                 </div>
               )}
               {lateFee > 0 && (
                 <div className="flex justify-between">
-                  <p className="text-gray-400">Late Check-Out</p>
-                  <p className="text-white font-medium">${(lateFee / 100).toFixed(2)}</p>
+                  <p className="text-[var(--text-muted)]">Late Check-Out</p>
+                  <p className="text-[var(--text-primary)] font-medium">${(lateFee / 100).toFixed(2)}</p>
                 </div>
               )}
               {feeBreakdown.map(fee => (
                 <div key={fee.id} className="flex justify-between">
-                  <p className="text-gray-400">{fee.name}</p>
-                  <p className="text-white font-medium">${(fee.calculatedAmount / 100).toFixed(2)}</p>
+                  <p className="text-[var(--text-muted)]">{fee.name}</p>
+                  <p className="text-[var(--text-primary)] font-medium">${(fee.calculatedAmount / 100).toFixed(2)}</p>
                 </div>
               ))}
               {discountAmount > 0 && (
@@ -904,9 +904,9 @@ function BookingForm() {
                   <p className="text-green-400 font-medium">-${(discountAmount / 100).toFixed(2)}</p>
                 </div>
               )}
-              <div className="border-t border-gray-700 pt-3">
+              <div className="border-t border-[var(--border)] pt-3">
                 <div className="flex justify-between">
-                  <p className="text-white font-bold">Total</p>
+                  <p className="text-[var(--text-primary)] font-bold">Total</p>
                   <p className="font-bold text-lg" style={{ color: 'var(--accent-color)' }}>${(total / 100).toFixed(2)}</p>
                 </div>
               </div>
@@ -920,7 +920,7 @@ function BookingForm() {
 
 export default function BookPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#1C1C1C' }}><p className="text-gray-400">Loading...</p></div>}>
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--surface-bg)' }}><p className="text-[var(--text-muted)]">Loading...</p></div>}>
       <BookingForm />
     </Suspense>
   )
