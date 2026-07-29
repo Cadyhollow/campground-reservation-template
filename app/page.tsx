@@ -203,7 +203,7 @@ export default function HomePage() {
       <div key={site.id}
         ref={isSelected ? selectedSiteRef : null}
         className={`rounded-2xl overflow-hidden transition-all ${site.meets_min_stay ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'}`}
-        style={{ backgroundColor: '#2B2B2B', outline: isSelected ? '2px solid var(--accent-color)' : 'none' }}
+        style={{ backgroundColor: 'var(--surface-card)', outline: isSelected ? '2px solid var(--accent-color)' : 'none' }}
         onClick={() => site.meets_min_stay && setSelectedSite(site)}
       >
         {/* Main photo */}
@@ -227,7 +227,7 @@ export default function HomePage() {
         )}
         {/* Second photo */}
         {site.photo_url_2 && isExpanded && (
-          <div className="relative w-full h-40 overflow-hidden border-t border-gray-700">
+          <div className="relative w-full h-40 overflow-hidden border-t border-[var(--border)]">
             <Image
               src={site.photo_url_2}
               alt={`Site ${site.site_number} interior`}
@@ -239,7 +239,7 @@ export default function HomePage() {
         <div className="p-6">
           <div className="flex items-start justify-between mb-3">
             <div>
-              <h3 className="text-white font-bold text-lg">
+              <h3 className="text-[var(--text-primary)] font-bold text-lg">
                 {siteTypeLabel(site.site_type)} {site.site_number}
               </h3>
               <p className="text-sm" style={{ color: 'var(--accent-color)' }}>
@@ -249,15 +249,15 @@ export default function HomePage() {
               </p>
             </div>
             <div className="text-right">
-              <p className="text-white font-bold text-xl">${(site.nightly_rate / 100).toFixed(0)}<span className="text-sm font-normal text-gray-400">/night</span></p>
-              <p className="text-sm text-gray-400">${(site.total_price / 100).toFixed(0)} total</p>
+              <p className="text-[var(--text-primary)] font-bold text-xl">${(site.nightly_rate / 100).toFixed(0)}<span className="text-sm font-normal text-[var(--text-muted)]">/night</span></p>
+              <p className="text-sm text-[var(--text-muted)]">${(site.total_price / 100).toFixed(0)} total</p>
             </div>
           </div>
-          {site.max_rv_length && <p className="text-gray-400 text-sm mb-2">Max RV length: {site.max_rv_length}ft</p>}
-          {site.description && <p className="text-gray-400 text-sm mb-2">{site.description}</p>}
+          {site.max_rv_length && <p className="text-[var(--text-muted)] text-sm mb-2">Max RV length: {site.max_rv_length}ft</p>}
+          {site.description && <p className="text-[var(--text-muted)] text-sm mb-2">{site.description}</p>}
           {!site.meets_min_stay && <p className="text-yellow-400 text-sm mt-2">Minimum {site.min_stay} nights required for this site</p>}
           {site.meets_min_stay && isSelected && (
-            <div className="mt-3 pt-3 border-t border-gray-600">
+            <div className="mt-3 pt-3 border-t border-[var(--border)]">
               <p className="text-sm font-medium" style={{ color: 'var(--accent-color)' }}>Selected — scroll down to continue</p>
             </div>
           )}
@@ -267,17 +267,17 @@ export default function HomePage() {
   }
 
   return (
-    <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
+    <main className="min-h-screen" style={{ backgroundColor: 'var(--surface-bg)' }}>
 
       {/* Maintenance Mode */}
       {settings?.maintenance_mode && (
         <div className="min-h-screen flex flex-col items-center justify-center px-4 text-center">
           <div className="text-6xl mb-6">🚧</div>
-          <h1 className="text-3xl font-bold text-white mb-6">
+          <h1 className="text-3xl font-bold text-[var(--text-primary)] mb-6">
             {settings?.park_name || 'Our Campground'}
           </h1>
-          <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full">
-            <p className="text-gray-700 text-lg leading-relaxed">
+          <div className="bg-[var(--surface-card)] border border-[var(--border)] rounded-2xl shadow-xl p-8 max-w-md w-full">
+            <p className="text-[var(--text-primary)] text-lg leading-relaxed">
               {settings?.maintenance_message || 'We are temporarily unavailable for online reservations. Please call us to book your stay!'}
             </p>
           </div>
@@ -292,46 +292,46 @@ export default function HomePage() {
       {!settings?.maintenance_mode && <>
 
       {/* Hero */}
-      <div className="flex flex-col items-center justify-center px-4 py-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+      <div className="flex flex-col items-center justify-center px-4 py-12 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
         {settings?.logo_url && (
           <div className={`mb-6 overflow-hidden flex items-center justify-center ${logoShapeClass}`}>
             <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={160} height={160} className="object-contain w-full h-full" priority />
           </div>
         )}
-        <h1 className="text-3xl font-bold text-white mb-2">Welcome to {settings?.park_name || 'Our Campground'}</h1>
+        <h1 className="text-3xl font-bold text-[var(--text-primary)] mb-2">Welcome to {settings?.park_name || 'Our Campground'}</h1>
         <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{settings?.park_location || ''}</p>
-        <p className="text-gray-400 mb-8 max-w-md">{settings?.park_tagline || 'Book your perfect campsite, cabin, or tent site today.'}</p>
+        <p className="text-[var(--text-muted)] mb-8 max-w-md">{settings?.park_tagline || 'Book your perfect campsite, cabin, or tent site today.'}</p>
 
         {/* Search Box */}
-        <div className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl p-6">
-          <h2 className="text-xl font-bold text-gray-900 mb-5">Check Availability</h2>
+        <div className="w-full max-w-3xl bg-[var(--surface-card)] border border-[var(--border)] rounded-2xl shadow-2xl p-6">
+          <h2 className="text-xl font-bold text-[var(--text-primary)] mb-5">Check Availability</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Arrival Date</label>
-              <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" min={today} value={arrival}
+              <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Arrival Date</label>
+              <input type="date" className="themed-input w-full border rounded-lg px-3 py-2 text-sm" min={today} value={arrival}
                 onChange={e => { setArrival(e.target.value); if (departure && departure <= e.target.value) setDeparture('') }} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Departure Date</label>
-              <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" min={arrival || today} value={departure}
+              <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Departure Date</label>
+              <input type="date" className="themed-input w-full border rounded-lg px-3 py-2 text-sm" min={arrival || today} value={departure}
                 onChange={e => setDeparture(e.target.value)} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Guests</label>
+              <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Guests</label>
               <div className="flex gap-2">
                 <div className="flex-1">
-                  <input type="number" min={1} max={20} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={adults} onChange={e => setAdults(parseInt(e.target.value))} />
-                  <p className="text-xs text-gray-400 mt-0.5 text-center">Adults</p>
+                  <input type="number" min={1} max={20} className="themed-input w-full border rounded-lg px-3 py-2 text-sm" value={adults} onChange={e => setAdults(parseInt(e.target.value))} />
+                  <p className="text-xs text-[var(--text-muted)] mt-0.5 text-center">Adults</p>
                 </div>
                 <div className="flex-1">
-                  <input type="number" min={0} max={20} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={children} onChange={e => setChildren(parseInt(e.target.value))} />
-                  <p className="text-xs text-gray-400 mt-0.5 text-center">Children</p>
+                  <input type="number" min={0} max={20} className="themed-input w-full border rounded-lg px-3 py-2 text-sm" value={children} onChange={e => setChildren(parseInt(e.target.value))} />
+                  <p className="text-xs text-[var(--text-muted)] mt-0.5 text-center">Children</p>
                 </div>
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Site Type</label>
-              <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={siteType} onChange={e => setSiteType(e.target.value)}>
+              <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Site Type</label>
+              <select className="themed-input w-full border rounded-lg px-3 py-2 text-sm" value={siteType} onChange={e => setSiteType(e.target.value)}>
                 <option value="all">All Types</option>
                 <option value="rv_site">RV Sites</option>
                 <option value="cabin">Cabins</option>
@@ -355,10 +355,10 @@ export default function HomePage() {
           {siteTypes.map(type => {
             const info = siteTypeInfo[type] || { icon: '🏕️', label: type, desc: 'Come enjoy your stay with us.' }
             return (
-              <div key={type} className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
+              <div key={type} className="rounded-2xl p-6" style={{ backgroundColor: 'var(--surface-card)' }}>
                 <div className="text-4xl mb-3">{info.icon}</div>
-                <h3 className="text-white font-bold text-lg mb-2">{info.label}</h3>
-                <p className="text-gray-400 text-sm">{info.desc}</p>
+                <h3 className="text-[var(--text-primary)] font-bold text-lg mb-2">{info.label}</h3>
+                <p className="text-[var(--text-muted)] text-sm">{info.desc}</p>
               </div>
             )
           })}
@@ -370,47 +370,47 @@ export default function HomePage() {
         <div className="max-w-5xl mx-auto px-4 py-12">
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h2 className="text-2xl font-bold text-white">Available Sites</h2>
-              <p className="text-gray-400 text-sm mt-1">
+              <h2 className="text-2xl font-bold text-[var(--text-primary)]">Available Sites</h2>
+              <p className="text-[var(--text-muted)] text-sm mt-1">
                 {arrival} → {departure} · {adults} adult{adults !== 1 ? 's' : ''}
                 {children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : ''}
               </p>
             </div>
             <button onClick={() => { setStep(1); setSelectedSite(null) }}
               className="text-sm px-4 py-2 rounded-lg"
-              style={{ backgroundColor: '#2B2B2B', color: 'var(--accent-color)' }}>
+              style={{ backgroundColor: 'var(--surface-card)', color: 'var(--accent-color)' }}>
               ← Change Dates
             </button>
           </div>
 
           {sameDayBlock ? (
-            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
               <div className="text-6xl mb-4">📞</div>
-              <p className="text-white text-xl font-bold mb-3">Same-Day Reservations</p>
-              <p className="text-gray-300 text-base">{sameDayBlock}</p>
+              <p className="text-[var(--text-primary)] text-xl font-bold mb-3">Same-Day Reservations</p>
+              <p className="text-[var(--text-muted)] text-base">{sameDayBlock}</p>
             </div>
           ) : loading ? (
-            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
-              <p className="text-gray-400 text-lg">Searching for available sites...</p>
+            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
+              <p className="text-[var(--text-muted)] text-lg">Searching for available sites...</p>
             </div>
           ) : isClosed ? (
-            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
+            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
               <div className="text-6xl mb-4">❄️</div>
-              <p className="text-white text-xl font-bold mb-3">We're Closed for the Season</p>
-              <p className="text-gray-400 mb-4">{closedMessage}</p>
+              <p className="text-[var(--text-primary)] text-xl font-bold mb-3">We're Closed for the Season</p>
+              <p className="text-[var(--text-muted)] mb-4">{closedMessage}</p>
               <p className="text-sm" style={{ color: 'var(--accent-color)' }}>We are open from {seasonStart} through {seasonEnd}</p>
             </div>
           ) : sites.length === 0 ? (
-            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: '#2B2B2B' }}>
-              <p className="text-white text-lg font-semibold mb-2">No sites available</p>
-              <p className="text-gray-400">Try different dates or a different site type.</p>
+            <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
+              <p className="text-[var(--text-primary)] text-lg font-semibold mb-2">No sites available</p>
+              <p className="text-[var(--text-muted)]">Try different dates or a different site type.</p>
             </div>
           ) : (
             <>
               {settings?.show_site_map && (
-                <div className="rounded-2xl p-4 mb-6" style={{ backgroundColor: '#2B2B2B' }}>
-                  <h3 className="text-white font-semibold mb-3 text-sm">
-                    Click a site on the map to select it — <span className="text-gray-400">grey = not available for selected dates</span>
+                <div className="rounded-2xl p-4 mb-6" style={{ backgroundColor: 'var(--surface-card)' }}>
+                  <h3 className="text-[var(--text-primary)] font-semibold mb-3 text-sm">
+                    Click a site on the map to select it — <span className="text-[var(--text-muted)]">grey = not available for selected dates</span>
                   </h3>
                   <CampgroundMap
                     onSiteSelect={(site) => {
@@ -439,26 +439,26 @@ export default function HomePage() {
               {categories.length > 0 ? (
                 <div className="space-y-3">
                   {groupSitesByCategory().map(group => (
-                    <div key={group.id} className="rounded-2xl overflow-hidden" style={{ backgroundColor: '#2B2B2B' }}>
+                    <div key={group.id} className="rounded-2xl overflow-hidden" style={{ backgroundColor: 'var(--surface-card)' }}>
                       {/* Accordion Header */}
                       <button
                         onClick={() => toggleCategory(group.id)}
                         className="w-full flex items-center justify-between px-6 py-4 text-left hover:opacity-80 transition-opacity"
                       >
                         <div className="flex items-center gap-3">
-                          <span className="text-white font-bold text-lg">
+                          <span className="text-[var(--text-primary)] font-bold text-lg">
                             {group.id === 'uncategorized' ? '🏕️' : '🏷️'} {group.name || 'All Sites'}
                           </span>
                           <span className="text-sm px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: 'rgba(var(--accent-rgb, 56,189,196), 0.15)', color: 'var(--accent-color)' }}>
                             {group.sites.length} site{group.sites.length !== 1 ? 's' : ''} available
                           </span>
                         </div>
-                        <span className="text-gray-400 text-xl">{openCategories.has(group.id) ? '▲' : '▼'}</span>
+                        <span className="text-[var(--text-muted)] text-xl">{openCategories.has(group.id) ? '▲' : '▼'}</span>
                       </button>
 
                       {/* Accordion Content */}
                       {openCategories.has(group.id) && (
-                        <div className="px-4 pb-4 grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-gray-700">
+                        <div className="px-4 pb-4 grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-[var(--border)]">
                           {group.sites.map(site => renderSiteCard(site))}
                         </div>
                       )}
@@ -475,11 +475,11 @@ export default function HomePage() {
           )}
 
           {selectedSite && (
-            <div className="mt-8 rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
+            <div className="mt-8 rounded-2xl p-6" style={{ backgroundColor: 'var(--surface-card)' }}>
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-white font-semibold">{siteTypeLabel(selectedSite.site_type)} {selectedSite.site_number} selected</p>
-                  <p className="text-gray-400 text-sm">{selectedSite.nights} nights · ${(selectedSite.total_price / 100).toFixed(2)} total</p>
+                  <p className="text-[var(--text-primary)] font-semibold">{siteTypeLabel(selectedSite.site_type)} {selectedSite.site_number} selected</p>
+                  <p className="text-[var(--text-muted)] text-sm">{selectedSite.nights} nights · ${(selectedSite.total_price / 100).toFixed(2)} total</p>
                 </div>
                 <button className="px-8 py-3 rounded-xl text-white font-semibold transition-colors"
                   style={{ backgroundColor: 'var(--accent-color)' }}
@@ -495,7 +495,7 @@ export default function HomePage() {
       )}
 
       {/* Footer */}
-      <div className="text-center py-8 text-gray-600 text-sm">
+      <div className="text-center py-8 text-[var(--text-muted)] text-sm">
         © 2026 {settings?.park_name || 'Campground'} · {settings?.park_location || ''}
       </div>
    </>}
