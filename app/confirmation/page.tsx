@@ -61,21 +61,21 @@ function ConfirmationContent() {
     : 0
 
   if (loading) return (
-    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#1C1C1C' }}>
-      <p className="text-gray-400">Loading your confirmation...</p>
+    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--surface-bg)' }}>
+      <p className="text-[var(--text-muted)]">Loading your confirmation...</p>
     </div>
   )
 
   if (!reservation) return (
-    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#1C1C1C' }}>
-      <p className="text-gray-400">Reservation not found.</p>
+    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--surface-bg)' }}>
+      <p className="text-[var(--text-muted)]">Reservation not found.</p>
     </div>
   )
 
   return (
-    <main className="min-h-screen" style={{ backgroundColor: '#1C1C1C' }}>
+    <main className="min-h-screen" style={{ backgroundColor: 'var(--surface-bg)' }}>
       {/* Header */}
-      <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: '#2B2B2B' }}>
+      <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: 'var(--surface-card)' }}>
         <LogoBadge
           logoUrl={settings?.logo_url}
           parkName={settings?.park_name}
@@ -84,68 +84,68 @@ function ConfirmationContent() {
           size={48}
         />
         <div>
-          <h1 className="text-white font-bold">{settings?.park_name || 'Campground'}</h1>
+          <h1 className="text-[var(--text-primary)] font-bold">{settings?.park_name || 'Campground'}</h1>
           <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Reservation Confirmed</p>
         </div>
       </div>
 
       <div className="max-w-2xl mx-auto px-4 py-12">
         {/* Success Banner */}
-        <div className="rounded-2xl p-8 text-center mb-8" style={{ backgroundColor: '#2B2B2B' }}>
+        <div className="rounded-2xl p-8 text-center mb-8" style={{ backgroundColor: 'var(--surface-card)' }}>
           <div className="text-6xl mb-4">🎉</div>
-          <h2 className="text-3xl font-bold text-white mb-2">You're all set!</h2>
-          <p className="text-gray-400 mb-2">
+          <h2 className="text-3xl font-bold text-[var(--text-primary)] mb-2">You're all set!</h2>
+          <p className="text-[var(--text-muted)] mb-2">
             Your reservation is confirmed. A confirmation email has been sent to{' '}
             <span style={{ color: 'var(--accent-color)' }}>{reservation.guest_email}</span>
           </p>
-          <p className="text-gray-500 text-sm">
+          <p className="text-[var(--text-muted)] text-sm">
             Confirmation #{reservation.id.slice(0, 8).toUpperCase()}
           </p>
         </div>
 
         {/* Reservation Details */}
-        <div className="rounded-2xl p-6 mb-6" style={{ backgroundColor: '#2B2B2B' }}>
-          <h3 className="text-white font-bold text-lg mb-4">Reservation Details</h3>
+        <div className="rounded-2xl p-6 mb-6" style={{ backgroundColor: 'var(--surface-card)' }}>
+          <h3 className="text-[var(--text-primary)] font-bold text-lg mb-4">Reservation Details</h3>
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
-              <p className="text-gray-400">Guest</p>
-              <p className="text-white font-medium">{reservation.guest_name}</p>
+              <p className="text-[var(--text-muted)]">Guest</p>
+              <p className="text-[var(--text-primary)] font-medium">{reservation.guest_name}</p>
             </div>
             <div>
-              <p className="text-gray-400">Site</p>
-              <p className="text-white font-medium">
+              <p className="text-[var(--text-muted)]">Site</p>
+              <p className="text-[var(--text-primary)] font-medium">
                 {siteTypeLabel(reservation.sites?.site_type || '')} {reservation.sites?.site_number}
               </p>
             </div>
             <div>
-              <p className="text-gray-400">Arrival</p>
-              <p className="text-white font-medium">{reservation.arrival_date}</p>
-              <p className="text-gray-300 text-xs">Check-in: {settings?.check_in_time || '2:00 PM'}</p>
+              <p className="text-[var(--text-muted)]">Arrival</p>
+              <p className="text-[var(--text-primary)] font-medium">{reservation.arrival_date}</p>
+              <p className="text-[var(--text-muted)] text-xs">Check-in: {settings?.check_in_time || '2:00 PM'}</p>
             </div>
             <div>
-              <p className="text-gray-400">Departure</p>
-              <p className="text-white font-medium">{reservation.departure_date}</p>
-              <p className="text-gray-300 text-xs">Check-out: {settings?.check_out_time || '12:00 PM'}</p>
+              <p className="text-[var(--text-muted)]">Departure</p>
+              <p className="text-[var(--text-primary)] font-medium">{reservation.departure_date}</p>
+              <p className="text-[var(--text-muted)] text-xs">Check-out: {settings?.check_out_time || '12:00 PM'}</p>
             </div>
             <div>
-              <p className="text-gray-400">Guests</p>
-              <p className="text-white font-medium">
+              <p className="text-[var(--text-muted)]">Guests</p>
+              <p className="text-[var(--text-primary)] font-medium">
                 {reservation.num_adults} adult{reservation.num_adults !== 1 ? 's' : ''}
                 {reservation.num_children > 0 ? `, ${reservation.num_children} child${reservation.num_children !== 1 ? 'ren' : ''}` : ''}
               </p>
             </div>
             <div>
-              <p className="text-gray-400">Duration</p>
-              <p className="text-white font-medium">{nights} night{nights !== 1 ? 's' : ''}</p>
+              <p className="text-[var(--text-muted)]">Duration</p>
+              <p className="text-[var(--text-primary)] font-medium">{nights} night{nights !== 1 ? 's' : ''}</p>
             </div>
           </div>
         </div>
 
         {/* Payment Summary */}
-        <div className="rounded-2xl p-6 mb-6" style={{ backgroundColor: '#2B2B2B' }}>
-          <h3 className="text-white font-bold text-lg mb-4">Payment Summary</h3>
+        <div className="rounded-2xl p-6 mb-6" style={{ backgroundColor: 'var(--surface-card)' }}>
+          <h3 className="text-[var(--text-primary)] font-bold text-lg mb-4">Payment Summary</h3>
           <div className="space-y-2 text-sm">
-            <div className="flex justify-between text-gray-300">
+            <div className="flex justify-between text-[var(--text-muted)]">
               <span>Total reservation cost</span>
               <span>${(reservation.total_price / 100).toFixed(2)}</span>
             </div>
@@ -154,7 +154,7 @@ function ConfirmationContent() {
               <span>${(reservation.amount_paid / 100).toFixed(2)}</span>
             </div>
             {reservation.amount_paid < reservation.total_price && (
-              <div className="flex justify-between text-yellow-400 border-t border-gray-700 pt-2 mt-2">
+              <div className="flex justify-between text-yellow-400 border-t border-[var(--border)] pt-2 mt-2">
                 <span>Balance due at check-in</span>
                 <span>${((reservation.total_price - reservation.amount_paid) / 100).toFixed(2)}</span>
               </div>
@@ -163,16 +163,16 @@ function ConfirmationContent() {
         </div>
 
         {/* Important Info */}
-        <div className="rounded-2xl p-6 mb-8" style={{ backgroundColor: '#2B2B2B' }}>
-          <h3 className="text-white font-bold text-lg mb-4">Important Information</h3>
-          <div className="space-y-3 text-sm text-gray-300">
+        <div className="rounded-2xl p-6 mb-8" style={{ backgroundColor: 'var(--surface-card)' }}>
+          <h3 className="text-[var(--text-primary)] font-bold text-lg mb-4">Important Information</h3>
+          <div className="space-y-3 text-sm text-[var(--text-muted)]">
             <div className="flex gap-3">
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
-              <p>Check-in is at <span className="text-white font-medium">{settings?.check_in_time || '2:00 PM'}</span>. Please check in at the office upon arrival.</p>
+              <p>Check-in is at <span className="text-[var(--text-primary)] font-medium">{settings?.check_in_time || '2:00 PM'}</span>. Please check in at the office upon arrival.</p>
             </div>
             <div className="flex gap-3">
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
-              <p>Check-out is at <span className="text-white font-medium">{settings?.check_out_time || '12:00 PM'}</span>.</p>
+              <p>Check-out is at <span className="text-[var(--text-primary)] font-medium">{settings?.check_out_time || '12:00 PM'}</span>.</p>
             </div>
             <div className="flex gap-3">
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
@@ -180,12 +180,12 @@ function ConfirmationContent() {
             </div>
             <div className="flex gap-3">
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
-              <p>Cancellations must be made at least <span className="text-white font-medium">7 days before arrival</span> by contacting us directly.</p>
+              <p>Cancellations must be made at least <span className="text-[var(--text-primary)] font-medium">7 days before arrival</span> by contacting us directly.</p>
             </div>
             {reservation.amount_paid < reservation.total_price && (
               <div className="flex gap-3">
                 <span className="text-yellow-400">!</span>
-                <p>Your remaining balance of <span className="text-white font-medium">${((reservation.total_price - reservation.amount_paid) / 100).toFixed(2)}</span> is due at check-in.</p>
+                <p>Your remaining balance of <span className="text-[var(--text-primary)] font-medium">${((reservation.total_price - reservation.amount_paid) / 100).toFixed(2)}</span> is due at check-in.</p>
               </div>
             )}
           </div>
@@ -193,7 +193,7 @@ function ConfirmationContent() {
 
         {/* Actions */}
         <div className="text-center space-y-4">
-          <p className="text-gray-400 text-sm">
+          <p className="text-[var(--text-muted)] text-sm">
             Questions? Contact us at{' '}
             <a href="mailto:info@example.com" style={{ color: 'var(--accent-color)' }}>
               info@example.com
@@ -215,8 +215,8 @@ function ConfirmationContent() {
 export default function ConfirmationPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#1C1C1C' }}>
-        <p className="text-gray-400">Loading...</p>
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--surface-bg)' }}>
+        <p className="text-[var(--text-muted)]">Loading...</p>
       </div>
     }>
       <ConfirmationContent />
