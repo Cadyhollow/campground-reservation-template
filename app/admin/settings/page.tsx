@@ -38,6 +38,7 @@ const defaultSettings = {
   late_checkout_show_customers: false,
   confirmation_message: '',
   accent_color: '#2D6A4F',
+  theme: 'light',
   show_site_map: false,
   admin_password: '',
   sender_name: '',
@@ -63,6 +64,11 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [newMethod, setNewMethod] = useState('')
   const [plan, setPlan] = useState('trailhead')
+  // The `theme` column doesn't exist in every tenant's settings table yet. Detected from the
+  // loaded row so the selector both hides itself until the column lands AND stays out of the
+  // save payload — writing an unknown column fails the whole update and would take every
+  // other setting down with it. Self-activates once the column exists; no code change needed.
+  const [hasThemeColumn, setHasThemeColumn] = useState(false)
   const [earlyPriceInput, setEarlyPriceInput] = useState('0.00')
   const [latePriceInput, setLatePriceInput] = useState('0.00')
   const [uploadingLogo, setUploadingLogo] = useState(false)
@@ -77,6 +83,7 @@ export default function SettingsPage() {
     if (data) {
       setSettingsId(data.id)
       setPlan(data.plan || 'trailhead')
+      setHasThemeColumn('theme' in data)
       setForm({
         park_name: data.park_name || '',
         park_tagline: data.park_tagline || '',
@@ -110,6 +117,7 @@ export default function SettingsPage() {
         late_checkout_show_customers: data.late_checkout_show_customers || false,
         confirmation_message: data.confirmation_message || '',
         accent_color: data.accent_color || '#2D6A4F',
+        theme: data.theme === 'dark' ? 'dark' : 'light',
         show_site_map: data.show_site_map || false,
         admin_password: '',
         sender_name: data.sender_name || '',
@@ -184,6 +192,8 @@ export default function SettingsPage() {
       late_checkout_show_customers: form.late_checkout_show_customers,
       confirmation_message: form.confirmation_message,
       accent_color: form.accent_color,
+      // Only written when the column exists — see hasThemeColumn above.
+      ...(hasThemeColumn ? { theme: form.theme } : {}),
       show_site_map: form.show_site_map,
       ...(form.admin_password ? { admin_password: form.admin_password } : {}),
       sender_name: form.sender_name,
@@ -303,6 +313,23 @@ export default function SettingsPage() {
             )}
 
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Brand Color</label><div className="flex items-center gap-3"><input type="color" className="w-12 h-10 rounded border border-gray-200 cursor-pointer" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /><input className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /></div></div>
+
+            {/* Rendered only once the settings row actually carries a `theme` key, so this
+                stays invisible (and unsaved) on tenants whose column hasn't landed yet. */}
+            {hasThemeColumn && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Booking Site Theme</label>
+                <select
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                  value={form.theme}
+                  onChange={e => setForm({ ...form, theme: e.target.value })}
+                >
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Applies to your camper-facing booking pages, not this admin area.</p>
+              </div>
+            )}
           </div>
 
           {/* Show Site Map — Ridgeline and Summit only */}

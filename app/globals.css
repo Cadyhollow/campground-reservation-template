@@ -4,6 +4,31 @@
   --accent-color: #3DBDD4;
   --background: #ffffff;
   --foreground: #171717;
+
+  /* ── Camper-facing theme tokens ──────────────────────────────────────────
+     Every camper surface (landing / book / confirmation) reads these instead
+     of hardcoding colors. LIGHT is the default, so a tenant with no theme set
+     — or one whose settings row predates the theme column — gets the warm
+     light palette. Dark is opt-in below via html[data-theme="dark"], set
+     server-side in app/layout.tsx so there is no flash of the wrong theme.
+
+     --accent-color is per-tenant and deliberately NOT part of this set. */
+  --surface-bg: #F7F6F3;      /* warm off-white page background */
+  --surface-card: #FFFFFF;
+  --surface-input: #FFFFFF;
+  --text-primary: #1F2620;    /* near-black, slightly warm */
+  --text-muted: #6B7280;
+  --border: #E5E7EB;
+}
+
+/* Dark — reproduces the charcoal look every tenant had before theming. */
+html[data-theme="dark"] {
+  --surface-bg: #1C1C1C;
+  --surface-card: #2B2B2B;
+  --surface-input: #1F2937;
+  --text-primary: #FFFFFF;
+  --text-muted: #9CA3AF;
+  --border: #374151;
 }
 
 @theme inline {
@@ -26,6 +51,32 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+/* ── Camper-facing themed inputs ────────────────────────────────────────────
+   Scoped to .themed-input rather than to a background utility class. The two
+   rule blocks below key off .bg-gray-800 / .bg-white, which is exactly what
+   broke once camper surfaces became tokens — an input whose background is
+   var(--surface-input) matches neither, so it would have fallen back to
+   browser defaults (white text in a white box under the light theme).
+
+   Deliberately scoped and NOT applied to bare `input`: /admin is always light
+   and must not follow a tenant's dark theme, and data-theme sits on <html>.
+   Those two blocks are left untouched below so admin keeps its behavior. */
+.themed-input {
+  background-color: var(--surface-input);
+  color: var(--text-primary);
+  -webkit-text-fill-color: var(--text-primary);
+  border-color: var(--border);
+}
+
+/* Autofill previously hardcoded a #1f2937 inset, which would paint a dark box
+   inside a light-theme input. Follows the token now. */
+.themed-input:-webkit-autofill,
+.themed-input:-webkit-autofill:hover,
+.themed-input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0px 1000px var(--surface-input) inset !important;
+  -webkit-text-fill-color: var(--text-primary) !important;
+}
+
 /* Dark background inputs - white text */
 .bg-gray-800 input,
 .bg-gray-800 input[type="text"],
