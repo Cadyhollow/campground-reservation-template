@@ -49,8 +49,12 @@ export default function GuestsPage() {
   const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState<{ added: number; updated: number } | null>(null)
+  const [paymentMode, setPaymentMode] = useState(false)
+  const [balances, setBalances] = useState<Record<string, number>>({})
 
   useEffect(() => { fetchGuests() }, [])
+  // Payment mode (?mode=payment) — read from the URL, not useSearchParams (no Suspense).
+  useEffect(() => { setPaymentMode(new URLSearchParams(window.location.search).get('mode') === 'payment') }, [])
 
   async function fetchGuests() {
     setLoading(true)
@@ -131,17 +135,39 @@ export default function GuestsPage() {
 
   const seasonalCount = guests.filter(g => g.is_seasonal).length
 
+  // Payment mode: fetch balances for the VISIBLE (filtered) guests only, debounced as
+  // the search narrows. One batched call to the server route; merges so already-loaded
+  // balances persist across keystrokes.
+  const visibleKey = paymentMode ? filtered.map(g => g.id).join(',') : ''
+  useEffect(() => {
+    if (!paymentMode || !visibleKey) return
+    const ids = visibleKey.split(',')
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/guests/balances', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ guest_ids: ids }),
+        })
+        if (res.ok) { const d = await res.json(); setBalances(prev => ({ ...prev, ...d.balances })) }
+      } catch { /* balances are best-effort; the row just shows … */ }
+    }, 300)
+    return () => clearTimeout(t)
+  }, [paymentMode, visibleKey])
+
+  const fmtMoney = (c: number) => (c < 0 ? '−$' : '$') + (Math.abs(c) / 100).toFixed(2)
+
   return (
     <div style={{ padding: '2rem', maxWidth: 1000, margin: '0 auto', fontFamily: 'sans-serif' }}>
 
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Guest Directory</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>{paymentMode ? 'Take a Payment' : 'Guest Directory'}</h1>
           <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: 14 }}>
-            {guests.length} guests · {seasonalCount} seasonal
+            {paymentMode ? 'Tap a guest to open their tab · balances shown' : `${guests.length} guests · ${seasonalCount} seasonal`}
           </p>
         </div>
+        {!paymentMode && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {/* Sync button */}
           <button
@@ -177,6 +203,7 @@ export default function GuestsPage() {
             + Add Guest
           </button>
         </div>
+        )}
       </div>
 
       {/* Sync result banner */}
@@ -327,7 +354,8 @@ export default function GuestsPage() {
           {filtered.map((g, i) => (
             <div
               key={g.id}
-              style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 20px', borderBottom: i < filtered.length - 1 ? '1px solid #f3f4f6' : 'none', background: '#fff' }}
+              onClick={paymentMode ? () => router.push('/admin/folio/guest/' + g.id) : undefined}
+              style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 20px', borderBottom: i < filtered.length - 1 ? '1px solid #f3f4f6' : 'none', background: '#fff', cursor: paymentMode ? 'pointer' : 'default' }}
               onMouseEnter={e => (e.currentTarget.style.background = '#f9fafb')}
               onMouseLeave={e => (e.currentTarget.style.background = '#fff')}
             >
@@ -362,7 +390,21 @@ export default function GuestsPage() {
                 {g.notes && <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2, fontStyle: 'italic' }}>{g.notes}</div>}
               </div>
 
-              {/* Actions */}
+              {/* Payment mode: balance at a glance. Normal mode: Account / Edit / Remove. */}
+              {paymentMode ? (
+                <div style={{ flexShrink: 0, textAlign: 'right', minWidth: 96 }}>
+                  {g.id in balances ? (
+                    <>
+                      <div style={{ fontSize: 17, fontWeight: 700, color: balances[g.id] > 0 ? '#b45309' : '#15803d' }}>
+                        {balances[g.id] < 0 ? 'Credit ' + fmtMoney(-balances[g.id]) : fmtMoney(balances[g.id])}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }}>{balances[g.id] > 0 ? 'balance due' : 'paid up'}</div>
+                    </>
+                  ) : (
+                    <div style={{ fontSize: 14, color: '#d1d5db' }}>…</div>
+                  )}
+                </div>
+              ) : (
               <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                 <button
                   onClick={() => router.push('/admin/folio/guest/' + g.id)}
@@ -383,6 +425,7 @@ export default function GuestsPage() {
                   Remove
                 </button>
               </div>
+              )}
             </div>
           ))}
         </div>
