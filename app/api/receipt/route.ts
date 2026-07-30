@@ -55,6 +55,48 @@ export async function POST(request: NextRequest) {
 
     const isReservationType = receiptType === 'reservation' || folio.reservation_id
 
+    const money = (c: number) => `$${(c / 100).toFixed(2)}`
+
+    // Per-night transparency on the stay line. base_nightly_rate is written at booking
+    // time; fall back to dividing the stay by its nights when it's absent (older rows).
+    const resNights = reservation?.arrival_date && reservation?.departure_date
+      ? Math.max(0, Math.round(
+          (new Date((reservation as any).departure_date).getTime() -
+           new Date((reservation as any).arrival_date).getTime()) / 86400000))
+      : 0
+    const resNightlyRate = (reservation as any)?.base_nightly_rate
+      || (resNights > 0 ? Math.round(reservationCharge / resNights) : 0)
+    const stayLabel = resNights > 0 && resNightlyRate > 0
+      ? `Reservation stay — ${resNights} night${resNights !== 1 ? 's' : ''} @ ${money(resNightlyRate)}`
+      : 'Reservation stay'
+
+    // A card payment is stored gross (stay + surcharge). Showing only the gross leaves an
+    // unexplained number on the receipt, so each payment that carries a surcharge is split
+    // into what went to the stay and what the processing fee was. Totals are unaffected —
+    // paymentsTotal already nets the surcharge out.
+    const paymentRowsHtml = (payments || []).map((p: any) => {
+      const fee = p.surcharge_amount || 0
+      const main = `
+      <tr>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;text-transform:capitalize;">${p.method} — ${new Date(p.paid_at).toLocaleDateString()}${p.note ? ' · ' + p.note : ''}</td>
+        <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">${money(p.amount)}</td>
+      </tr>`
+      if (fee <= 0) return main
+      return main + `
+      <tr>
+        <td style="padding:2px 0 6px 12px;color:#6B7280;font-size:12px;">· of which card processing fee</td>
+        <td style="padding:2px 0 6px;color:#6B7280;font-size:12px;text-align:right;">${money(fee)}</td>
+      </tr>`
+    }).join('')
+
+    // Same split for the plain-text receipt (walk-up sales, seasonal accounts) so the two
+    // formats can't drift — a card payment is stored gross in both.
+    const paymentRowsText = (payments || []).map((p: any) => {
+      const fee = p.surcharge_amount || 0
+      const line = `${p.method.charAt(0).toUpperCase() + p.method.slice(1)} on ${new Date(p.paid_at).toLocaleDateString()}${p.note ? ' (' + p.note + ')' : ''}: ${money(p.amount)}`
+      return fee > 0 ? `${line}\n    · of which card processing fee: ${money(fee)}` : line
+    }).join('\n')
+
     if (isReservationType) {
       // STYLED HTML RECEIPT — matches confirmation email theme
       const siteLabel = reservation?.sites?.site_type === 'rv_site' ? 'RV Site' :
@@ -90,8 +132,8 @@ export async function POST(request: NextRequest) {
     <table style="width:100%;border-collapse:collapse;">
       ${reservation ? `
       <tr>
-        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Reservation stay</td>
-        <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(reservationCharge/100).toFixed(2)}</td>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${stayLabel}</td>
+        <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">${money(reservationCharge)}</td>
       </tr>` : ''}
       ${(lineItems || []).map((item: any) => `
       <tr>
@@ -107,11 +149,7 @@ export async function POST(request: NextRequest) {
   <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
     <h3 style="color:#ffffff;margin:0 0 16px;font-size:16px;">Payment</h3>
     <table style="width:100%;border-collapse:collapse;">
-      ${(payments || []).map((p: any) => `
-      <tr>
-        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;text-transform:capitalize;">${p.method} — ${new Date(p.paid_at).toLocaleDateString()}${p.note ? ' · ' + p.note : ''}</td>
-        <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">$${(p.amount/100).toFixed(2)}</td>
-      </tr>`).join('')}
+      ${paymentRowsHtml}
       <tr style="border-top:1px solid #374151;">
         <td style="padding:8px 0 4px;color:#ffffff;font-size:15px;font-weight:bold;">Balance remaining</td>
         <td style="padding:8px 0 4px;font-size:15px;font-weight:bold;text-align:right;color:${balanceRemaining <= 0 ? '#4ADE80' : '#FCD34D'};">${balanceRemaining < 0 ? 'Credit on Account: $' + (Math.abs(balanceRemaining)/100).toFixed(2) : balanceRemaining === 0 ? '✓ Paid in full' : '$' + (balanceRemaining/100).toFixed(2)}</td>
@@ -142,15 +180,15 @@ Guest: ${folio.guest_name}
 ${'─'.repeat(40)}
 
 CHARGES
-${(lineItems || []).map((item: any) => `${item.description}: $${(item.line_total/100).toFixed(2)}`).join('\n')}
+${(lineItems || []).map((item: any) => `${item.description}: ${money(item.line_total)}`).join('\n')}
 
-Total charges: $${(itemsTotal/100).toFixed(2)}
+Total charges: ${money(itemsTotal)}
 ${'─'.repeat(40)}
 
 PAYMENTS
-${(payments || []).map((p: any) => `${p.method.charAt(0).toUpperCase() + p.method.slice(1)} on ${new Date(p.paid_at).toLocaleDateString()}${p.note ? ' (' + p.note + ')' : ''}: $${(p.amount/100).toFixed(2)}`).join('\n')}
+${paymentRowsText}
 
-${mostRecentPayment ? 'Most recent payment: $' + (mostRecentPayment.amount/100).toFixed(2) + '\n' : ''}Balance remaining: ${balanceRemaining < 0 ? 'Credit on Account: $' + (Math.abs(balanceRemaining)/100).toFixed(2) : balanceRemaining === 0 ? 'PAID IN FULL' : '$' + (balanceRemaining/100).toFixed(2)}
+${mostRecentPayment ? 'Most recent payment: ' + money(mostRecentPayment.amount) + '\n' : ''}Balance remaining: ${balanceRemaining < 0 ? 'Credit on Account: ' + money(Math.abs(balanceRemaining)) : balanceRemaining === 0 ? 'PAID IN FULL' : money(balanceRemaining)}
 ${'─'.repeat(40)}
 Thank you!
 ${campgroundName}`

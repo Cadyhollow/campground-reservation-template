@@ -42,6 +42,9 @@ export async function POST(request: NextRequest) {
       feesTotal = 0,
       cardOnlyFeesTotal = 0,
       surchargeAmount = 0,
+      // Itemized cash lines built by the booking page, in the same { label, amount } shape
+      // lib/pricing produces for the admin wizard. Passed straight through to the email.
+      lines = [],
     } = body
 
     // Double-check availability before charging
@@ -279,6 +282,8 @@ export async function POST(request: NextRequest) {
           discountAmount,
           discountCode: discountCode || null,
           feesTotal: feesTotal || 0,
+          lines,
+          nightlyRate,
         }),
       })
     } catch (e) {

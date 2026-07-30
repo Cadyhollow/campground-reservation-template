@@ -320,6 +320,12 @@ function ManualBookingInner() {
           camperAmperage: isRvSite ? form.camper_amperage : '',
           totalPrice: total,
           amountPaid: amountPaid,
+          // Explicitly 0: this path charges the card with surchargeAmount: 0 (see the
+          // /api/admin-card-payment call below), so no fee was taken and none should be
+          // shown. Whether it SHOULD surcharge like the wizard does is a separate pricing
+          // decision — stated here so the 0 reads as deliberate rather than as the omission
+          // this commit is fixing elsewhere.
+          surchargeAmount: 0,
           paymentType: form.payment_type,
           confirmationNumber: data.confirmationNumber,
           addonDetails,

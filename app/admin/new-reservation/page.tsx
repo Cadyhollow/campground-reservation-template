@@ -350,6 +350,14 @@ function NewReservationWizardInner() {
         }
       }
 
+      // Card and Terminal both charge paidCents + this surcharge (see the branches below),
+      // so the confirmation must report it or "Paid Today" understates what actually hit the
+      // card. Computed HERE rather than read from those branches' own `surcharge` consts:
+      // they are block-scoped, and the cash/keyed-card path reaches finishSuccess() after
+      // its block has closed, so the value would be out of scope.
+      const isCardCharge = form.payment_method === 'card' || form.payment_method === 'terminal'
+      const confirmationSurcharge = paidCents > 0 && isCardCharge ? p.cardSurcharge(paidCents) : 0
+
       // Confirmation-email sender — best-effort; used by the immediate paths and
       // by the Terminal poll once the tap completes.
       const sendConfirmation = async () => {
@@ -380,6 +388,12 @@ function NewReservationWizardInner() {
               camperAmperage: isRv ? form.camper_amperage : '',
               totalPrice: effectiveTotal,
               amountPaid: Math.min(paidCents, effectiveTotal),
+              surchargeAmount: confirmationSurcharge,
+              // lib/pricing's itemized cash lines — per-night site charge, each named fee,
+              // each add-on — so the email lists every component instead of folding fees
+              // into the site charge.
+              lines: p.lines,
+              nightlyRate: p.nightlyRate,
               paymentType: paidCents <= 0 ? 'unpaid' : (paidCents >= effectiveTotal ? 'full' : 'deposit'),
               confirmationNumber: data.confirmationNumber,
               addonDetails,

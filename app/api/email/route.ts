@@ -36,6 +36,20 @@ export async function POST(request: NextRequest) {
       totalPrice,
       amountPaid,
       surchargeAmount = 0,
+      // Itemized cash lines, in order, as { label, amount } — straight from
+      // lib/pricing's PricingResult.lines where the caller has it. Rendering these
+      // verbatim is what makes every fee its own row instead of being absorbed into
+      // the site charge (see the derived fallback below for callers that can't supply
+      // them). Label wording therefore lives in lib/pricing.ts, deliberately.
+      lines = [],
+      nightlyRate = 0,
+      // Only used by the derived fallback — the itemized path gets fees as real lines.
+      feesTotal = 0,
+      // Tax is rendered when a client has it configured. The template carries no tax
+      // model today (Cady does), so these stay 0 and the row simply never appears.
+      taxAmount = 0,
+      taxLabel = 'Sales tax',
+      taxRate = 0,
       paymentType,
       confirmationNumber,
       addonDetails = [],
@@ -84,6 +98,59 @@ export async function POST(request: NextRequest) {
     const hasExtraGuests = extraGuestFee > 0
     const hasDiscount = discountAmount > 0
     const hasCamperInfo = camperType && camperType !== ''
+    const hasTax = taxAmount > 0
+
+    const money = (c: number) => `$${(c / 100).toFixed(2)}`
+    const nightsLabel = `${nights} night${nights !== 1 ? 's' : ''}`
+
+    // ── Itemization ───────────────────────────────────────────────────────────
+    // Preferred: the caller sends `lines` (lib/pricing's itemized cash lines), so every
+    // component — per-night site charge, each named fee, each add-on — is its own row.
+    const hasLines = Array.isArray(lines) && lines.length > 0
+    const addonsSum = hasAddons
+      ? addonDetails.reduce((s: number, a: any) => s + a.price * a.quantity, 0)
+      : 0
+
+    // Fallback for callers that can't supply lines. Note feesTotal is subtracted here:
+    // omitting it silently folded configured fees (cleaning, pet…) into the site charge,
+    // overstating it with no fee row of its own.
+    const derivedSiteCharge =
+      totalPrice - extraGuestFee - addonsSum - earlyCheckinFee - lateCheckoutFee - feesTotal + discountAmount
+    // Per-night when the rate is known, else the old lump label.
+    const siteChargeLabel = nightlyRate > 0
+      ? `Site charges — ${nightsLabel} @ ${money(nightlyRate)}`
+      : `Site charges (${nightsLabel})`
+
+    // Pre-tax, pre-discount. Shown only when tax or a discount follows it; otherwise it
+    // would just restate the Total on the very next row.
+    const subtotal = hasLines
+      ? lines.reduce((s: number, l: any) => s + (l.amount || 0), 0)
+      : derivedSiteCharge + extraGuestFee + addonsSum + earlyCheckinFee + lateCheckoutFee + feesTotal
+    const showSubtotal = hasTax || hasDiscount
+
+    // totalPrice stays authoritative — it is what was actually charged and billed, and this
+    // route must never restate it. But we now print the components beside it, so if the
+    // caller's numbers disagree the guest sees a breakdown that doesn't add up. Surface
+    // that loudly rather than emitting a quietly wrong receipt.
+    const reconciled = subtotal + taxAmount - discountAmount
+    if (reconciled !== totalPrice) {
+      console.warn(
+        `[email] itemization does not reconcile for ${confirmationNumber}: ` +
+        `subtotal ${subtotal} + tax ${taxAmount} - discount ${discountAmount} = ${reconciled}, ` +
+        `but totalPrice is ${totalPrice} (off by ${reconciled - totalPrice}). ` +
+        `Total shown is totalPrice; check the caller's payload.`
+      )
+    }
+
+    const row = (label: string, value: string, opts: { color?: string; bold?: boolean; size?: string } = {}) => {
+      const c = opts.color || '#ffffff'
+      const size = opts.size || '14px'
+      const weight = opts.bold ? 'font-weight:bold;' : ''
+      return `<tr>
+                  <td style="padding:6px 0;color:${opts.color === '#4ADE80' || opts.color === '#FBBF24' ? c : '#9CA3AF'};font-size:${size};${weight}">${label}</td>
+                  <td style="padding:6px 0;color:${c};font-size:${size};text-align:right;${weight}">${value}</td>
+                </tr>`
+    }
 
     // For customer email (dark theme)
     const addonRowsDark = hasAddons
@@ -112,6 +179,19 @@ export async function POST(request: NextRequest) {
           </tr>`
         ).join('')
       : ''
+
+    // Itemized rows for the customer email. Defined after addonRowsDark because the
+    // fallback branch reuses it.
+    const itemRowsDark = hasLines
+      ? lines.map((l: any) => row(l.label, money(l.amount || 0))).join('')
+      : [
+          row(siteChargeLabel, money(derivedSiteCharge)),
+          hasExtraGuests ? row('Extra guests', money(extraGuestFee)) : '',
+          addonRowsDark,
+          earlyCheckin ? row('Early Check-In', money(earlyCheckinFee)) : '',
+          lateCheckout ? row('Late Check-Out', money(lateCheckoutFee)) : '',
+          feesTotal > 0 ? row('Fees', money(feesTotal)) : '',
+        ].join('')
 
     // ── Customer confirmation email ──────────────────────────────────────────
     await getResend().emails.send({
@@ -188,36 +268,26 @@ export async function POST(request: NextRequest) {
             <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
               <h3 style="color:#ffffff;margin:0 0 16px;font-size:18px;">Payment Summary</h3>
               <table style="width:100%;border-collapse:collapse;">
+                ${itemRowsDark}
+                ${showSubtotal ? `
                 <tr>
-                  <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Site charges (${nights} night${nights !== 1 ? 's' : ''})</td>
-                  <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${((totalPrice - extraGuestFee - (hasAddons ? addonDetails.reduce((s: number, a: any) => s + a.price * a.quantity, 0) : 0) - earlyCheckinFee - lateCheckoutFee + discountAmount) / 100).toFixed(2)}</td>
-                </tr>
-                ${hasExtraGuests ? `
-                <tr>
-                  <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Extra guest fees</td>
-                  <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(extraGuestFee / 100).toFixed(2)}</td>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Subtotal</td>
+                  <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">${money(subtotal)}</td>
                 </tr>` : ''}
-                ${addonRowsDark}
-                ${earlyCheckin ? `
+                ${hasTax ? `
                 <tr>
-                  <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Early Check-In</td>
-                  <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(earlyCheckinFee / 100).toFixed(2)}</td>
-                </tr>` : ''}
-                ${lateCheckout ? `
-                <tr>
-                  <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Late Check-Out</td>
-                  <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(lateCheckoutFee / 100).toFixed(2)}</td>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${taxLabel}${taxRate > 0 ? ` (${taxRate}%)` : ''}</td>
+                  <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">${money(taxAmount)}</td>
                 </tr>` : ''}
                 ${hasDiscount ? `
                 <tr>
                   <td style="padding:6px 0;color:#4ADE80;font-size:14px;">Discount${discountCode ? ` (${discountCode})` : ''}</td>
-                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">-$${(discountAmount / 100).toFixed(2)}</td>
+                  <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">-${money(discountAmount)}</td>
                 </tr>` : ''}
                 <tr style="border-top:1px solid #374151;">
-                  <td style="padding:8px 0 6px;color:#ffffff;font-size:15px;font-weight:bold;">Total</td>
-                  <td style="padding:8px 0 6px;color:#ffffff;font-size:15px;font-weight:bold;text-align:right;">$${(totalPrice / 100).toFixed(2)}</td>
+                  <td style="padding:8px 0 6px;color:#ffffff;font-size:15px;font-weight:bold;">Total reservation cost</td>
+                  <td style="padding:8px 0 6px;color:#ffffff;font-size:15px;font-weight:bold;text-align:right;">${money(totalPrice)}</td>
                 </tr>
-                <tr>
                 ${surchargeAmount > 0 ? `
                 <tr>
                   <td style="padding:6px 0;color:#9CA3AF;font-size:13px;">Stay payment</td>
