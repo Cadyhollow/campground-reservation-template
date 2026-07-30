@@ -399,6 +399,24 @@ function BookingForm() {
 
   const earlyFee = (earlyChecked && !earlyBlocked && settings?.early_checkin_enabled && settings?.early_checkin_show_customers) ? (settings.early_checkin_price || 0) : 0
   const lateFee = (lateChecked && !lateBlocked && settings?.late_checkout_enabled && settings?.late_checkout_show_customers) ? (settings.late_checkout_price || 0) : 0
+  // Itemized cash lines for the confirmation email — deliberately the same
+  // { label, amount } shape lib/pricing produces for the admin wizard, so /api/email
+  // renders the camper and admin paths identically. Card-only fees are excluded, matching
+  // the cash total they're kept out of.
+  const emailLines: { label: string; amount: number }[] = [
+    ...(site.nights > 0
+      ? [{ label: `${site.nights} night${site.nights !== 1 ? 's' : ''} × $${(site.nightly_rate / 100).toFixed(2)}`, amount: site.total_price }]
+      : []),
+    ...(extraGuestFee > 0 ? [{ label: 'Extra guests', amount: extraGuestFee }] : []),
+    ...feeBreakdown.filter(f => !f.card_only).map(f => ({ label: f.name, amount: f.calculatedAmount })),
+    ...Object.entries(selectedAddons).flatMap(([id, qty]) => {
+      const a = addons.find(x => x.id === id)
+      return a && qty > 0 ? [{ label: `${a.name} ×${qty}`, amount: a.price * qty }] : []
+    }),
+    ...(earlyFee > 0 ? [{ label: 'Early check-in', amount: earlyFee }] : []),
+    ...(lateFee > 0 ? [{ label: 'Late check-out', amount: lateFee }] : []),
+  ]
+
   const subtotal = site.total_price + extraGuestFee + addonTotal + earlyFee + lateFee
   const discountAmount = discountResult
     ? discountResult.discount_type === 'percent'
@@ -498,6 +516,7 @@ function BookingForm() {
           earlyCheckin: earlyFee > 0, earlyCheckinFee: earlyFee,
           lateCheckout: lateFee > 0, lateCheckoutFee: lateFee,
           feesTotal: realCashFees,
+          lines: emailLines,
           surchargeAmount,
           nights: site.nights,
           waiverSigned: waiverSigned,

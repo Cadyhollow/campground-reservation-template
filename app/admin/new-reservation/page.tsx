@@ -389,6 +389,11 @@ function NewReservationWizardInner() {
               totalPrice: effectiveTotal,
               amountPaid: Math.min(paidCents, effectiveTotal),
               surchargeAmount: confirmationSurcharge,
+              // lib/pricing's itemized cash lines — per-night site charge, each named fee,
+              // each add-on — so the email lists every component instead of folding fees
+              // into the site charge.
+              lines: p.lines,
+              nightlyRate: p.nightlyRate,
               paymentType: paidCents <= 0 ? 'unpaid' : (paidCents >= effectiveTotal ? 'full' : 'deposit'),
               confirmationNumber: data.confirmationNumber,
               addonDetails,
