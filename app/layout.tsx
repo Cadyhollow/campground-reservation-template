@@ -15,6 +15,21 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// Render every request instead of prerendering at build. `theme` below is read from the
+// database and written into the HTML, so a prerendered layout bakes in whatever the value
+// was at build time and never picks up a change — the admin toggle saves correctly but the
+// booking page keeps serving the old palette until the next deploy.
+//
+// An uncached read is NOT enough to fix this: supabase-js uses fetch, fetch is already
+// uncached by default in this version, and the route still prerendered. Only Request-time
+// APIs or this segment config opt a route out of prerendering.
+//
+// Cost is one settings query per render (deduped by the cache() below, so one, not two) and
+// no CDN caching of the HTML. Fine for a booking site, and the theme has to be correct on
+// first paint. NOTE: this option is removed if Cache Components is ever enabled in
+// next.config.ts — it would need migrating then.
+export const dynamic = 'force-dynamic'
+
 // select('*') on purpose, not select('park_name, theme'): naming a column that doesn't
 // exist yet makes PostgREST error, and `theme` isn't in every tenant's settings table.
 // With '*' a missing column is simply absent from the row, so the theme read below falls
