@@ -169,6 +169,15 @@ export default function HomePage() {
     treehouse: { icon: '🌲', label: 'Treehouses', desc: 'Spend the night among the treetops in a one-of-a-kind elevated retreat.' },
   }
 
+  // Read defensively: `hero_image_url` isn't in every tenant's settings table yet. The
+  // settings read above is select('*'), so a missing column is simply absent from the row
+  // and this lands on null — no hero, no throw. An empty/whitespace value counts as unset
+  // too, so a cleared field falls back to the plain header band rather than an empty box.
+  const heroImageUrl =
+    typeof settings?.hero_image_url === 'string' && settings.hero_image_url.trim()
+      ? settings.hero_image_url.trim()
+      : null
+
   const logoShapeClass =
     settings?.logo_shape === 'circle' ? 'w-32 h-32 rounded-full' :
     settings?.logo_shape === 'rounded' ? 'w-32 h-32 rounded-xl' :
@@ -291,18 +300,65 @@ export default function HomePage() {
 
       {!settings?.maintenance_mode && <>
 
-      {/* Hero */}
-      <div className="flex flex-col items-center justify-center px-4 py-12 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
+      {/* Hero — full-width photo behind the header + search card when the client has set
+          one, otherwise the plain surface-card band this section has always been. */}
+      <div
+        className={`relative flex flex-col items-center justify-center px-4 text-center ${
+          heroImageUrl ? 'py-16 md:py-24 min-h-[520px] md:min-h-[600px]' : 'py-12'
+        }`}
+        style={heroImageUrl ? undefined : { backgroundColor: 'var(--surface-card)' }}
+      >
+        {heroImageUrl && (
+          <>
+            {/* Decorative, so alt is empty. `fill` + object-cover keeps the photo covering
+                and centred at every width instead of squashing on narrow screens. */}
+            <Image
+              src={heroImageUrl}
+              alt=""
+              fill
+              sizes="100vw"
+              priority
+              className="object-cover object-center"
+            />
+            {/* Scrim. Text over the photo is white regardless of theme, so legibility rides
+                on this gradient rather than on the theme tokens — which means it reads the
+                same in light and dark instead of inverting into a light-on-light failure. */}
+            <div
+              className="absolute inset-0"
+              style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.60) 0%, rgba(0,0,0,0.42) 30%, rgba(0,0,0,0.12) 58%, rgba(0,0,0,0.30) 100%)' }}
+            />
+          </>
+        )}
+
+        {/* Content sits above the photo + scrim. Both of those are absolutely positioned
+            and earlier in the DOM, so this only needs its own stacking position. */}
+        <div className="relative z-10 w-full flex flex-col items-center">
         {settings?.logo_url && (
           <div className={`mb-6 overflow-hidden flex items-center justify-center ${logoShapeClass}`}>
             <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={160} height={160} className="object-contain w-full h-full" priority />
           </div>
         )}
-        <h1 className="text-3xl font-bold text-[var(--text-primary)] mb-2">Welcome to {settings?.park_name || 'Our Campground'}</h1>
-        <p className="text-lg mb-1" style={{ color: 'var(--accent-color)' }}>{settings?.park_location || ''}</p>
-        <p className="text-[var(--text-muted)] mb-8 max-w-md">{settings?.park_tagline || 'Book your perfect campsite, cabin, or tent site today.'}</p>
+        {/* Only the hero variant scales up, so with no hero this is exactly today's band. */}
+        <h1
+          className={`font-bold mb-2 ${heroImageUrl ? 'text-3xl md:text-4xl' : 'text-3xl'}`}
+          style={heroImageUrl
+            ? { color: '#FFFFFF', textShadow: '0 1px 4px rgba(0,0,0,0.55)' }
+            : { color: 'var(--text-primary)' }}
+        >Welcome to {settings?.park_name || 'Our Campground'}</h1>
+        <p
+          className="text-lg mb-1"
+          style={heroImageUrl
+            ? { color: 'rgba(255,255,255,0.95)', textShadow: '0 1px 4px rgba(0,0,0,0.55)' }
+            : { color: 'var(--accent-color)' }}
+        >{settings?.park_location || ''}</p>
+        <p
+          className="mb-8 max-w-md"
+          style={heroImageUrl
+            ? { color: 'rgba(255,255,255,0.88)', textShadow: '0 1px 4px rgba(0,0,0,0.55)' }
+            : { color: 'var(--text-muted)' }}
+        >{settings?.park_tagline || 'Book your perfect campsite, cabin, or tent site today.'}</p>
 
-        {/* Search Box */}
+        {/* Search Box — stays fully opaque so it anchors the hero rather than blending into it. */}
         <div className="w-full max-w-3xl bg-[var(--surface-card)] border border-[var(--border)] rounded-2xl shadow-2xl p-6">
           <h2 className="text-xl font-bold text-[var(--text-primary)] mb-5">Check Availability</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
@@ -346,6 +402,7 @@ export default function HomePage() {
             onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}>
             Search Available Sites
           </button>
+        </div>
         </div>
       </div>
 
