@@ -109,20 +109,27 @@ function ReservationsPageInner() {
   // not in reservations.amount_paid). Lets the list show true paid status.
   const [selectedFolioPaid, setSelectedFolioPaid] = useState(0)
   const [selectedFolioCharges, setSelectedFolioCharges] = useState(0)
+  // Card surcharge actually taken on this reservation's folio. Wizard-created bookings do
+  // not store surcharge_amount on the reservation row (only /api/payment does), so the
+  // folio payments are the sole record of it — needed so a RESENT confirmation reports the
+  // same "Paid Today" as the original instead of understating it.
+  const [selectedFolioSurcharge, setSelectedFolioSurcharge] = useState(0)
   useEffect(() => {
     let cancelled = false
     async function loadFolioTotals() {
-      if (!selected?.id) { setSelectedFolioPaid(0); setSelectedFolioCharges(0); return }
+      if (!selected?.id) { setSelectedFolioPaid(0); setSelectedFolioCharges(0); setSelectedFolioSurcharge(0); return }
       const { data: fols } = await supabase.from('folios').select('id').eq('reservation_id', selected.id)
       const ids = (fols || []).map((f: any) => f.id)
-      if (ids.length === 0) { if (!cancelled) { setSelectedFolioPaid(0); setSelectedFolioCharges(0) } return }
+      if (ids.length === 0) { if (!cancelled) { setSelectedFolioPaid(0); setSelectedFolioCharges(0); setSelectedFolioSurcharge(0) } return }
       const [{ data: pmts }, { data: items }] = await Promise.all([
         supabase.from('folio_payments').select('amount, surcharge_amount').eq('status', 'completed').in('folio_id', ids),
         supabase.from('folio_line_items').select('line_total').in('folio_id', ids),
       ])
       const paid = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
       const charges = (items || []).reduce((sum: number, i: any) => sum + (i.line_total || 0), 0)
-      if (!cancelled) { setSelectedFolioPaid(paid); setSelectedFolioCharges(charges) }
+      // Same rows already fetched above — no extra query, just the sum `paid` throws away.
+      const surcharge = (pmts || []).reduce((sum: number, p: any) => sum + (p.surcharge_amount || 0), 0)
+      if (!cancelled) { setSelectedFolioPaid(paid); setSelectedFolioCharges(charges); setSelectedFolioSurcharge(surcharge) }
     }
     loadFolioTotals()
     return () => { cancelled = true }
@@ -720,6 +727,30 @@ function ReservationsPageInner() {
                         setResendingEmail(true)
                         try {
                           const nights = Math.round((new Date(selected.departure_date).getTime() - new Date(selected.arrival_date).getTime()) / (1000 * 60 * 60 * 24))
+
+                          // Rebuild the breakdown from what the reservation row stored, so a
+                          // resent confirmation is itemized like the original rather than a
+                          // bare total. /api/payment records surcharge_amount on the row;
+                          // wizard bookings don't, so fall back to the folio's payments.
+                          const r: any = selected
+                          const resendSurcharge = r.surcharge_amount || selectedFolioSurcharge || 0
+                          const nightlyRate = r.base_nightly_rate || (nights > 0 ? Math.round(((r.total_price || 0) - (r.extra_guest_fee_total || 0) - (r.addons_total || 0) - (r.early_checkin_fee || 0) - (r.late_checkout_fee || 0) - (r.fees_total || 0)) / nights) : 0)
+                          const resendLines: { label: string; amount: number }[] = []
+                          if (nights > 0 && nightlyRate > 0) resendLines.push({ label: `${nights} night${nights !== 1 ? 's' : ''} × $${(nightlyRate / 100).toFixed(2)}`, amount: nightlyRate * nights })
+                          if (r.extra_guest_fee_total > 0) resendLines.push({ label: 'Extra guests', amount: r.extra_guest_fee_total })
+                          if (r.fees_total > 0) resendLines.push({ label: 'Fees', amount: r.fees_total })
+                          // Only the total is stored per reservation, not each add-on's name,
+                          // so a resend lists them as one line. The original email itemized them.
+                          if (r.addons_total > 0) resendLines.push({ label: 'Add-ons', amount: r.addons_total })
+                          if (r.early_checkin_fee > 0) resendLines.push({ label: 'Early check-in', amount: r.early_checkin_fee })
+                          if (r.late_checkout_fee > 0) resendLines.push({ label: 'Late check-out', amount: r.late_checkout_fee })
+                          // Wizard bookings don't store fees_total, so the parts can fall short
+                          // of the billed total. Close the gap with an explicit line rather than
+                          // emailing a breakdown that doesn't add up.
+                          const lineSum = resendLines.reduce((s, l) => s + l.amount, 0)
+                          const gap = (r.total_price || 0) + (r.discount_amount || 0) - lineSum
+                          if (gap > 0) resendLines.push({ label: 'Fees & other charges', amount: gap })
+
                           await fetch('/api/email', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -738,10 +769,14 @@ function ReservationsPageInner() {
                               camperAmperage: '',
                               totalPrice: selected.total_price,
                               amountPaid: selected.amount_paid,
+                              surchargeAmount: resendSurcharge,
                               paymentType: selected.payment_type,
                               confirmationNumber: selected.id.slice(0,8).toUpperCase(),
                               addonDetails: [],
                               extraGuestFee: 0,
+                              lines: resendLines,
+                              nightlyRate,
+                              discountAmount: r.discount_amount || 0,
                             }),
                           })
                           toast.success('Confirmation email resent!')
