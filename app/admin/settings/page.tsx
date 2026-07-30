@@ -15,6 +15,7 @@ const defaultSettings = {
   park_location: '',
   logo_url: '',
   logo_shape: 'circle',
+  hero_image_url: '',
   check_in_time: '2:00 PM',
   check_out_time: '12:00 PM',
   same_day_cutoff_time: '11:00 AM',
@@ -69,12 +70,18 @@ export default function SettingsPage() {
   // save payload — writing an unknown column fails the whole update and would take every
   // other setting down with it. Self-activates once the column exists; no code change needed.
   const [hasThemeColumn, setHasThemeColumn] = useState(false)
+  // Same story for `hero_image_url` — detected from the loaded row so the control hides
+  // itself, stays out of the save payload, AND can't run an upload that would write to a
+  // column that isn't there yet (which would fail the write and orphan the uploaded file).
+  const [hasHeroColumn, setHasHeroColumn] = useState(false)
   const [earlyPriceInput, setEarlyPriceInput] = useState('0.00')
   const [latePriceInput, setLatePriceInput] = useState('0.00')
   const [uploadingLogo, setUploadingLogo] = useState(false)
+  const [uploadingHero, setUploadingHero] = useState(false)
   useEffect(() => { setEarlyPriceInput((form.early_checkin_price / 100).toFixed(2)) }, [form.early_checkin_price])
   useEffect(() => { setLatePriceInput((form.late_checkout_price / 100).toFixed(2)) }, [form.late_checkout_price])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const heroInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { fetchSettings() }, [])
 
@@ -84,6 +91,7 @@ export default function SettingsPage() {
       setSettingsId(data.id)
       setPlan(data.plan || 'trailhead')
       setHasThemeColumn('theme' in data)
+      setHasHeroColumn('hero_image_url' in data)
       setForm({
         park_name: data.park_name || '',
         park_tagline: data.park_tagline || '',
@@ -94,6 +102,7 @@ export default function SettingsPage() {
         park_location: data.park_location || '',
         logo_url: data.logo_url || '',
         logo_shape: data.logo_shape || 'circle',
+        hero_image_url: data.hero_image_url || '',
         check_in_time: data.check_in_time || '2:00 PM',
         check_out_time: data.check_out_time || '12:00 PM',
         same_day_cutoff_time: data.same_day_cutoff_time || '11:00 AM',
@@ -158,6 +167,38 @@ export default function SettingsPage() {
     setUploadingLogo(false)
   }
 
+  // Mirrors handleLogoUpload — same bucket, same immediate write so the hero applies without
+  // a separate Save. The cap is 5MB rather than the logo's 2MB: a full-width landscape photo
+  // at a usable resolution routinely lands between 2 and 4MB.
+  async function handleHeroUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith('image/')) { toast.error('Please upload an image file.'); return }
+    if (file.size > 5 * 1024 * 1024) { toast.error('Image must be smaller than 5MB.'); return }
+    setUploadingHero(true)
+    const fileExt = file.name.split('.').pop()
+    const fileName = `hero-${Date.now()}.${fileExt}`
+    const { error: uploadError } = await supabase.storage.from('logos').upload(fileName, file, { upsert: true })
+    if (uploadError) { toast.error('Error uploading hero image.'); setUploadingHero(false); return }
+    const { data: urlData } = supabase.storage.from('logos').getPublicUrl(fileName)
+    const publicUrl = urlData.publicUrl
+    const { error: updateError } = await supabase.from('settings').update({ hero_image_url: publicUrl }).eq('id', settingsId)
+    if (updateError) { toast.error('Error saving hero image.'); setUploadingHero(false); return }
+    setForm({ ...form, hero_image_url: publicUrl })
+    toast.success('Hero image uploaded successfully!')
+    setUploadingHero(false)
+  }
+
+  // Clearing to '' (not null) keeps the column's type simple; the landing page treats an
+  // empty string as unset and falls back to the plain header band.
+  async function handleHeroRemove() {
+    const { error } = await supabase.from('settings').update({ hero_image_url: '' }).eq('id', settingsId)
+    if (error) { toast.error('Error removing hero image.'); return }
+    setForm({ ...form, hero_image_url: '' })
+    if (heroInputRef.current) heroInputRef.current.value = ''
+    toast.success('Hero image removed.')
+  }
+
   async function handleSave() {
     setSaving(true)
     const payload = {
@@ -194,6 +235,10 @@ export default function SettingsPage() {
       accent_color: form.accent_color,
       // Only written when the column exists — see hasThemeColumn above.
       ...(hasThemeColumn ? { theme: form.theme } : {}),
+      // Likewise. The upload/remove handlers already persist this on their own, so this is
+      // just keeping Save consistent with the rest of the form — guarded for the same reason:
+      // one unknown column fails the whole update and takes every other setting with it.
+      ...(hasHeroColumn ? { hero_image_url: form.hero_image_url } : {}),
       show_site_map: form.show_site_map,
       ...(form.admin_password ? { admin_password: form.admin_password } : {}),
       sender_name: form.sender_name,
@@ -274,6 +319,40 @@ export default function SettingsPage() {
               <option value="original">Original — no crop, transparent background</option>
             </select>
           </div>
+
+          {/* Rendered only once the settings row actually carries a `hero_image_url` key, so
+              this stays invisible (and unsaved, and un-uploadable) on tenants whose column
+              hasn't landed yet. Same pattern as the theme selector below. */}
+          {hasHeroColumn && (
+            <div className="mt-6 pt-6 border-t border-gray-100">
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">Hero Image</h3>
+              <p className="text-sm text-gray-500 mb-4">A wide photo shown behind the booking form on your landing page. Leave it empty and the page keeps its plain header band.</p>
+              <div className="flex items-start gap-6">
+                <div className="w-56 h-32 overflow-hidden rounded-lg border border-gray-200 flex items-center justify-center bg-gray-50 flex-shrink-0 relative">
+                  {form.hero_image_url ? (
+                    <Image src={form.hero_image_url} alt="Landing page hero" fill sizes="224px" className="object-cover" />
+                  ) : (
+                    <span className="text-gray-400 text-xs text-center px-2">No hero image set</span>
+                  )}
+                </div>
+                <div className="flex-1">
+                  <input type="file" accept="image/*" ref={heroInputRef} onChange={handleHeroUpload} className="hidden" />
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => heroInputRef.current?.click()} disabled={uploadingHero} className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50">
+                      {uploadingHero ? 'Uploading...' : form.hero_image_url ? 'Replace Hero Image' : 'Upload Hero Image'}
+                    </button>
+                    {form.hero_image_url && (
+                      <button onClick={handleHeroRemove} disabled={uploadingHero} className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50">
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-2">PNG or JPG. Max 5MB. A wide landscape photo works best — roughly 2000&times;1200 or larger.</p>
+                  {form.hero_image_url && <p className="text-xs text-green-600 mt-1">✓ Hero image set</p>}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Park Information */}
