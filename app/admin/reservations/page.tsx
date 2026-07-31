@@ -138,6 +138,16 @@ function ReservationsPageInner() {
     return () => { cancelled = true }
   }, [selected?.id])
 
+  // Selecting a different reservation used to leave the refund panel open with the previous
+  // booking's amount still in the box — so a figure computed for one guest sat under a
+  // Refund button now pointing at another. Reset it whenever the selection changes.
+  useEffect(() => {
+    setShowResRefund(false)
+    setResRefundAmount('')
+    setResRefundReason('')
+    setResRefundError('')
+  }, [selected?.id])
+
   // ── Refund basis: GROSS ─────────────────────────────────────────────────────
   // Refunds return what the CARD WAS CHARGED, surcharge included and prorated on partial
   // refunds. Two reasons: the card brands require the surcharge to be credited back on a
