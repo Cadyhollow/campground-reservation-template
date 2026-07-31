@@ -40,6 +40,7 @@ export default function AdminDashboard() {
     arrivalsToday: 0,
     departuresToday: 0,
     revenueThisMonth: 0,
+    surchargeThisMonth: 0,
   })
   const [recentReservations, setRecentReservations] = useState<any[]>([])
   const [upcomingReservations, setUpcomingReservations] = useState<any[]>([])
@@ -164,12 +165,20 @@ export default function AdminDashboard() {
       const thisMonth = monthData || []
       // Revenue This Month = money actually RECEIVED this month to date, across
       // everything: booking payments (by created_at) + folio payments (walk-in /
-      // POS / seasonal / electric, by paid_at). Both net of card surcharge —
-      // amount_paid is already cash-canonical post-Option-B.
+      // POS / seasonal / electric, by paid_at).
+      //
+      // GROSS of the card surcharge, by decision: the surcharge is money in, and the Square
+      // processing fee that offsets it is an expense reconciled outside this system. It used
+      // to be netted out of both legs, which understated revenue.
+      //
+      // The surcharge lives in two places and both count, or the figure would be gross for
+      // desk payments and net for online ones: folio_payments.surcharge_amount for money
+      // taken on a folio, and reservations.surcharge_amount for money taken by /api/payment
+      // at booking (amount_paid there is cash-canonical, i.e. already surcharge-free).
       const monthStartISO = firstOfMonth + 'T00:00:00'
       const [{ data: monthBookingPmts }, { data: monthFolioPmts }] = await Promise.all([
         supabase.from('reservations')
-          .select('amount_paid')
+          .select('amount_paid, surcharge_amount')
           .gt('amount_paid', 0)
           .neq('status', 'cancelled')
           .gte('created_at', monthStartISO),
@@ -178,14 +187,19 @@ export default function AdminDashboard() {
           .eq('status', 'completed')
           .gte('paid_at', monthStartISO),
       ])
+      const monthSurcharge =
+        (monthBookingPmts || []).reduce((s: number, r: any) => s + (r.surcharge_amount || 0), 0)
+        + (monthFolioPmts || []).reduce((s: number, p: any) => s + (p.surcharge_amount || 0), 0)
       const revenue = (monthBookingPmts || []).reduce((s: number, r: any) => s + (r.amount_paid || 0), 0)
-        + (monthFolioPmts || []).reduce((s: number, p: any) => s + (p.amount || 0) - (p.surcharge_amount || 0), 0)
+        + (monthFolioPmts || []).reduce((s: number, p: any) => s + (p.amount || 0), 0)
+        + (monthBookingPmts || []).reduce((s: number, r: any) => s + (r.surcharge_amount || 0), 0)
 
       setStats({
         totalThisMonth: thisMonth.length,
         arrivalsToday: (todayArrivals || []).length,
         departuresToday: (todayDepartures || []).length,
         revenueThisMonth: revenue,
+        surchargeThisMonth: monthSurcharge,
       })
       setRecentReservations(resData.slice(0, 8))
       const upcoming = (upcomingData || [])
@@ -389,7 +403,12 @@ export default function AdminDashboard() {
           <div className="rounded-xl border p-4 shadow-sm" style={{background:'#f0fdf4',borderColor:'#bbf7d0'}}>
             <p className="text-xs font-semibold mb-1" style={{color:'#14532d'}}>Revenue This Month</p>
             <p className="text-3xl font-bold" style={{color:'#14532d'}}>${(stats.revenueThisMonth / 100).toLocaleString('en-US', { minimumFractionDigits: 0 })}</p>
-            <p className="text-xs mt-1" style={{color:'#16a34a'}}>collected this month · net of card fees</p>
+            {/* Said "net of card fees" while the figure was surcharge-net. The figure is now
+                gross, so the surcharge is called out as a component of it — not an addition. */}
+            <p className="text-xs mt-1" style={{color:'#16a34a'}}>
+              collected this month
+              {stats.surchargeThisMonth > 0 && ` · includes $${(stats.surchargeThisMonth / 100).toFixed(2)} in card surcharges`}
+            </p>
           </div>
         ) : (
           <div className="rounded-xl border p-4 shadow-sm" style={{background:'#faf5ff',borderColor:'#e9d5ff'}}>
