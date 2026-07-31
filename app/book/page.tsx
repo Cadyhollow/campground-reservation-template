@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Image from 'next/image'
 import { supabase } from '@/lib/supabase'
+import PaymentTrustRow from '../components/PaymentTrustRow'
 
 type Addon = {
   id: string
@@ -843,6 +844,9 @@ function BookingForm() {
                 <h3 className="text-[var(--text-primary)] font-medium mb-3">Card Details</h3>
                 <div id="square-card-container" className="rounded-lg overflow-hidden" style={{ minHeight: '89px' }} />
                 {!squareLoaded && <p className="text-[var(--text-muted)] text-sm mt-2">Loading payment form...</p>}
+                {/* Sits inside the Card Details block, so it appears with the card fields and
+                    nowhere else — this page has no cash path to guard against. */}
+                <PaymentTrustRow />
               </div>
               {paymentError && <div className="rounded-lg p-4 bg-red-900 mb-4"><p className="text-red-300 text-sm">{paymentError}</p></div>}
               <div className="space-y-3">
