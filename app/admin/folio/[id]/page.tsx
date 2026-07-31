@@ -351,8 +351,13 @@ export default function FolioPage() {
     await loadFolioData(folio!.id)
   }
 
+  // Refunds are GROSS — the card is credited what it was charged, surcharge included and
+  // prorated, as the card brands require. folio_payments.amount is already stored gross, so
+  // the surcharge no longer has to be subtracted back out. /api/refund already caps at
+  // payment.amount, so it accepted gross all along; only this UI held it to net, quietly
+  // shorting the customer their surcharge on what the button called a 100% refund.
   function openRefund(payment: any) {
-    const suggestedAmount = ((payment.amount - (payment.surcharge_amount || 0)) * 0.9 / 100).toFixed(2)
+    const suggestedAmount = (payment.amount * 0.9 / 100).toFixed(2)
     setRefundPayment(payment)
     setRefundAmount(suggestedAmount)
     setRefundReason('')
@@ -868,7 +873,7 @@ export default function FolioPage() {
             <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '12px 14px', marginBottom: 16 }}>
               <div style={{ fontSize: 13, color: '#6b7280' }}>Original payment</div>
               <div style={{ fontSize: 15, fontWeight: 700, color: '#111827', marginTop: 2 }}>
-                ${((refundPayment.amount - (refundPayment.surcharge_amount || 0)) / 100).toFixed(2)} · {refundPayment.method}
+                ${(refundPayment.amount / 100).toFixed(2)} · {refundPayment.method}
                 {refundPayment.method === 'card' && refundPayment.square_payment_id
                   ? <span style={{ fontSize: 11, color: '#15803d', marginLeft: 8 }}>✓ Will refund to card via Square</span>
                   : refundPayment.method === 'card'
@@ -886,14 +891,14 @@ export default function FolioPage() {
                 type='number'
                 step='0.01'
                 min='0'
-                max={((refundPayment.amount - (refundPayment.surcharge_amount || 0)) / 100).toFixed(2)}
+                max={(refundPayment.amount / 100).toFixed(2)}
                 value={refundAmount}
                 onChange={e => setRefundAmount(e.target.value)}
               />
             </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               {[100, 90, 50].map(pct => (
-                <button key={pct} onClick={() => setRefundAmount(((refundPayment.amount - (refundPayment.surcharge_amount || 0)) * pct / 10000).toFixed(2))}
+                <button key={pct} onClick={() => setRefundAmount((refundPayment.amount * pct / 10000).toFixed(2))}
                   style={{ flex: 1, background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 7, padding: '7px', fontSize: 13, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>
                   {pct}%
                 </button>

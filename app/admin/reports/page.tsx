@@ -352,8 +352,12 @@ export default function ReportsPage() {
     setTxFolioLoading(false)
   }
 
+  // Refunds are GROSS — the card is credited what it was charged, surcharge included and
+  // prorated, matching the folio page and the reservation panel. folio_payments.amount is
+  // stored gross and /api/refund already caps at it, so only this modal was holding refunds
+  // to net and shorting the customer their surcharge.
   function openRefund(payment: any) {
-    const suggested = ((payment.amount - (payment.surcharge_amount||0)) / 100).toFixed(2)
+    const suggested = (payment.amount / 100).toFixed(2)
     setRefundPayment(payment)
     setRefundAmount(suggested)
     setRefundReason('')
@@ -1293,7 +1297,7 @@ export default function ReportsPage() {
                       <div className="bg-white rounded-lg p-3 mb-4 border border-red-100">
                         <p className="text-xs text-gray-500">Original payment</p>
                         <p className="text-sm font-bold text-gray-900 mt-0.5">
-                          ${((refundPayment.amount-(refundPayment.surcharge_amount||0))/100).toFixed(2)} · {refundPayment.method}
+                          ${(refundPayment.amount/100).toFixed(2)} · {refundPayment.method}
                           {refundPayment.method==='card'&&refundPayment.square_payment_id
                             ?<span className="text-xs text-emerald-600 ml-2">✓ Will refund to card</span>
                             :refundPayment.method==='card'
@@ -1303,12 +1307,12 @@ export default function ReportsPage() {
                         </p>
                       </div>
                       <label className="block text-xs font-semibold text-gray-700 mb-1">Refund amount ($)</label>
-                      <input type="number" step="0.01" min="0" max={((refundPayment.amount-(refundPayment.surcharge_amount||0))/100).toFixed(2)}
+                      <input type="number" step="0.01" min="0" max={(refundPayment.amount/100).toFixed(2)}
                         value={refundAmount} onChange={e=>setRefundAmount(e.target.value)}
                         className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xl font-bold mb-3"/>
                       <div className="flex gap-2 mb-3">
                         {[100,90,50].map(pct=>(
-                          <button key={pct} onClick={()=>setRefundAmount(((refundPayment.amount-(refundPayment.surcharge_amount||0))*pct/10000).toFixed(2))}
+                          <button key={pct} onClick={()=>setRefundAmount((refundPayment.amount*pct/10000).toFixed(2))}
                             className="flex-1 bg-white border border-gray-200 rounded-lg py-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-50">
                             {pct}%
                           </button>
