@@ -69,12 +69,34 @@ body {
 }
 
 /* Autofill previously hardcoded a #1f2937 inset, which would paint a dark box
-   inside a light-theme input. Follows the token now. */
+   inside a light-theme input. Follows the token now.
+
+   Everything here is keyed off the tokens, never a fixed color, so whichever theme is
+   active the autofilled text and the box behind it come from the same pair and contrast.
+
+   The inset box-shadow alone is enough on desktop but not on iOS Safari: AutoFill from a
+   contact card repaints the field with its own background and does not reliably honor the
+   shadow, which is how the text ends up matching the background (white-on-white). Typing
+   never goes through AutoFill, so it always looked fine. The extra declarations below each
+   close one hole in that:
+     - background-color   states the token background outright, for when iOS ignores the
+                          shadow;
+     - transition         defers the browser's own background repaint effectively forever,
+                          the long-standing trick for making an autofill background stick;
+     - caret-color        keeps the cursor visible — it would otherwise inherit the same
+                          invisible color the text had.
+   :active is included alongside :hover/:focus because iOS applies it mid-tap. */
 .themed-input:-webkit-autofill,
 .themed-input:-webkit-autofill:hover,
-.themed-input:-webkit-autofill:focus {
+.themed-input:-webkit-autofill:focus,
+.themed-input:-webkit-autofill:active {
   -webkit-box-shadow: 0 0 0px 1000px var(--surface-input) inset !important;
+  box-shadow: 0 0 0px 1000px var(--surface-input) inset !important;
+  background-color: var(--surface-input) !important;
   -webkit-text-fill-color: var(--text-primary) !important;
+  color: var(--text-primary) !important;
+  caret-color: var(--text-primary) !important;
+  transition: background-color 9999s ease-in-out 0s !important;
 }
 
 /* Dark background inputs - white text */
