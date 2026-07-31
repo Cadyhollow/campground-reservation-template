@@ -52,6 +52,9 @@ type Reservation = {
   camper_length: number
   camper_amperage: string
   square_payment_id: string | null
+  // Written by /api/payment on the booking leg. amount_paid is cash-canonical (surcharge
+  // free), so the card was charged amount_paid + surcharge_amount.
+  surcharge_amount?: number | null
   sites: { site_number: string; site_type: string } | null
 }
 
@@ -134,6 +137,26 @@ function ReservationsPageInner() {
     loadFolioTotals()
     return () => { cancelled = true }
   }, [selected?.id])
+
+  // ── Refund basis: GROSS ─────────────────────────────────────────────────────
+  // Refunds return what the CARD WAS CHARGED, surcharge included and prorated on partial
+  // refunds. Two reasons: the card brands require the surcharge to be credited back on a
+  // refund, so a net refund shorts the customer; and the surcharge is counted as revenue on
+  // the way in, so it has to go back out the same way.
+  //
+  // amount_paid is stored cash-canonical (surcharge-free) with the surcharge alongside, so
+  // gross is the sum of the two — never an inflation beyond what was actually taken.
+  const resSurchargeAmt = selected?.surcharge_amount || 0
+  const grossPaidHere = (selected?.amount_paid || 0) + resSurchargeAmt
+  const grossPaidFolio = selectedFolioPaid + selectedFolioSurcharge
+  const grossPaidTotal = grossPaidHere + grossPaidFolio
+
+  // Surcharge share of an arbitrary gross refund, so a typed amount prorates the same way
+  // the percentage presets do rather than only the round numbers being compliant.
+  function surchargePortionFor(grossCents: number) {
+    if (grossPaidHere <= 0 || resSurchargeAmt <= 0) return 0
+    return Math.min(resSurchargeAmt, Math.round(grossCents * resSurchargeAmt / grossPaidHere))
+  }
 
   useEffect(() => {
     fetchReservations()
@@ -348,7 +371,10 @@ function ReservationsPageInner() {
         squarePaymentId: selected.square_payment_id,
         refundAmount: parseFloat(resRefundAmount),
         reason: resRefundReason || 'Refund',
+        refundSurchargeAmount: surchargePortionFor(Math.round(parseFloat(resRefundAmount) * 100)) / 100,
         currentAmountPaid: selected.amount_paid,
+        currentSurchargeAmount: resSurchargeAmt,
+        currentGrossPaid: grossPaidHere,
         currentNotes: selected.notes || '',
       }),
     })
@@ -793,11 +819,11 @@ function ReservationsPageInner() {
                   </div>
                   </>
                 )}
-                {selected.amount_paid > 0 && selected.status !== 'cancelled' && (
+                {grossPaidHere > 0 && selected.status !== 'cancelled' && (
                   <div className="pt-2">
                     {!showResRefund ? (
                       <button
-                        onClick={() => { setResRefundAmount(((selected.amount_paid * 0.9) / 100).toFixed(2)); setShowResRefund(true); setResRefundError('') }}
+                        onClick={() => { setResRefundAmount(((grossPaidHere * 0.9) / 100).toFixed(2)); setShowResRefund(true); setResRefundError('') }}
                         className="w-full bg-orange-50 text-orange-700 border border-orange-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-100"
                       >
                         Issue Refund
@@ -806,11 +832,24 @@ function ReservationsPageInner() {
                       <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-semibold text-orange-800">Issue Refund</span>
-                          <span className="text-xs text-gray-500">Paid: ${(selected.amount_paid / 100).toFixed(2)}</span>
+                          <span className="text-xs text-gray-500">Paid: ${(grossPaidTotal / 100).toFixed(2)}</span>
                         </div>
+                        {grossPaidFolio > 0 && (
+                          <p className="text-xs text-orange-700">
+                            ${(grossPaidHere / 100).toFixed(2)} of that was charged on the booking and can be
+                            refunded here. The other ${(grossPaidFolio / 100).toFixed(2)} was taken on the folio —
+                            refund it from the folio page.
+                          </p>
+                        )}
+                        {resSurchargeAmt > 0 && (
+                          <p className="text-xs text-gray-500">
+                            Amounts include the ${(resSurchargeAmt / 100).toFixed(2)} card surcharge, so a refund
+                            returns what the card was charged. A partial refund returns a proportional share of it.
+                          </p>
+                        )}
                         <div className="flex gap-2">
                           {[100, 90, 50].map(pct => (
-                            <button key={pct} onClick={() => setResRefundAmount((selected.amount_paid * pct / 10000).toFixed(2))}
+                            <button key={pct} onClick={() => setResRefundAmount((grossPaidHere * pct / 10000).toFixed(2))}
                               className="flex-1 bg-white border border-gray-200 rounded text-xs font-semibold py-1 hover:bg-gray-50">
                               {pct}%
                             </button>
