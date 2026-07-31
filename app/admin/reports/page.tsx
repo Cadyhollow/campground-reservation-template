@@ -384,17 +384,17 @@ export default function ReportsPage() {
   // ── Computed values ────────────────────────────────────────────────────────
   const stayDateRevenue = reservations.reduce((s,r)=>s+(r.total_price||0),0)/100
   // reservation payments only (non-guest-account, non-walkup)
-  const paymentDateResRevenue = (resPayments.reduce((s,p)=>s+(p.amount||0)-(p.surcharge_amount||0),0) + bookingPaymentsTotal)/100
+  const paymentDateResRevenue = (resPayments.reduce((s,p)=>s+(p.amount||0),0) + bookingPaymentsTotal + bookingSurchargeTotal)/100
   const resRevenue = reportBy==='payment_date' ? paymentDateResRevenue : stayDateRevenue
   // POS = walkin + walkup folios only
   const posPayments = transactions.filter(t=>{const ft=(t.folios as any)?.folio_type; return ft==='walkin'||ft==='walkup'})
-  const posRevenue = posPayments.reduce((s,p)=>s+(p.amount||0)-(p.surcharge_amount||0),0)/100
+  const posRevenue = posPayments.reduce((s,p)=>s+(p.amount||0),0)/100
   // Seasonal = guest_account folios
   const electricLineItems = guestAccountLineItems.filter(li=>li.description.toLowerCase().includes('electric'))
   const otherGuestLineItems = guestAccountLineItems.filter(li=>!li.description.toLowerCase().includes('electric'))
   const electricRevenue = electricLineItems.reduce((s,li)=>s+(li.line_total||0),0)/100
   const otherGuestRevenue = otherGuestLineItems.reduce((s,li)=>s+(li.line_total||0),0)/100
-  const seasonalPaymentsRevenue = guestAccountPayments.reduce((s,p)=>s+(p.amount||0)-(p.surcharge_amount||0),0)/100
+  const seasonalPaymentsRevenue = guestAccountPayments.reduce((s,p)=>s+(p.amount||0),0)/100
   // Total = res + pos + seasonal (no double counting)
   const totalCombined = resRevenue + (posEnabled?posRevenue:0) + electricRevenue + otherGuestRevenue
   // All payments for method breakdown
@@ -412,9 +412,11 @@ export default function ReportsPage() {
   const creditCampers = seasonalCampers.filter(c=>c.balance<0)
 
   // Today's revenue — from the UNIFIED list (folio + online booking payments) so online
-  // reservations count, bucketed by LOCAL day (not the UTC calendar day), net of surcharge.
+  // reservations count, bucketed by LOCAL day (not the UTC calendar day). Gross of the card
+  // surcharge, like every other revenue figure here: unifiedTx already carries booking
+  // payments as amount_paid + surcharge_amount, so the raw amount IS the gross.
   const todayStr = ymd(new Date())
-  const todayRevenue = unifiedTx.filter(t=>t.paid_at && ymd(new Date(t.paid_at))===todayStr).reduce((s,t)=>s+(t.amount||0)-(t.surcharge_amount||0),0)/100
+  const todayRevenue = unifiedTx.filter(t=>t.paid_at && ymd(new Date(t.paid_at))===todayStr).reduce((s,t)=>s+(t.amount||0),0)/100
 
   // Monthly chart
   const monthlyMap: { [key: string]: { label: string; value: number } } = {}
@@ -433,7 +435,7 @@ export default function ReportsPage() {
       const key = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')
       const label = d.toLocaleDateString('en-US',{month:'short',year:'2-digit'})
       if (!monthlyMap[key]) monthlyMap[key]={label,value:0}
-      monthlyMap[key].value += ((t.amount||0)-(t.surcharge_amount||0))/100
+      monthlyMap[key].value += (t.amount||0)/100
     })
   }
   const monthlyData = Object.entries(monthlyMap).sort((a,b)=>a[0].localeCompare(b[0])).map(([,v])=>v)
@@ -659,7 +661,10 @@ export default function ReportsPage() {
               <KPICard label="Seasonal Revenue" value={'$'+(electricRevenue+otherGuestRevenue).toFixed(2)} sub="electric + other charges"/>
               <KPICard label="Monthly Revenue" value={'$'+(monthlyRevenue/100).toFixed(2)} sub="monthly camper charges"/>
               <KPICard label="Outstanding Balances" value={'$'+outstandingBalance.toFixed(2)} sub={overdueCampers.length+' camper'+(overdueCampers.length!==1?'s':'')+' with balance'} color={outstandingBalance>0?'text-red-600':'text-emerald-600'} highlight={outstandingBalance>0} onClick={()=>setActiveTab('seasonal')}/>
-              <KPICard label="Card Surcharges" value={'$'+totalSurcharge.toFixed(2)} sub="collected this period"/>
+              {/* Revenue above is gross, so this is a BREAKOUT of money already counted in it —
+                  not an extra amount to add on. Worded that way so the figure can be reconciled
+                  against the Square processing fees without reading as double-counting. */}
+              <KPICard label="Card Surcharges Collected" value={'$'+totalSurcharge.toFixed(2)} sub="included in revenue above"/>
               <KPICard label="Avg Booking Lead Time" value={avgLeadTime.toFixed(1)+' days'} sub="booked in advance"/>
             </div>
 
@@ -1006,8 +1011,8 @@ export default function ReportsPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Store Revenue" value={'$'+posRevenue.toFixed(2)} sub={posPayments.length+' transactions'}/>
               <KPICard label="Avg Ticket" value={posPayments.length>0?'$'+(posRevenue/posPayments.length).toFixed(2):'—'} sub="per transaction"/>
-              <KPICard label="Cash Sales" value={'$'+(posPayments.filter(t=>t.method==='cash').reduce((s,t)=>s+(t.amount-(t.surcharge_amount||0)),0)/100).toFixed(2)}/>
-              <KPICard label="Card Sales" value={'$'+(posPayments.filter(t=>t.method==='card').reduce((s,t)=>s+(t.amount-(t.surcharge_amount||0)),0)/100).toFixed(2)}/>
+              <KPICard label="Cash Sales" value={'$'+(posPayments.filter(t=>t.method==='cash').reduce((s,t)=>s+t.amount,0)/100).toFixed(2)}/>
+              <KPICard label="Card Sales" value={'$'+(posPayments.filter(t=>t.method==='card').reduce((s,t)=>s+t.amount,0)/100).toFixed(2)}/>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
