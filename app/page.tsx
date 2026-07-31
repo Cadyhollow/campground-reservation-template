@@ -178,6 +178,19 @@ export default function HomePage() {
       ? settings.hero_image_url.trim()
       : null
 
+  // Clicking a date field only puts the caret in a segment (mm/dd/yyyy) — on desktop it does
+  // not open the calendar, so a camper who clicks the field sees nothing happen. Tapping on
+  // iOS/iPadOS opens the native picker regardless, which is why this only looks broken on
+  // desktop. showPicker() opens it explicitly.
+  //
+  // It must be called from a real user gesture or it throws NotAllowedError, so it hangs off
+  // onClick rather than onFocus — that also keeps the picker from springing open when someone
+  // merely tabs through the field. Optional-called and wrapped: any browser without it (or
+  // that refuses the call) simply falls back to today's behavior instead of throwing.
+  function openDatePicker(e: React.MouseEvent<HTMLInputElement>) {
+    try { e.currentTarget.showPicker?.() } catch { /* unsupported or gesture refused — no-op */ }
+  }
+
   const logoShapeClass =
     settings?.logo_shape === 'circle' ? 'w-32 h-32 rounded-full' :
     settings?.logo_shape === 'rounded' ? 'w-32 h-32 rounded-xl' :
@@ -365,11 +378,13 @@ export default function HomePage() {
             <div>
               <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Arrival Date</label>
               <input type="date" className="themed-input w-full border rounded-lg px-3 py-2 text-sm" min={today} value={arrival}
+                onClick={openDatePicker}
                 onChange={e => { setArrival(e.target.value); if (departure && departure <= e.target.value) setDeparture('') }} />
             </div>
             <div>
               <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Departure Date</label>
               <input type="date" className="themed-input w-full border rounded-lg px-3 py-2 text-sm" min={arrival || today} value={departure}
+                onClick={openDatePicker}
                 onChange={e => setDeparture(e.target.value)} />
             </div>
             <div>
