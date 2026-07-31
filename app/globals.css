@@ -99,6 +99,42 @@ body {
   transition: background-color 9999s ease-in-out 0s !important;
 }
 
+/* iOS follow-up. The rule above fixed desktop but NOT iOS: on an iPhone/iPad in the dark
+   theme, an autofilled field came out white-on-white. That specific pairing is diagnostic —
+   in dark theme --text-primary is white and --surface-input is #1F2937, so the white TEXT
+   was ours and the white BOX was not. iOS honors -webkit-text-fill-color and ignores both
+   the inset shadow and background-color, painting its own light AutoFill background instead.
+   (The 9999s transition above may compound it by deferring our own background repaint too,
+   which is why it is dropped below rather than repeated.)
+
+   Since the background cannot be controlled on iOS, this stops fighting it and pins the
+   autofill state to the pair iOS actually paints: a light box with dark text. Both are
+   stated, so the field is legible whichever declaration the engine honors — if our white
+   background applies we get dark-on-white, and if iOS's own light background wins we still
+   get dark-on-light.
+
+   Scoped to touch devices so desktop keeps the token-driven treatment above, which is
+   already correct there and would otherwise regress to dark-on-dark in the dark theme.
+
+   Tradeoff, deliberate: in the dark theme on a phone or tablet, an autofilled Name/Email
+   sits in a light box until the camper edits it, which looks inconsistent next to the
+   dark fields around it. Legibility was the requirement, so that is the trade taken —
+   an odd-looking field beats an invisible one. */
+@media (hover: none) and (pointer: coarse) {
+  .themed-input:-webkit-autofill,
+  .themed-input:-webkit-autofill:hover,
+  .themed-input:-webkit-autofill:focus,
+  .themed-input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0px 1000px #FFFFFF inset !important;
+    box-shadow: 0 0 0px 1000px #FFFFFF inset !important;
+    background-color: #FFFFFF !important;
+    -webkit-text-fill-color: #1F2620 !important;
+    color: #1F2620 !important;
+    caret-color: #1F2620 !important;
+    transition: none !important;
+  }
+}
+
 /* Dark background inputs - white text */
 .bg-gray-800 input,
 .bg-gray-800 input[type="text"],
