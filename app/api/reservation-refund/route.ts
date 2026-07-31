@@ -8,16 +8,32 @@ const supabase = createClient(
 
 export async function POST(request: NextRequest) {
   try {
-    const { reservationId, squarePaymentId, refundAmount, reason, currentAmountPaid, currentNotes } = await request.json()
+    const {
+      reservationId, squarePaymentId, refundAmount, reason, currentAmountPaid, currentNotes,
+      // Gross-basis fields. Optional so an older caller still behaves exactly as before:
+      // without them the cap falls back to amount_paid and no surcharge is unwound.
+      refundSurchargeAmount, currentSurchargeAmount, currentGrossPaid,
+    } = await request.json()
 
     if (!reservationId || !refundAmount) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
 
     const refundAmountCents = Math.round(refundAmount * 100)
+    const refundSurchargeCents = Math.round((refundSurchargeAmount || 0) * 100)
 
-    if (refundAmountCents > currentAmountPaid) {
+    // Refunds are GROSS: the card is credited what it was charged, surcharge included, as
+    // the card brands require. The cap therefore has to be the gross that was charged —
+    // amount_paid alone is surcharge-free and would reject a legitimate full refund. This
+    // still cannot refund more than was actually taken; it just measures it correctly.
+    const grossCap = typeof currentGrossPaid === 'number' ? currentGrossPaid : currentAmountPaid
+
+    if (refundAmountCents > grossCap) {
       return NextResponse.json({ error: 'Refund amount exceeds amount paid' }, { status: 400 })
+    }
+
+    if (refundSurchargeCents > refundAmountCents) {
+      return NextResponse.json({ error: 'Surcharge portion exceeds the refund' }, { status: 400 })
     }
 
     // Process Square refund if card payment with square_payment_id
@@ -46,14 +62,27 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Update amount_paid and append audit note
-    const newAmountPaid = Math.max(0, currentAmountPaid - refundAmountCents)
-    const refundNote = `[Refund ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] $${refundAmount.toFixed(2)} refunded${reason ? ` — ${reason}` : ''}${squarePaymentId ? ' (Square)' : ' (cash/check)'}`
+    // Square was credited the GROSS, but the row records the two halves separately, so the
+    // decrements have to be split the same way. amount_paid drops by the stay portion only —
+    // it is cash-canonical and would stop being so if the surcharge were taken out of it —
+    // and surcharge_amount drops by the surcharge portion, so revenue (which counts the
+    // surcharge) falls by exactly what was handed back rather than staying overstated.
+    const refundStayCents = refundAmountCents - refundSurchargeCents
+    const newAmountPaid = Math.max(0, currentAmountPaid - refundStayCents)
+
+    const refundNote = `[Refund ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] $${refundAmount.toFixed(2)} refunded${refundSurchargeCents > 0 ? ` (incl. $${(refundSurchargeCents / 100).toFixed(2)} card surcharge)` : ''}${reason ? ` — ${reason}` : ''}${squarePaymentId ? ' (Square)' : ' (cash/check)'}`
     const updatedNotes = currentNotes ? `${currentNotes}\n${refundNote}` : refundNote
+
+    // Only touch surcharge_amount when the caller supplied it, so an older caller's write
+    // shape is unchanged.
+    const updatePayload: Record<string, any> = { amount_paid: newAmountPaid, notes: updatedNotes }
+    if (typeof currentSurchargeAmount === 'number') {
+      updatePayload.surcharge_amount = Math.max(0, currentSurchargeAmount - refundSurchargeCents)
+    }
 
     const { error } = await supabase
       .from('reservations')
-      .update({ amount_paid: newAmountPaid, notes: updatedNotes })
+      .update(updatePayload)
       .eq('id', reservationId)
 
     if (error) {
