@@ -28,6 +28,8 @@ function ConfirmationContent() {
   const [reservation, setReservation] = useState<Reservation | null>(null)
   const [loading, setLoading] = useState(true)
   const [settings, setSettings] = useState<any>(null)
+  const [folioPaid, setFolioPaid] = useState(0)
+  const [folioCharges, setFolioCharges] = useState(0)
 
   useEffect(() => {
     if (reservationId) fetchReservation()
@@ -46,8 +48,39 @@ function ConfirmationContent() {
       .eq('id', reservationId)
       .single()
     setReservation(data)
+    await fetchFolioTotals()
     setLoading(false)
   }
+
+  // Money for a booking taken by staff — the wizard, an owner booking, a walk-in — is
+  // recorded on the reservation's folio, not in reservations.amount_paid. Reading only
+  // amount_paid told those campers they had paid $0.00 and owed the full stay at check-in
+  // when they had in fact already paid.
+  //
+  // Deliberately the same arithmetic as app/api/receipt/route.ts, so this page and the
+  // receipt that lands in the camper's inbox cannot disagree: payments are summed NET of
+  // the card surcharge (the surcharge is a processing pass-through, not money toward the
+  // stay), and folio line items count as charges alongside the stay itself.
+  //
+  // Aggregated across every folio on the reservation rather than a single one — the receipt
+  // route is invoked per folio, but this page only knows the reservation.
+  async function fetchFolioTotals() {
+    const { data: folios } = await supabase.from('folios').select('id').eq('reservation_id', reservationId)
+    const ids = (folios || []).map((f: any) => f.id)
+    if (ids.length === 0) return
+    const [{ data: pmts }, { data: items }] = await Promise.all([
+      supabase.from('folio_payments').select('amount, surcharge_amount').eq('status', 'completed').in('folio_id', ids),
+      supabase.from('folio_line_items').select('line_total, voided').in('folio_id', ids),
+    ])
+    setFolioPaid((pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0))
+    setFolioCharges((items || []).reduce((sum: number, i: any) => sum + (i.voided ? 0 : (i.line_total || 0)), 0))
+  }
+
+  // The receipt route's three figures, by the same formula. With no folio both addends are
+  // zero, so an ordinary online card booking renders exactly as it did before.
+  const totalPaid = (reservation?.amount_paid || 0) + folioPaid
+  const chargesTotal = (reservation?.total_price || 0) + folioCharges
+  const balanceRemaining = chargesTotal - totalPaid
 
   const siteTypeLabel = (type: string) =>
     ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
@@ -147,16 +180,16 @@ function ConfirmationContent() {
           <div className="space-y-2 text-sm">
             <div className="flex justify-between text-[var(--text-muted)]">
               <span>Total reservation cost</span>
-              <span>${(reservation.total_price / 100).toFixed(2)}</span>
+              <span>${(chargesTotal / 100).toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-green-400">
-              <span>Amount paid today</span>
-              <span>${(reservation.amount_paid / 100).toFixed(2)}</span>
+              <span>Amount paid</span>
+              <span>${(totalPaid / 100).toFixed(2)}</span>
             </div>
-            {reservation.amount_paid < reservation.total_price && (
+            {balanceRemaining > 0 && (
               <div className="flex justify-between text-yellow-400 border-t border-[var(--border)] pt-2 mt-2">
                 <span>Balance due at check-in</span>
-                <span>${((reservation.total_price - reservation.amount_paid) / 100).toFixed(2)}</span>
+                <span>${(balanceRemaining / 100).toFixed(2)}</span>
               </div>
             )}
           </div>
@@ -182,10 +215,10 @@ function ConfirmationContent() {
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
               <p>Cancellations must be made at least <span className="text-[var(--text-primary)] font-medium">7 days before arrival</span> by contacting us directly.</p>
             </div>
-            {reservation.amount_paid < reservation.total_price && (
+            {balanceRemaining > 0 && (
               <div className="flex gap-3">
                 <span className="text-yellow-400">!</span>
-                <p>Your remaining balance of <span className="text-[var(--text-primary)] font-medium">${((reservation.total_price - reservation.amount_paid) / 100).toFixed(2)}</span> is due at check-in.</p>
+                <p>Your remaining balance of <span className="text-[var(--text-primary)] font-medium">${(balanceRemaining / 100).toFixed(2)}</span> is due at check-in.</p>
               </div>
             )}
           </div>
