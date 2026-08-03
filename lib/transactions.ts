@@ -51,7 +51,15 @@ export async function fetchUnifiedTransactions(startISO: string, endISO: string)
         id, paid_at, method, amount, surcharge_amount, status, note, folio_id,
         folios ( id, folio_type, guest_name, reservation_id, guest_id )
       `)
-      .eq('status', 'completed')
+      // Refund rows are counted, not filtered out. /api/refund leaves the original payment in
+      // place, flips its status to 'refunded' or 'partially_refunded', and inserts a negative
+      // row. Counting only 'completed' therefore dropped BOTH rows, so a partial refund erased
+      // the whole original payment from revenue instead of just the part handed back — the kept
+      // portion vanished. Counting all three lets them net: an untouched payment stands alone, a
+      // full refund cancels to zero, a partial refund leaves exactly what was kept.
+      // Listed explicitly rather than 'not voided' so any future status is excluded until
+      // someone decides it counts. 'voided' stays out — a voided payment never happened.
+      .in('status', ['completed', 'refunded', 'partially_refunded'])
       .gte('paid_at', startISO)
       .lte('paid_at', endISO)
       .order('paid_at', { ascending: false }),

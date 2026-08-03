@@ -182,9 +182,17 @@ export default function AdminDashboard() {
           .gt('amount_paid', 0)
           .neq('status', 'cancelled')
           .gte('created_at', monthStartISO),
+        // Refund rows are counted, not filtered out. /api/refund leaves the original payment in
+        // place, flips its status to 'refunded' or 'partially_refunded', and inserts a negative
+        // row. Counting only 'completed' therefore dropped BOTH rows, so a partial refund erased
+        // the whole original payment from revenue instead of just the part handed back — the kept
+        // portion vanished. Counting all three lets them net: an untouched payment stands alone, a
+        // full refund cancels to zero, a partial refund leaves exactly what was kept.
+        // Listed explicitly rather than 'not voided' so any future status is excluded until
+        // someone decides it counts. 'voided' stays out — a voided payment never happened.
         supabase.from('folio_payments')
           .select('amount, surcharge_amount')
-          .eq('status', 'completed')
+          .in('status', ['completed', 'refunded', 'partially_refunded'])
           .gte('paid_at', monthStartISO),
       ])
       const monthSurcharge =
