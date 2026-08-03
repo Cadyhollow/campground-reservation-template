@@ -420,6 +420,10 @@ export default function ReportsPage() {
     method: m,
     value: unifiedTx.filter(t => t.method === m).reduce((s, t) => s + t.amount, 0) / 100,
   }))
+  // Nets refunded surcharge out on its own: allPayments carries the refund rows (the fetch
+  // above counts 'refunded'/'partially_refunded'), and /api/refund records their
+  // surcharge_amount negative, so a refunded surcharge cancels its original here rather than
+  // still reading as collected.
   const totalSurcharge = (allPayments.reduce((s,t)=>s+(t.surcharge_amount||0),0) + bookingSurchargeTotal)/100
   const outstandingBalance = seasonalCampers.reduce((s,c)=>s+Math.max(0,c.balance),0)/100
   const creditBalance = seasonalCampers.reduce((s,c)=>s+Math.abs(Math.min(0,c.balance)),0)/100

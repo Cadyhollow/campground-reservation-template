@@ -31,6 +31,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Refund amount exceeds original payment' }, { status: 400 })
     }
 
+    // Share of this refund that is card surcharge, prorated the same way the refund UIs
+    // prorate the amount itself. The refund row used to record surcharge_amount: 0, which
+    // left the "Card Surcharges Collected" breakout still counting a surcharge that had been
+    // handed back — the revenue total netted correctly (it sums the gross `amount`) while the
+    // surcharge line did not. Recording it negative here lets the two rows net the same way.
+    //
+    // Guarded on the original's own surcharge, so a payment that never carried one still
+    // records 0 and nothing changes for it.
+    const originalSurcharge = payment.surcharge_amount || 0
+    const refundSurchargeCents = originalSurcharge > 0 && payment.amount > 0
+      ? Math.min(originalSurcharge, Math.round(refundAmountCents * originalSurcharge / payment.amount))
+      : 0
+
     let squareRefundId = null
 
     // Process Square refund for card payments with a square_payment_id
@@ -72,7 +85,7 @@ export async function POST(request: NextRequest) {
         folio_id: folioId,
         method: payment.method,
         amount: -refundAmountCents, // negative amount
-        surcharge_amount: 0,
+        surcharge_amount: -refundSurchargeCents, // negative too, so it nets against the original
         status: 'refunded',
         note: `Refund: ${reason || 'No reason given'}${squareRefundId ? ` · Square refund ID: ${squareRefundId}` : ''}`,
         square_payment_id: squareRefundId,
