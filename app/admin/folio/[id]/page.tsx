@@ -267,7 +267,12 @@ export default function FolioPage() {
   async function loadFolioData(folioId: string) {
     const [{ data: items }, { data: pmts }] = await Promise.all([
       supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at'),
-      supabase.from('folio_payments').select('*').eq('folio_id', folioId).eq('status', 'completed').order('paid_at'),
+      // Refund rows count here too. Booking refunds are recorded as negative folio rows
+      // and reservations.amount_paid no longer shrinks when one is issued, so excluding
+      // them would leave this page showing the guest as having paid money that was given
+      // back — and the balance correspondingly too low.
+      supabase.from('folio_payments').select('*').eq('folio_id', folioId)
+        .in('status', ['completed', 'refunded', 'partially_refunded']).order('paid_at'),
     ])
     setLineItems(items || [])
     setPayments(pmts || [])

@@ -150,9 +150,12 @@ export default function AdminDashboard() {
         if (dashFolioIds.length > 0) {
           const { data: dashPmts } = await supabase
             .from('folio_payments')
+            // Includes refund rows: a booking refund is now a negative folio row and
+            // reservations.amount_paid no longer shrinks, so excluding them would show the guest as
+            // having paid money that was handed back.
             .select('folio_id, amount, surcharge_amount, status')
             .in('folio_id', dashFolioIds)
-            .eq('status', 'completed')
+            .in('status', ['completed', 'refunded', 'partially_refunded'])
           const paidByFolio: Record<string, number> = {}
           for (const pm of (dashPmts || [])) {
             paidByFolio[pm.folio_id] = (paidByFolio[pm.folio_id] || 0) + (pm.amount - (pm.surcharge_amount || 0))
@@ -291,9 +294,12 @@ export default function AdminDashboard() {
     if (arrFolioIds.length > 0) {
       const { data: arrPmts } = await supabase
         .from('folio_payments')
+        // Includes refund rows: a booking refund is now a negative folio row and
+        // reservations.amount_paid no longer shrinks, so excluding them would show the guest as
+        // having paid money that was handed back.
         .select('folio_id, amount, surcharge_amount, status')
         .in('folio_id', arrFolioIds)
-        .eq('status', 'completed')
+        .in('status', ['completed', 'refunded', 'partially_refunded'])
       const arrPaidByFolio: Record<string, number> = {}
       for (const pm of (arrPmts || [])) {
         arrPaidByFolio[pm.folio_id] = (arrPaidByFolio[pm.folio_id] || 0) + (pm.amount - (pm.surcharge_amount || 0))

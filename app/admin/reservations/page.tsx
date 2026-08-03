@@ -117,22 +117,41 @@ function ReservationsPageInner() {
   // folio payments are the sole record of it — needed so a RESENT confirmation reports the
   // same "Paid Today" as the original instead of understating it.
   const [selectedFolioSurcharge, setSelectedFolioSurcharge] = useState(0)
+  // Booking-leg refunds already recorded on the folio, as negative cents. amount_paid no
+  // longer shrinks when a refund is issued, so this is what keeps the panel from
+  // offering the original amount a second time.
+  const [selectedBookingRefunds, setSelectedBookingRefunds] = useState(0)
+  const [selectedBookingRefundSurcharge, setSelectedBookingRefundSurcharge] = useState(0)
   useEffect(() => {
     let cancelled = false
     async function loadFolioTotals() {
-      if (!selected?.id) { setSelectedFolioPaid(0); setSelectedFolioCharges(0); setSelectedFolioSurcharge(0); return }
+      if (!selected?.id) { setSelectedFolioPaid(0); setSelectedFolioCharges(0); setSelectedFolioSurcharge(0); setSelectedBookingRefunds(0); setSelectedBookingRefundSurcharge(0); return }
       const { data: fols } = await supabase.from('folios').select('id').eq('reservation_id', selected.id)
       const ids = (fols || []).map((f: any) => f.id)
-      if (ids.length === 0) { if (!cancelled) { setSelectedFolioPaid(0); setSelectedFolioCharges(0); setSelectedFolioSurcharge(0) } return }
+      if (ids.length === 0) { if (!cancelled) { setSelectedFolioPaid(0); setSelectedFolioCharges(0); setSelectedFolioSurcharge(0); setSelectedBookingRefunds(0); setSelectedBookingRefundSurcharge(0) } return }
       const [{ data: pmts }, { data: items }] = await Promise.all([
-        supabase.from('folio_payments').select('amount, surcharge_amount').eq('status', 'completed').in('folio_id', ids),
+        // Refund rows count here, not just 'completed' ones. Booking refunds are now recorded
+        // as negative folio rows, so excluding them would leave every "paid" figure on this
+        // screen reading as though nothing had been given back.
+        supabase.from('folio_payments')
+          .select('amount, surcharge_amount, reference_number')
+          .in('status', ['completed', 'refunded', 'partially_refunded'])
+          .in('folio_id', ids),
         supabase.from('folio_line_items').select('line_total').in('folio_id', ids),
       ])
       const paid = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
       const charges = (items || []).reduce((sum: number, i: any) => sum + (i.line_total || 0), 0)
       // Same rows already fetched above — no extra query, just the sum `paid` throws away.
       const surcharge = (pmts || []).reduce((sum: number, p: any) => sum + (p.surcharge_amount || 0), 0)
-      if (!cancelled) { setSelectedFolioPaid(paid); setSelectedFolioCharges(charges); setSelectedFolioSurcharge(surcharge) }
+      // Refunds of the BOOKING leg specifically, as negative cents. Kept apart from folio-side
+      // refunds because only these reduce what this panel is still allowed to refund.
+      const bookingRefundRows = (pmts || []).filter((p: any) => p.reference_number === 'booking-refund')
+      const bookingRefunds = bookingRefundRows.reduce((sum: number, p: any) => sum + (p.amount || 0), 0)
+      const bookingRefundSurcharge = bookingRefundRows.reduce((sum: number, p: any) => sum + (p.surcharge_amount || 0), 0)
+      if (!cancelled) {
+        setSelectedFolioPaid(paid); setSelectedFolioCharges(charges); setSelectedFolioSurcharge(surcharge)
+        setSelectedBookingRefunds(bookingRefunds); setSelectedBookingRefundSurcharge(bookingRefundSurcharge)
+      }
     }
     loadFolioTotals()
     return () => { cancelled = true }
@@ -157,15 +176,29 @@ function ReservationsPageInner() {
   // amount_paid is stored cash-canonical (surcharge-free) with the surcharge alongside, so
   // gross is the sum of the two — never an inflation beyond what was actually taken.
   const resSurchargeAmt = selected?.surcharge_amount || 0
-  const grossPaidHere = (selected?.amount_paid || 0) + resSurchargeAmt
+  // What the card was originally charged on the booking. amount_paid and surcharge_amount are
+  // now immutable — a refund no longer decrements them — so this stays the ORIGINAL charge
+  // for the life of the reservation and must never be offered as the refundable amount on its
+  // own, or a second partial refund would hand back money already returned.
+  const originalGrossHere = (selected?.amount_paid || 0) + resSurchargeAmt
+  // Still refundable HERE = the original booking charge less the booking-leg refunds already
+  // recorded (those amounts are negative, so this subtracts). Clamped at zero so a fully
+  // refunded booking offers nothing.
+  const grossPaidHere = Math.max(0, originalGrossHere + selectedBookingRefunds)
   const grossPaidFolio = selectedFolioPaid + selectedFolioSurcharge
-  const grossPaidTotal = grossPaidHere + grossPaidFolio
+  // "Paid" nets the refunds, since selectedFolioPaid/Surcharge now include the negative rows.
+  const grossPaidTotal = originalGrossHere + grossPaidFolio
 
   // Surcharge share of an arbitrary gross refund, so a typed amount prorates the same way
   // the percentage presets do rather than only the round numbers being compliant.
+  // Prorated on the ORIGINAL charge, not on what is left: the surcharge's share of the
+  // payment is a fixed ratio, and dividing by the shrinking remainder would inflate the
+  // surcharge portion of each successive partial refund. Capped at the surcharge not yet
+  // returned (the recorded refund surcharges are negative, so this subtracts).
+  const remainingSurcharge = Math.max(0, resSurchargeAmt + selectedBookingRefundSurcharge)
   function surchargePortionFor(grossCents: number) {
-    if (grossPaidHere <= 0 || resSurchargeAmt <= 0) return 0
-    return Math.min(resSurchargeAmt, Math.round(grossCents * resSurchargeAmt / grossPaidHere))
+    if (originalGrossHere <= 0 || resSurchargeAmt <= 0) return 0
+    return Math.min(remainingSurcharge, Math.round(grossCents * resSurchargeAmt / originalGrossHere))
   }
 
   useEffect(() => {
@@ -382,9 +415,9 @@ function ReservationsPageInner() {
         refundAmount: parseFloat(resRefundAmount),
         reason: resRefundReason || 'Refund',
         refundSurchargeAmount: surchargePortionFor(Math.round(parseFloat(resRefundAmount) * 100)) / 100,
-        currentAmountPaid: selected.amount_paid,
-        currentSurchargeAmount: resSurchargeAmt,
-        currentGrossPaid: grossPaidHere,
+        // The route recomputes what is still refundable from the reservation and the refunds
+        // already recorded, so nothing here is trusted as a cap. amount_paid and
+        // surcharge_amount are no longer sent because the route no longer mutates them.
         currentNotes: selected.notes || '',
       }),
     })
@@ -846,9 +879,9 @@ function ReservationsPageInner() {
                         </div>
                         {grossPaidFolio > 0 && (
                           <p className="text-xs text-orange-700">
-                            ${(grossPaidHere / 100).toFixed(2)} of that was charged on the booking and can be
-                            refunded here. The other ${(grossPaidFolio / 100).toFixed(2)} was taken on the folio —
-                            refund it from the folio page.
+                            ${(grossPaidHere / 100).toFixed(2)} is still refundable here against the booking
+                            charge. The ${(grossPaidFolio / 100).toFixed(2)} taken on the folio is refunded from the
+                            folio page.
                           </p>
                         )}
                         {resSurchargeAmt > 0 && (
