@@ -4,6 +4,10 @@ import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { BOOKING_REFUND_REF } from '@/lib/refund-refs'
+import {
+  computePolicyRefund, normalizePolicy, arrivalPhrase,
+  type ResolvedPolicy, type PolicyRefundResult,
+} from '@/lib/cancellation-policy'
 import WaiverActions from './WaiverActions'
 import toast, { Toaster } from 'react-hot-toast'
 
@@ -123,6 +127,18 @@ function ReservationsPageInner() {
   // offering the original amount a second time.
   const [selectedBookingRefunds, setSelectedBookingRefunds] = useState(0)
   const [selectedBookingRefundSurcharge, setSelectedBookingRefundSurcharge] = useState(0)
+  // Cancel & refund. cancelTarget doubles as "is the modal open" — cancelling is a money
+  // action now, so it is aimed at one specific reservation captured when the button was
+  // pressed rather than at whatever happens to be selected when the operator confirms.
+  const [cancelTarget, setCancelTarget] = useState<Reservation | null>(null)
+  const [cancelPolicy, setCancelPolicy] = useState<ResolvedPolicy | null>(null)
+  const [cancelPrefill, setCancelPrefill] = useState<PolicyRefundResult | null>(null)
+  const [cancelIssueRefund, setCancelIssueRefund] = useState(false)
+  const [cancelAmount, setCancelAmount] = useState('')
+  const [cancelReason, setCancelReason] = useState('')
+  const [cancelLoadingPolicy, setCancelLoadingPolicy] = useState(false)
+  const [cancelProcessing, setCancelProcessing] = useState(false)
+  const [cancelError, setCancelError] = useState('')
   useEffect(() => {
     let cancelled = false
     async function loadFolioTotals() {
@@ -440,10 +456,84 @@ function ReservationsPageInner() {
     if (updated) { setSelected(updated); fetchAddons(updated.id) }
   }
 
+  // ── Cancel & refund ─────────────────────────────────────────────────────────────────
+  // Cancelling was a window.confirm and a status write: no policy, no folio, no money back —
+  // and because the refund panel hides itself on a cancelled reservation, cancelling first
+  // stranded the guest's payment beyond reach. Opening the modal instead: it resolves the
+  // policy for this arrival date, shows what the guest is owed under it, and hands both halves
+  // to /api/reservation-cancel so the refund goes first and the cancellation only follows a
+  // refund that actually succeeded.
   async function handleCancel(res: Reservation) {
-    if (!confirm(`Cancel reservation for ${res.guest_name}?\n\nThis marks it as cancelled but keeps the record in your history.`)) return
-    await supabase.from('reservations').update({ status: 'cancelled' }).eq('id', res.id)
-    toast.success('Reservation cancelled.')
+    setCancelTarget(res)
+    setCancelPolicy(null)
+    setCancelPrefill(null)
+    setCancelIssueRefund(false)
+    setCancelAmount('')
+    setCancelReason('')
+    setCancelError('')
+    setCancelLoadingPolicy(true)
+    try {
+      const r = await fetch(`/api/cancellation-policy?arrival=${res.arrival_date}`)
+      const data = await r.json()
+      // normalizePolicy rather than the response as-is: it is the same coercion the server
+      // applies, so a rule with a NULL left in a column resolves to the default here too
+      // instead of quietly computing a refund from NaN.
+      const policy = normalizePolicy(data?.policy)
+      const prefill = computePolicyRefund({
+        policy,
+        arrival: res.arrival_date,
+        today: new Date().toISOString().split('T')[0],
+        originalGrossCents: originalGrossHere,
+        refundableCents: grossPaidHere,
+        paymentType: res.payment_type,
+      })
+      setCancelPolicy(policy)
+      setCancelPrefill(prefill)
+      // Checkbox follows the policy: on when a refund is due, off when the policy retains the
+      // money. The operator can always overrule it — that is the goodwill case — but the
+      // default is what the park's own rule says.
+      setCancelIssueRefund(prefill.refundCents > 0)
+      setCancelAmount((prefill.refundCents / 100).toFixed(2))
+    } catch {
+      setCancelError('Could not load the cancellation policy. Close this and try again.')
+    }
+    setCancelLoadingPolicy(false)
+  }
+
+  async function confirmCancel() {
+    if (!cancelTarget || cancelProcessing) return
+    setCancelProcessing(true)
+    setCancelError('')
+
+    const res = await fetch('/api/reservation-cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reservationId: cancelTarget.id,
+        issueRefund: cancelIssueRefund,
+        // A request, not a ceiling. The route recomputes the policy figure and caps anything
+        // sent here at what is still refundable on the booking.
+        refundAmount: cancelIssueRefund ? parseFloat(cancelAmount || '0') : 0,
+        reason: cancelReason || '',
+      }),
+    })
+    const data = await res.json()
+
+    if (!data.success) {
+      // Refund first, cancel second: a failure here means no money moved and the reservation
+      // is untouched, so the operator can fix the cause and press the button again.
+      setCancelError(data.error || 'Cancellation failed. The reservation has not been changed.')
+      setCancelProcessing(false)
+      return
+    }
+
+    toast.success(
+      data.refundedAmount > 0
+        ? `Reservation cancelled · $${data.refundedAmount.toFixed(2)} refunded.`
+        : 'Reservation cancelled.'
+    )
+    setCancelProcessing(false)
+    setCancelTarget(null)
     fetchReservations()
     setSelected(null)
   }
@@ -1120,6 +1210,167 @@ function ReservationsPageInner() {
           </div>
         )}
       </div>
+
+      {/* ── Cancel & refund ────────────────────────────────────────────────────────────
+          The guard on an action that both frees a site and moves money. A window.confirm
+          could say neither how much would go back nor under which rule, so the operator
+          confirmed a cancellation and then had to remember to refund separately — on a
+          screen that hides the refund button once the booking is cancelled. Everything the
+          decision needs is on this one panel, and the action button carries the actual
+          dollar amount so a misclick is legible before it fires. */}
+      {cancelTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto p-5 space-y-3">
+            <h3 className="text-lg font-semibold text-gray-900">Cancel this reservation?</h3>
+
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm space-y-1">
+              <div className="font-medium text-gray-900">{cancelTarget.guest_name}</div>
+              <div className="text-gray-600">
+                Site {cancelTarget.sites?.site_number || '—'} · {cancelTarget.arrival_date} → {cancelTarget.departure_date}
+              </div>
+              <div className="text-gray-600">
+                Paid: <strong>${(originalGrossHere / 100).toFixed(2)}</strong>
+                {resSurchargeAmt > 0 && <span className="text-gray-500"> (incl. ${(resSurchargeAmt / 100).toFixed(2)} card surcharge)</span>}
+              </div>
+              {grossPaidHere !== originalGrossHere && (
+                <div className="text-gray-600">
+                  Still refundable: <strong>${(grossPaidHere / 100).toFixed(2)}</strong> — the rest has already been refunded.
+                </div>
+              )}
+            </div>
+
+            {cancelLoadingPolicy && <p className="text-sm text-gray-500">Resolving the cancellation policy…</p>}
+
+            {cancelPolicy && cancelPrefill && (
+              <>
+                {/* The resolved rule, named. "Standard Policy" and "Fourth of July Holiday"
+                    produce different refunds, so the operator sees which one applied. */}
+                <div className="border border-gray-200 rounded-lg p-3 text-sm space-y-1">
+                  <div className="font-medium text-gray-900">
+                    {cancelPolicy.name}
+                    {cancelPolicy.source === 'default' && <span className="text-xs font-normal text-gray-500"> · default terms</span>}
+                  </div>
+                  <div className="text-gray-600 text-xs">
+                    {cancelPolicy.refund_percent}% refund if cancelled {cancelPolicy.cancellation_deadline_days}+ days before arrival ·
+                    Deposit {cancelPolicy.deposit_refundable ? 'refundable' : 'non-refundable'}
+                  </div>
+                  <div className={`text-xs font-medium ${cancelPrefill.withinDeadline ? 'text-red-600' : 'text-green-700'}`}>
+                    {cancelPrefill.withinDeadline ? 'Inside' : 'Outside'} the {cancelPolicy.cancellation_deadline_days}-day
+                    {' '}deadline ({arrivalPhrase(cancelPrefill.daysUntil)})
+                  </div>
+                  <div className="text-xs text-gray-500">{cancelPrefill.explanation}</div>
+                </div>
+
+                {grossPaidHere > 0 && (
+                  <div className="border border-orange-200 bg-orange-50 rounded-lg p-3 space-y-2">
+                    <label className="flex items-start gap-2 text-sm text-orange-900 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={cancelIssueRefund}
+                        onChange={e => {
+                          const on = e.target.checked
+                          setCancelIssueRefund(on)
+                          // Ticking the box on a policy that owes nothing is the goodwill
+                          // case. Rather than leaving $0.00 under a Refund button, seed it
+                          // with what the rule's percentage would have given outside the
+                          // deadline — a defensible starting point the operator can edit.
+                          if (on && (!cancelAmount || parseFloat(cancelAmount) === 0)) {
+                            const goodwill = Math.min(
+                              Math.round(originalGrossHere * cancelPolicy.refund_percent / 100),
+                              grossPaidHere
+                            )
+                            setCancelAmount((goodwill / 100).toFixed(2))
+                          }
+                        }}
+                      />
+                      <span>
+                        Refund the guest
+                        {cancelPrefill.refundCents === 0 && (
+                          <span className="block text-xs text-orange-700">
+                            Policy retains the full ${(grossPaidHere / 100).toFixed(2)} — no refund. Tick to override.
+                          </span>
+                        )}
+                      </span>
+                    </label>
+
+                    {cancelIssueRefund && (
+                      <>
+                        <div className="relative">
+                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                          <input
+                            type="number" step="0.01" min="0"
+                            className="w-full border border-gray-200 rounded pl-6 pr-2 py-1.5 text-sm"
+                            value={cancelAmount}
+                            onChange={e => setCancelAmount(e.target.value)}
+                          />
+                        </div>
+                        {Math.round(parseFloat(cancelAmount || '0') * 100) > grossPaidHere && (
+                          <p className="text-xs text-red-600">
+                            More than the ${(grossPaidHere / 100).toFixed(2)} still refundable — the server will cap it.
+                          </p>
+                        )}
+                        {Math.round(parseFloat(cancelAmount || '0') * 100) > cancelPrefill.refundCents
+                          && Math.round(parseFloat(cancelAmount || '0') * 100) <= grossPaidHere && (
+                          <p className="text-xs text-amber-700">
+                            Above the ${(cancelPrefill.refundCents / 100).toFixed(2)} this policy allows — recorded as an operator override.
+                          </p>
+                        )}
+                        {cancelTarget.square_payment_id
+                          ? <p className="text-xs text-green-700">✓ Will refund to card via Square</p>
+                          : <p className="text-xs text-gray-500">Cash/check — return funds manually; the refund is still recorded on the folio.</p>}
+                      </>
+                    )}
+
+                  </div>
+                )}
+
+                {/* Outside the refund box on purpose: an unpaid booking has no refund to
+                    configure but a cancellation still deserves a reason in the notes. */}
+                <input
+                  type="text" placeholder="Reason (optional — saved to the reservation notes)"
+                  className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm"
+                  value={cancelReason}
+                  onChange={e => setCancelReason(e.target.value)}
+                />
+              </>
+            )}
+
+            {/* Consequences, spelled out — this is the part a confirm() could never say. */}
+            <p className="text-xs text-gray-500">
+              Marks the reservation cancelled · frees the site for those dates
+              {cancelIssueRefund && parseFloat(cancelAmount || '0') > 0 && ' · records a dated refund on the folio'}
+            </p>
+
+            {cancelError && <p className="text-sm text-red-600">{cancelError}</p>}
+
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setCancelTarget(null)}
+                disabled={cancelProcessing}
+                className="flex-1 bg-white border border-gray-200 text-gray-700 rounded-lg py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+              >
+                Keep reservation
+              </button>
+              <button
+                onClick={confirmCancel}
+                // Disabled the moment it is pressed. The Square idempotency key is derived
+                // from the reservation, the amount and the refunds already recorded — not
+                // from the clock — so even a double-submit that beats this cannot produce a
+                // second refund.
+                disabled={cancelProcessing || cancelLoadingPolicy || !cancelPolicy}
+                className="flex-1 bg-red-600 text-white rounded-lg py-2 text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
+              >
+                {cancelProcessing
+                  ? 'Processing…'
+                  : cancelIssueRefund && parseFloat(cancelAmount || '0') > 0
+                    ? `Cancel & refund $${parseFloat(cancelAmount || '0').toFixed(2)}`
+                    : 'Cancel — no refund'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
