@@ -3,6 +3,7 @@ import { allPaymentMethods } from '@/lib/transactions'
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
+import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -95,6 +96,7 @@ export default function GuestAccountPage() {
   const [terminalDeviceId, setTerminalDeviceId] = useState('')
   const [cardEntryMode, setCardEntryMode] = useState('terminal')
   const [terminalStatus, setTerminalStatus] = useState('idle')
+  const [terminalCheckoutId, setTerminalCheckoutId] = useState<string | null>(null)
   const [paymentNote, setPaymentNote] = useState('')
   const [savingPayment, setSavingPayment] = useState(false)
   const [showCustomItem, setShowCustomItem] = useState(false)
@@ -631,11 +633,11 @@ export default function GuestAccountPage() {
             {paymentMethod === 'card' && cardEntryMode === 'terminal' && terminalDeviceId ? (
               <div>
                 {terminalStatus === 'waiting' ? (
-                  <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 12, padding: '1.5rem', textAlign: 'center' }}>
-                    <div style={{ fontSize: 32, marginBottom: 8 }}>🖥</div>
-                    <div style={{ fontWeight: 700, fontSize: 15, color: '#0369a1', marginBottom: 4 }}>Waiting for Terminal...</div>
-                    <div style={{ fontSize: 13, color: '#0284c7' }}>Have guest tap, swipe, or insert card</div>
-                  </div>
+                  <TerminalChargeControls
+                    checkoutId={terminalCheckoutId}
+                    onRetry={async () => { setTerminalCheckoutId(null); setTerminalStatus('idle'); await sendToTerminal() }}
+                    onCanceled={() => { setTerminalCheckoutId(null); setTerminalStatus('idle') }}
+                  />
                 ) : terminalStatus === 'error' ? (
                   <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: '1rem', textAlign: 'center' }}>
                     <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 6 }}>Payment canceled or failed</div>

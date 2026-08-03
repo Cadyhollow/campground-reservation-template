@@ -3,6 +3,7 @@ import { allPaymentMethods } from '@/lib/transactions'
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
+import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -117,6 +118,8 @@ export default function FolioPage() {
   const [feeAlreadyIncluded, setFeeAlreadyIncluded] = useState(false)
   const [terminalDeviceId, setTerminalDeviceId] = useState('')
   const [terminalStatus, setTerminalStatus] = useState('')
+  // Live checkout being watched, so Cancel/Retry have something to act on.
+  const [terminalCheckoutId, setTerminalCheckoutId] = useState<string | null>(null)
   const [sendingToTerminal, setSendingToTerminal] = useState(false)
   const [customDesc, setCustomDesc] = useState('')
   const [customPrice, setCustomPrice] = useState('')
@@ -465,6 +468,7 @@ export default function FolioPage() {
     const data = await res.json()
     setSendingToTerminal(false)
     if (data.success) {
+      setTerminalCheckoutId(data.checkoutId || null)
       setTerminalStatus('waiting')
       setShowPayment(false)
       let attempts = 0
@@ -936,11 +940,14 @@ export default function FolioPage() {
         </div>
       )}
 
-      {terminalStatus === 'waiting' && (
-        <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', background: '#2E6B8A', color: '#fff', borderRadius: 12, padding: '14px 24px', fontSize: 15, fontWeight: 600, zIndex: 60, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#fff', animation: 'pulse 1s infinite' }} />
-          Waiting for customer to tap card on Terminal...
-          <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
+      {(terminalStatus === 'waiting' || terminalStatus === 'timeout') && terminalCheckoutId && (
+        <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', width: 'min(460px, 92vw)', zIndex: 60 }}>
+          <TerminalChargeControls
+            checkoutId={terminalCheckoutId}
+            onRetry={async () => { setTerminalCheckoutId(null); setTerminalStatus(''); await sendToTerminal() }}
+            onCompleted={async () => { setTerminalCheckoutId(null); setTerminalStatus('completed'); await loadFolioData(folio!.id); setTimeout(() => setTerminalStatus(''), 3000) }}
+            onCanceled={() => { setTerminalStatus('') }}
+          />
         </div>
       )}
       {terminalStatus === 'completed' && (

@@ -4,6 +4,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { ymd, allPaymentMethods } from '@/lib/transactions'
 import { computePricing, type PricingSite, type PricingSettings, type PricingFee, type PricingRule } from '@/lib/pricing'
+import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 
 type Reservation = {
   id: string
@@ -257,6 +258,7 @@ export default function CalendarPage() {
   const [waiveFee, setWaiveFee] = useState(false)
   const [cardEntryMode, setCardEntryMode] = useState('terminal')
   const [terminalStatus, setTerminalStatus] = useState<'idle' | 'waiting' | 'error'>('idle')
+  const [terminalCheckoutId, setTerminalCheckoutId] = useState<string | null>(null)
   const [payNote, setPayNote] = useState('')
   const [paySaving, setPaySaving] = useState(false)
   const [payError, setPayError] = useState('')        // small inline validation
@@ -1004,6 +1006,7 @@ export default function CalendarPage() {
               body: JSON.stringify({ amount: totalCharge, folioId: fid, note: payNote || 'Date extension', surchargeAmount: surcharge }) })
             const data = await res.json()
             if (!data.checkoutId) { setTerminalStatus('error'); return }
+            setTerminalCheckoutId(data.checkoutId)
             const poll = setInterval(async () => {
               const pr = await fetch('/api/terminal/charge?checkoutId=' + data.checkoutId)
               const pd = await pr.json()
@@ -1217,11 +1220,11 @@ export default function CalendarPage() {
 
                   {payMethod === 'card' && cardEntryMode === 'terminal' && terminalDeviceId ? (
                     terminalStatus === 'waiting' ? (
-                      <div className="rounded-xl border text-center px-4 py-6" style={{ background: '#f0f9ff', borderColor: '#bae6fd' }}>
-                        <div className="text-3xl mb-2">🖥</div>
-                        <div className="font-bold text-sm" style={{ color: '#0369a1' }}>Waiting for Terminal…</div>
-                        <div className="text-xs mt-1" style={{ color: '#0284c7' }}>Have guest tap, swipe, or insert card</div>
-                      </div>
+                      <TerminalChargeControls
+                        checkoutId={terminalCheckoutId}
+                        onRetry={async () => { setTerminalCheckoutId(null); setTerminalStatus('idle'); await sendToTerminal() }}
+                        onCanceled={() => { setTerminalCheckoutId(null); setTerminalStatus('idle') }}
+                      />
                     ) : (
                       <button onClick={sendToTerminal} disabled={!payBaseCents}
                         className="w-full py-3.5 rounded-xl text-white font-bold text-base disabled:opacity-50" style={{ background: '#2E6B8A' }}>
