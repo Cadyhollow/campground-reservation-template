@@ -91,6 +91,13 @@ export async function fetchUnifiedTransactions(startISO: string, endISO: string)
   // Booking payments live in reservations.amount_paid and never overlap with
   // folio_payments, so merging the two lists needs no dedup. Post-Option-B the
   // card was charged amount_paid + surcharge_amount, so gross = the sum.
+  //
+  // paid_at below is created_at, not a payment timestamp — reservations carry no
+  // paid_at. It is a close proxy rather than a fudge: amount_paid is written in the
+  // request that creates the reservation, so creation is when the money arrived. Folio
+  // payments above use their real paid_at. The one case where the two diverge is a
+  // reservation-leg refund, which decrements amount_paid and so moves the reduction
+  // into the creation month instead of the refund's own.
   const bookingPayments: UnifiedPayment[] = ((resData as any[]) || []).map(r => ({
     id: 'res-' + r.id,
     paid_at: r.created_at,

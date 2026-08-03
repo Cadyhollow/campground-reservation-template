@@ -166,9 +166,24 @@ export default function AdminDashboard() {
         }
       }
       const thisMonth = monthData || []
-      // Revenue This Month = money actually RECEIVED this month to date, across
-      // everything: booking payments (by created_at) + folio payments (walk-in /
-      // POS / seasonal / electric, by paid_at).
+      // Revenue This Month = money received this month to date, across everything:
+      // booking payments + folio payments (walk-in / POS / seasonal / electric).
+      //
+      // The two legs are dated differently, which is worth being precise about because
+      // the earlier wording ("money actually RECEIVED") implied a payment timestamp the
+      // booking leg does not have. Folio payments carry a real paid_at. Reservations do
+      // not: there is no paid_at on the row, so the booking leg is dated by created_at.
+      //
+      // That is a proxy, but a close one — every path that writes amount_paid does so in
+      // the request that creates the reservation (/api/payment when the camper pays
+      // online, /api/manual-booking at the desk), and the owner wizard writes
+      // amount_paid: 0 and puts its money on the folio, where paid_at is real. So
+      // created_at IS the payment moment for effectively the whole booking leg.
+      //
+      // Known exception, currently unexercised: editing amount_paid on an existing
+      // reservation, and a reservation-leg refund — /api/reservation-refund decrements
+      // amount_paid, so the reduction lands in the reservation's creation month rather
+      // than the month of the refund.
       //
       // GROSS of the card surcharge, by decision: the surcharge is money in, and the Square
       // processing fee that offsets it is an expense reconciled outside this system. It used
