@@ -262,11 +262,15 @@ export default function ReportsPage() {
     // Dated by created_at, not a payment timestamp — reservations have no paid_at. It is
     // a close proxy: amount_paid is written in the request that creates the row, so
     // creation is the payment moment. See the note on the dashboard's revenue query.
+    // Cancelled bookings are NOT filtered out — the negative refund row does the netting,
+    // exactly as it does for folio payments above. Excluding them double-counted the
+    // reduction: a cancelled $500 booking refunded $450 lost the +$500 here AND still landed
+    // the −$450 row in pmtData, reading as −$450 revenue instead of the +$50 retained fee.
+    // A booking cancelled without a refund correctly stays as revenue — the business kept it.
     const { data: bookingPmts } = await supabase
       .from('reservations')
       .select('amount_paid, surcharge_amount, created_at')
       .gt('amount_paid', 0)
-      .neq('status', 'cancelled')
       .gte('created_at', startISO)
       .lte('created_at', endISO)
     setBookingPaymentsTotal((bookingPmts || []).reduce((sum: number, r: any) => sum + (r.amount_paid || 0), 0))
@@ -1096,7 +1100,16 @@ export default function ReportsPage() {
 
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
                 <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-1">Status</p>
-                <p className="text-sm text-amber-800">This reservation was cancelled and is not included in revenue totals.</p>
+                {/* The stay is excluded from occupancy, but its MONEY is not excluded from
+                    revenue — revenue follows the payment rows, so anything refunded nets
+                    itself out and anything kept stays counted. Saying it was "not included in
+                    revenue totals" was true only while cancelled bookings were filtered out,
+                    which double-counted every refund. */}
+                <p className="text-sm text-amber-800">
+                  This reservation was cancelled and is excluded from occupancy. Any payment
+                  taken on it still counts as revenue until it is refunded — a refund nets
+                  itself out, so what remains in revenue is what the business kept.
+                </p>
               </div>
 
               {!confirmDelete ? (

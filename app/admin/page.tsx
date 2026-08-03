@@ -181,9 +181,9 @@ export default function AdminDashboard() {
       // created_at IS the payment moment for effectively the whole booking leg.
       //
       // Known exception, currently unexercised: editing amount_paid on an existing
-      // reservation, and a reservation-leg refund — /api/reservation-refund decrements
-      // amount_paid, so the reduction lands in the reservation's creation month rather
-      // than the month of the refund.
+      // reservation. A reservation-leg refund is NOT an exception any more — since 146ce86
+      // /api/reservation-refund leaves amount_paid untouched and records a dated negative
+      // row on the folio, so the reduction lands in the month the money went back.
       //
       // GROSS of the card surcharge, by decision: the surcharge is money in, and the Square
       // processing fee that offsets it is an expense reconciled outside this system. It used
@@ -195,10 +195,15 @@ export default function AdminDashboard() {
       // at booking (amount_paid there is cash-canonical, i.e. already surcharge-free).
       const monthStartISO = firstOfMonth + 'T00:00:00'
       const [{ data: monthBookingPmts }, { data: monthFolioPmts }] = await Promise.all([
+        // Cancelled bookings are NOT filtered out — the negative refund row nets against
+        // them, exactly as it does for the folio payments below. Excluding them
+        // double-counted the reduction: a cancelled $500 booking refunded $450 lost the
+        // +$500 here AND still landed the −$450 refund row, reading as −$450 revenue
+        // instead of the +$50 retained fee. Cancelled without a refund correctly stays as
+        // revenue, because the business kept the money.
         supabase.from('reservations')
           .select('amount_paid, surcharge_amount')
           .gt('amount_paid', 0)
-          .neq('status', 'cancelled')
           .gte('created_at', monthStartISO),
         // Refund rows are counted, not filtered out. /api/refund leaves the original payment in
         // place, flips its status to 'refunded' or 'partially_refunded', and inserts a negative

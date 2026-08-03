@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { BOOKING_REFUND_REF } from '@/lib/refund-refs'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -12,9 +13,10 @@ const supabase = createClient(
 // indistinguishable — and the refund panel needs to subtract only its own kind when working
 // out how much of the booking charge is still refundable.
 //
-// reference_number is an existing column that nothing else writes or reads, so this needs no
-// schema change.
-export const BOOKING_REFUND_REF = 'booking-refund'
+// Now defined in lib/refund-refs.ts alongside the per-payment tag, because /api/refund's cap
+// has to exclude booking-leg refunds from the folio's headroom and the two must agree on the
+// string. Re-exported here so the original import path keeps working.
+export { BOOKING_REFUND_REF }
 
 export async function POST(request: NextRequest) {
   try {

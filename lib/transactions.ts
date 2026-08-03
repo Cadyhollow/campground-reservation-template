@@ -67,9 +67,16 @@ export async function fetchUnifiedTransactions(startISO: string, endISO: string)
       .from('reservations')
       .select('id, guest_name, amount_paid, surcharge_amount, payment_type, payment_method, created_at, square_payment_id')
       .gt('amount_paid', 0)
+      // Cancelled bookings are NOT filtered out, for the same reason refund rows are counted
+      // above: the negative row does the netting. Excluding them double-counted the reduction
+      // — a cancelled $500 booking refunded $450 lost the +$500 here AND still landed the
+      // −$450 refund row on the folio, reading as −$450 revenue instead of the +$50 retained.
+      // Counting the booking payment lets the two net to exactly what was kept, and a booking
+      // cancelled WITHOUT a refund correctly stays as revenue, because the business kept the
+      // money. Cancellation is a reservation-state fact; whether the money came back is a
+      // payment fact, and only the payment rows should speak to revenue.
       .gte('created_at', startISO)
-      .lte('created_at', endISO)
-      .neq('status', 'cancelled'),
+      .lte('created_at', endISO),
   ])
 
   const folioPayments: UnifiedPayment[] = ((pmtData as any[]) || []).map(p => ({
@@ -95,9 +102,12 @@ export async function fetchUnifiedTransactions(startISO: string, endISO: string)
   // paid_at below is created_at, not a payment timestamp — reservations carry no
   // paid_at. It is a close proxy rather than a fudge: amount_paid is written in the
   // request that creates the reservation, so creation is when the money arrived. Folio
-  // payments above use their real paid_at. The one case where the two diverge is a
-  // reservation-leg refund, which decrements amount_paid and so moves the reduction
-  // into the creation month instead of the refund's own.
+  // payments above use their real paid_at.
+  //
+  // A reservation-leg refund no longer diverges from this: since 146ce86 it leaves
+  // amount_paid untouched and records a dated negative row on the folio instead, so the
+  // reduction lands in the month the money actually went back rather than the month the
+  // booking was created.
   const bookingPayments: UnifiedPayment[] = ((resData as any[]) || []).map(r => ({
     id: 'res-' + r.id,
     paid_at: r.created_at,
