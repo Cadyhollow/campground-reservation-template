@@ -30,7 +30,10 @@ export async function POST(request: NextRequest) {
     const { data: lineItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at')
 
     // Load payments
-    const { data: payments } = await supabase.from('folio_payments').select('*').eq('folio_id', folioId).eq('status', 'completed').order('paid_at')
+    // Includes refund rows: a booking refund is now a negative folio row and
+    // reservations.amount_paid no longer shrinks, so excluding them would show the guest as
+    // having paid money that was handed back.
+    const { data: payments } = await supabase.from('folio_payments').select('*').eq('folio_id', folioId).in('status', ['completed', 'refunded', 'partially_refunded']).order('paid_at')
 
     const itemsTotal = (lineItems || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
     const paymentsTotal = (payments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)

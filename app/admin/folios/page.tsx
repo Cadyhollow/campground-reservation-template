@@ -81,7 +81,10 @@ export default function FoliosPage() {
     const summaries: FolioSummary[] = (data as any[]).map(f => {
       const reservation = f.reservation_id ? resMap[f.reservation_id] || null : null
       const itemsTotal = (f.folio_line_items || []).reduce((s: number, i: any) => s + i.line_total, 0)
-      const completedPayments = (f.folio_payments || []).filter((p: any) => p.status === 'completed')
+      // Includes refund rows: a booking refund is now a negative folio row and
+      // reservations.amount_paid no longer shrinks, so excluding them would show the guest as
+      // having paid money that was handed back.
+      const completedPayments = (f.folio_payments || []).filter((p: any) => ['completed', 'refunded', 'partially_refunded'].includes(p.status))
       const paymentsTotal = completedPayments.reduce((s: number, p: any) => s + p.amount - (p.surcharge_amount || 0), 0)
       const resBal = reservation ? Math.max(0, reservation.total_price - reservation.amount_paid) : 0
       const balance = Math.max(0, resBal + itemsTotal - paymentsTotal)

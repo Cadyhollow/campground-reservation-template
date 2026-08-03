@@ -494,7 +494,10 @@ export default function CalendarPage() {
           .from('folio_payments')
           .select('folio_id, amount, surcharge_amount, status')
           .in('folio_id', folioIds)
-          .eq('status', 'completed')
+          // Includes refund rows: a booking refund is now a negative folio row and
+          // reservations.amount_paid no longer shrinks, so excluding them would show the guest as
+          // having paid money that was handed back.
+          .in('status', ['completed', 'refunded', 'partially_refunded'])
         const paidByFolio: Record<string, number> = {}
         for (const pm of (pmts || [])) paidByFolio[pm.folio_id] = (paidByFolio[pm.folio_id] || 0) + (pm.amount - (pm.surcharge_amount || 0))
         for (const f of (folios || [])) if (f.reservation_id) folioPaidByRes[f.reservation_id] = (folioPaidByRes[f.reservation_id] || 0) + (paidByFolio[f.id] || 0)
