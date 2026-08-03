@@ -244,7 +244,15 @@ export default function ReportsPage() {
     const { data: allPmtData } = await supabase
       .from('folio_payments')
       .select('id, paid_at, method, amount, surcharge_amount, status, folio_id, square_payment_id, note, folios(id, guest_name, folio_type, reservation_id, guest_email)')
-      .eq('status','completed')
+      // Refund rows are counted, not filtered out. /api/refund leaves the original payment in
+      // place, flips its status to 'refunded' or 'partially_refunded', and inserts a negative
+      // row. Counting only 'completed' therefore dropped BOTH rows, so a partial refund erased
+      // the whole original payment from revenue instead of just the part handed back — the kept
+      // portion vanished. Counting all three lets them net: an untouched payment stands alone, a
+      // full refund cancels to zero, a partial refund leaves exactly what was kept.
+      // Listed explicitly rather than 'not voided' so any future status is excluded until
+      // someone decides it counts. 'voided' stays out — a voided payment never happened.
+      .in('status', ['completed', 'refunded', 'partially_refunded'])
       .gte('paid_at', startISO)
       .lte('paid_at', endISO)
       .order('paid_at', { ascending: false })
@@ -393,6 +401,9 @@ export default function ReportsPage() {
   // POS = walkin + walkup folios only
   const posPayments = transactions.filter(t=>{const ft=(t.folios as any)?.folio_type; return ft==='walkin'||ft==='walkup'})
   const posRevenue = posPayments.reduce((s,p)=>s+(p.amount||0),0)/100
+  // Revenue sums every row so refunds reduce it, but a refund is not a SALE: counting the
+  // negative row would inflate the transaction count and drag the average ticket down.
+  const posSales = posPayments.filter(p=>(p.amount||0)>0)
   // Seasonal = guest_account folios
   const electricLineItems = guestAccountLineItems.filter(li=>li.description.toLowerCase().includes('electric'))
   const otherGuestLineItems = guestAccountLineItems.filter(li=>!li.description.toLowerCase().includes('electric'))
@@ -661,7 +672,7 @@ export default function ReportsPage() {
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Reservation Revenue" value={'$'+resRevenue.toFixed(2)} sub={reservations.length+' bookings'}/>
-              {posEnabled&&<KPICard label="Store Revenue" value={'$'+posRevenue.toFixed(2)} sub={posPayments.length+' transactions'} onClick={()=>setActiveTab('store')}/>}
+              {posEnabled&&<KPICard label="Store Revenue" value={'$'+posRevenue.toFixed(2)} sub={posSales.length+' transactions'} onClick={()=>setActiveTab('store')}/>}
               <KPICard label="Seasonal Revenue" value={'$'+(electricRevenue+otherGuestRevenue).toFixed(2)} sub="electric + other charges"/>
               <KPICard label="Monthly Revenue" value={'$'+(monthlyRevenue/100).toFixed(2)} sub="monthly camper charges"/>
               <KPICard label="Outstanding Balances" value={'$'+outstandingBalance.toFixed(2)} sub={overdueCampers.length+' camper'+(overdueCampers.length!==1?'s':'')+' with balance'} color={outstandingBalance>0?'text-red-600':'text-emerald-600'} highlight={outstandingBalance>0} onClick={()=>setActiveTab('seasonal')}/>
@@ -1013,8 +1024,8 @@ export default function ReportsPage() {
         {activeTab==='store'&&posEnabled&&(
           <div className="space-y-6">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <KPICard label="Store Revenue" value={'$'+posRevenue.toFixed(2)} sub={posPayments.length+' transactions'}/>
-              <KPICard label="Avg Ticket" value={posPayments.length>0?'$'+(posRevenue/posPayments.length).toFixed(2):'—'} sub="per transaction"/>
+              <KPICard label="Store Revenue" value={'$'+posRevenue.toFixed(2)} sub={posSales.length+' transactions'}/>
+              <KPICard label="Avg Ticket" value={posSales.length>0?'$'+(posRevenue/posSales.length).toFixed(2):'—'} sub="per transaction"/>
               <KPICard label="Cash Sales" value={'$'+(posPayments.filter(t=>t.method==='cash').reduce((s,t)=>s+t.amount,0)/100).toFixed(2)}/>
               <KPICard label="Card Sales" value={'$'+(posPayments.filter(t=>t.method==='card').reduce((s,t)=>s+t.amount,0)/100).toFixed(2)}/>
             </div>
