@@ -100,14 +100,18 @@ export default function ElectricBillingPage() {
   const router = useRouter()
 
   useEffect(() => {
-    supabase.from('settings').select('plan, pos_enabled, custom_payment_methods').single().then(({ data }) => {
+    supabase.from('settings').select('plan, pos_enabled, custom_payment_methods, max_credit_amount').single().then(({ data }) => {
       setCustomMethods((data as any)?.custom_payment_methods || [])
+      setMaxCreditAmount((data as any)?.max_credit_amount || 0)
       if (data?.plan !== 'summit') router.replace('/admin')
     })
   }, [])
 
   const [campers, setCampers] = useState<CamperRow[]>([])
   const [customMethods, setCustomMethods] = useState<string[]>([])
+  // Same credit cap the guest folio enforces, so an overpayment taken here is held to the
+  // same limit rather than being the one door with no check on it.
+  const [maxCreditAmount, setMaxCreditAmount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [ratePerKwh, setRatePerKwh] = useState('0.27')
   const [minimumCharge, setMinimumCharge] = useState('15.00')
@@ -255,6 +259,16 @@ export default function ElectricBillingPage() {
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], savingPayment: true }; return u })
 
     const amountCents = Math.round(parseFloat(row.paymentAmount) * 100)
+    // Anything beyond the balance becomes an account credit. Warn rather than block: this
+    // screen records money already received, so refusing would leave it recorded nowhere.
+    const creditCents = Math.max(0, amountCents - Math.max(0, row.folioBalance))
+    if (creditCents > 0 && maxCreditAmount > 0 && creditCents > maxCreditAmount) {
+      if (!confirm('This will add a credit of $' + (creditCents / 100).toFixed(2) + ', which exceeds the $' + (maxCreditAmount / 100).toFixed(2) + ' credit limit for this account. Add it anyway?')) {
+        setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], savingPayment: false }; return u })
+        return
+      }
+    }
+
     const { data: newPayment } = await supabase.from('folio_payments').insert({
       folio_id: row.folioId, method: row.paymentMethod, amount: amountCents,
       surcharge_amount: 0, status: 'completed', note: row.paymentNote || null,
@@ -266,7 +280,10 @@ export default function ElectricBillingPage() {
     ])
     const itemsTotal = (items || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
     const paymentsTotal = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
-    const newBalance = Math.max(0, itemsTotal - paymentsTotal)
+    // Not clamped at zero. An overpayment leaves the folio negative and that negative IS the
+    // account credit — clamping it here recorded the credit but hid it, so the operator saw a
+    // settled account and no sign of the money sitting on it.
+    const newBalance = itemsTotal - paymentsTotal
 
     setCampers(prev => {
       const u = [...prev]
@@ -572,7 +589,11 @@ export default function ElectricBillingPage() {
                           <input style={{ ...si, paddingLeft: 20, opacity: row.skip ? 0.4 : 1 }} type='number' step='0.01' placeholder='0.00' value={row.finalAmount} disabled={row.skip || row.sent} onChange={e => updateFinalAmount(i, e.target.value)} />
                         </div>
                         <div style={{ fontSize: 13, fontWeight: 700, color: row.folioBalance > 0 ? '#dc2626' : '#15803d' }}>
-                          {row.folioBalance > 0 ? '$' + (row.folioBalance / 100).toFixed(2) : '✓ Current'}
+                          {row.folioBalance > 0
+                            ? '$' + (row.folioBalance / 100).toFixed(2)
+                            : row.folioBalance < 0
+                            ? 'Credit $' + (Math.abs(row.folioBalance) / 100).toFixed(2)
+                            : '✓ Current'}
                         </div>
                         <button onClick={() => toggleSkip(i)} disabled={row.sent} style={{ fontSize: 11, fontWeight: 600, border: '1px solid', borderColor: row.skip ? '#d1d5db' : '#fca5a5', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', background: row.skip ? '#f3f4f6' : '#fef2f2', color: row.skip ? '#6b7280' : '#dc2626' }}>
                           {row.skip ? 'Skipped' : 'Skip'}
@@ -624,10 +645,13 @@ export default function ElectricBillingPage() {
                             </button>
                           )}
 
-                          {row.folioBalance > 0 && !row.showPayment && (
-                            <button onClick={() => { updatePaymentField(i, 'showPayment', 'true'); updatePaymentField(i, 'paymentAmount', (row.folioBalance / 100).toFixed(2)) }}
+                          {/* Opens on a settled or already-credited account too, so a camper can
+                              pay ahead. It used to require a positive balance, which meant a
+                              prepayment had nowhere to go on this screen. */}
+                          {!row.showPayment && (
+                            <button onClick={() => { updatePaymentField(i, 'showPayment', 'true'); updatePaymentField(i, 'paymentAmount', (Math.max(0, row.folioBalance) / 100).toFixed(2)) }}
                               style={{ background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                              💵 Record Payment
+                              💵 {row.folioBalance > 0 ? 'Record Payment' : 'Record Payment / Prepay'}
                             </button>
                           )}
 

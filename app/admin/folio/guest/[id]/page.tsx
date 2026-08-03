@@ -1,5 +1,5 @@
 'use client'
-import { allPaymentMethods } from '@/lib/transactions'
+import { allPaymentMethods, methodLabel } from '@/lib/transactions'
 import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
@@ -267,9 +267,16 @@ export default function GuestAccountPage() {
       ? Math.min(Math.round(parseFloat(cashTendered) * 100), Math.round(parseFloat(paymentAmount) * 100))
       : Math.round(parseFloat(paymentAmount) * 100)
     if (!baseAmount || baseAmount <= 0) return
-    // Prepayment onto a zero balance becomes credit in full — enforce the credit cap (warn, allow override).
-    if (isPrepay && maxCreditAmount > 0 && baseAmount > maxCreditAmount) {
-      if (!confirm('This will add a credit of $' + (baseAmount/100).toFixed(2) + ', which exceeds the $' + (maxCreditAmount/100).toFixed(2) + ' credit limit for this account. Add it anyway?')) {
+    // Anything paid beyond the balance becomes an account credit — a prepayment onto a zero
+    // balance is just the whole amount. Checked for every tender, where before only prepay was
+    // checked and a mid-balance overpayment by card/check/Venmo slipped through uncapped.
+    //
+    // Warn-and-confirm rather than block, because for an electronic tender the money is already
+    // received: refusing would leave it recorded nowhere. Cash is different — the operator can
+    // hand it back — so the cash path blocks at the cap in the UI before it reaches here.
+    const creditCents = Math.max(0, baseAmount - totalDue)
+    if (creditCents > 0 && maxCreditAmount > 0 && creditCents > maxCreditAmount) {
+      if (!confirm('This will add a credit of $' + (creditCents/100).toFixed(2) + ', which exceeds the $' + (maxCreditAmount/100).toFixed(2) + ' credit limit for this account. Add it anyway?')) {
         return
       }
     }
@@ -301,6 +308,13 @@ export default function GuestAccountPage() {
   const totalDue = Math.max(0, itemsTotal - paymentsTotal)
   const overpaid = paymentsTotal > itemsTotal ? paymentsTotal - itemsTotal : 0
   const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
+  // The part of this payment that lands beyond what is owed, and therefore becomes an
+  // account credit. Derived from the amount for EVERY tender, not just cash: a credit is
+  // simply a negative folio balance, so a Venmo or check overpayment already created one —
+  // it was just never surfaced, capped, or confirmed, which is why recording it as cash
+  // became the workaround.
+  const creditPortionCents = Math.max(0, paymentAmountCents - totalDue)
+  const creditExceedsCap = maxCreditAmount > 0 && creditPortionCents > maxCreditAmount
   const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(paymentAmountCents * (cardSurcharge / 100)) : 0
   const totalWithSurcharge = paymentAmountCents + surchargePreview
   // ---- Chronological ledger: charges + payments interleaved with a running balance ----
@@ -616,6 +630,25 @@ export default function GuestAccountPage() {
                 )}
               </>
             )}
+            {/* Overpayment on an electronic tender. Cash keeps its Change-or-Credit choice above,
+                since the operator can physically hand money back; Venmo, card and check cannot
+                give change, so the overage can only become a credit — and it says so rather than
+                happening silently the way it used to. Over the cap this warns instead of
+                blocking: the money is already received and refusing would record it nowhere. */}
+            {paymentMethod !== 'cash' && creditPortionCents > 0 && (
+              <div style={{ background: creditExceedsCap ? '#fffbeb' : '#f0fdf4', border: '1px solid', borderColor: creditExceedsCap ? '#fde68a' : '#bbf7d0', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: creditExceedsCap ? '#92400e' : '#15803d' }}>
+                  <span>{totalDue > 0 ? 'Overpayment → account credit' : 'Prepayment → account credit'}</span>
+                  <span>${(creditPortionCents / 100).toFixed(2)}</span>
+                </div>
+                <div style={{ color: creditExceedsCap ? '#92400e' : '#166534', marginTop: 4 }}>
+                  {creditExceedsCap
+                    ? `This is over the $${(maxCreditAmount / 100).toFixed(2)} credit limit — you'll be asked to confirm. ${methodLabel(paymentMethod)} can't give change, so the overage stays on the account.`
+                    : `${methodLabel(paymentMethod)} can't give change, so this stays on the account and comes off their next charge.`}
+                </div>
+              </div>
+            )}
+
             {paymentMethod === 'card' && cardSurcharge > 0 && paymentAmountCents > 0 && (
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
