@@ -258,7 +258,10 @@ export default function ReportsPage() {
       .order('paid_at', { ascending: false })
     const pmtData = allPmtData || []
 
-    // Reservation booking payments (deposits / online) within the payment window.
+    // Reservation booking payments (deposits / online) within the window.
+    // Dated by created_at, not a payment timestamp — reservations have no paid_at. It is
+    // a close proxy: amount_paid is written in the request that creates the row, so
+    // creation is the payment moment. See the note on the dashboard's revenue query.
     const { data: bookingPmts } = await supabase
       .from('reservations')
       .select('amount_paid, surcharge_amount, created_at')
