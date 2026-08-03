@@ -5,6 +5,7 @@ import { methodLabel, ymd } from '@/lib/transactions'
 import { supabase } from '@/lib/supabase'
 import { computePricing, siteFitsCamper } from '@/lib/pricing'
 import type { PricingSite, PricingSettings, PricingFee, PricingRule } from '@/lib/pricing'
+import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 
 type Step = 1 | 2 | 3 | 4
 
@@ -44,6 +45,10 @@ function NewReservationWizardInner() {
   const [waiverMsg, setWaiverMsg] = useState<string | null>(null)
   const [newFolioId, setNewFolioId] = useState<string | null>(null)
   const [terminalStatus, setTerminalStatus] = useState<'' | 'waiting' | 'timeout'>('')
+  // Live checkout, so the wizard can offer Cancel/Retry instead of only 'open the folio'.
+  const [terminalCheckoutId, setTerminalCheckoutId] = useState<string | null>(null)
+  // Params of the charge in flight, so Retry can re-send exactly the same amount.
+  const [terminalCharge, setTerminalCharge] = useState<{ folioId: string; amount: number; surchargeAmount: number; note: string } | null>(null)
   const [squareCardRef, setSquareCardRef] = useState<any>(null)
   const [squareInstance, setSquareInstance] = useState<any>(null)
   const cardLoadingRef = useRef(false)
@@ -443,6 +448,8 @@ function NewReservationWizardInner() {
           }),
         })
         const tData = await tRes.json()
+        setTerminalCheckoutId(tData.checkoutId || null)
+        setTerminalCharge({ folioId: folio.id, amount: paidCents + surcharge, surchargeAmount: surcharge, note: `Booking payment · ${guest_name}` })
         if (!tRes.ok || !tData.success) {
           setNewReservationId(data.reservationId)
           setNewFolioId(folio.id)
@@ -553,6 +560,20 @@ function NewReservationWizardInner() {
     return <div className="p-8 text-sm text-gray-500">Loading…</div>
   }
 
+  // Re-send the held charge to the terminal. The reservation and folio already exist by this
+  // point, so a retry is only the Square side — it must never create a second reservation.
+  async function retryTerminalCharge() {
+    if (!terminalCharge) return
+    setTerminalStatus('waiting')
+    const res = await fetch('/api/terminal/charge', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(terminalCharge),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.success) { setTerminalStatus('timeout'); return }
+    setTerminalCheckoutId(data.checkoutId || null)
+  }
+
   if (terminalStatus === 'waiting') {
     return (
       <div className="max-w-4xl mx-auto p-6">
@@ -560,7 +581,14 @@ function NewReservationWizardInner() {
           <div className="text-2xl font-semibold mb-2">Waiting for the customer…</div>
           <div className="text-sm text-gray-500 mb-6">The charge has been sent to your Square Terminal. Have the customer tap or insert their card.</div>
           <div className="inline-block w-6 h-6 border-2 border-green-600 border-t-transparent rounded-full animate-spin mb-6"></div>
-          <div className="text-xs text-gray-400">This screen updates automatically once the payment completes.</div>
+          <div className="text-xs text-gray-400 mb-5">This screen updates automatically once the payment completes.</div>
+          <div className="max-w-md mx-auto text-left">
+            <TerminalChargeControls
+              checkoutId={terminalCheckoutId}
+              onRetry={retryTerminalCharge}
+              onCanceled={() => setTerminalStatus('timeout')}
+            />
+          </div>
         </div>
       </div>
     )
@@ -573,9 +601,11 @@ function NewReservationWizardInner() {
           <div className="text-2xl font-semibold text-amber-700 mb-2">No tap detected</div>
           <div className="text-sm text-gray-500 mb-7">The reservation is created and held, but the Terminal payment didn't complete. Open the folio to retry the Terminal or collect another way.</div>
           <div className="flex gap-3 justify-center">
-            <a href={`/admin/folio/${newReservationId}`} className="px-5 py-2 text-sm rounded-lg bg-green-700 text-white hover:bg-green-800">Open folio</a>
+            <button onClick={retryTerminalCharge} className="px-5 py-2 text-sm rounded-lg bg-green-700 text-white hover:bg-green-800">Retry on terminal</button>
+            <a href={`/admin/folio/${newReservationId}`} className="px-5 py-2 text-sm rounded-lg border border-gray-200">Open folio</a>
             <button onClick={resetWizard} className="px-5 py-2 text-sm rounded-lg border border-gray-200">Start another</button>
           </div>
+          <p className="text-xs text-gray-400 mt-5">If the terminal will not take the card, collect another way from the folio — never record a payment that has not been taken.</p>
         </div>
       </div>
     )

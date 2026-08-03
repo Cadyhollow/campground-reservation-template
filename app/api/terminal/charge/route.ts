@@ -1,10 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { fetchSquareCheckout, normalizeCheckoutState } from '@/lib/square-terminal'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
+
+// GET /api/terminal/charge?checkoutId=... — what Square currently thinks of this checkout.
+//
+// The UI has polled this since terminal support was added, but only POST was ever exported,
+// so every poll came back 405 and the operator saw "waiting..." until a three-minute timeout
+// no matter what the terminal was doing. That blind spot is why a stuck charge had no obvious
+// next step.
+//
+// Deliberately read-only. It would be tempting to record the payment here when Square says
+// COMPLETED but the webhook never arrived, except a GET that writes money would race the
+// webhook and could record the same payment twice. Recording stays with the webhook.
+export async function GET(request: NextRequest) {
+  const checkoutId = request.nextUrl.searchParams.get('checkoutId')
+  if (!checkoutId) {
+    return NextResponse.json({ error: 'Missing checkoutId' }, { status: 400 })
+  }
+
+  const { ok, checkout, errors } = await fetchSquareCheckout(checkoutId)
+  if (!ok) {
+    return NextResponse.json(
+      { error: errors?.[0]?.detail || 'Could not read checkout status' },
+      { status: 400 }
+    )
+  }
+  return NextResponse.json({
+    // Raw Square value — the calendar and guest-folio pollers compare against this.
+    status: checkout.status,
+    state: normalizeCheckoutState(checkout.status),
+    checkoutId: checkout.id,
+    paymentId: checkout.payment_ids?.[0] || null,
+    amount: checkout.amount_money?.amount ?? null,
+    cancelReason: checkout.cancel_reason || null,
+  })
+}
 
 export async function POST(request: NextRequest) {
   try {
