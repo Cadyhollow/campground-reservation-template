@@ -45,6 +45,11 @@ export type RefundLedgerRow = {
   surcharge_amount?: number | null
   reference_number?: string | null
   status?: string | null
+  // Needed only by reservationRefundable, to say which tender a leg is and whether it can be
+  // handed back automatically. The per-payment and booking-leg caps ignore them.
+  folio_id?: string | null
+  method?: string | null
+  square_payment_id?: string | null
 }
 
 // The same widened status filter revenue uses. 'voided' stays out: a voided payment never
@@ -152,6 +157,193 @@ export function bookingLegRefundable(
     remainingSurchargeCents: Math.max(0, surchargeCents + priorRefundSurchargeCents),
     priorRefundCount: own.length,
   }
+}
+
+// ── The whole reservation ──────────────────────────────────────────────────────────────────
+// Everything still refundable on a reservation, across BOTH legs, broken down per leg.
+//
+// A reservation holds money in two places: reservations.amount_paid (taken at booking) and
+// folio_payments rows (taken at the desk or on the terminal). The cancel flow only ever knew
+// about the first, so cancelling a booking paid on the folio returned nothing and said so.
+// This is the figure that lets it return the rest.
+//
+// Pure over rows rather than taking a reservationId and querying: the same reason the two
+// functions above are. It keeps this module import-free and `node --test`-able, and it means
+// the route and any UI compute from identical inputs instead of two queries that can disagree.
+//
+// ALL AMOUNTS GROSS. A refund credits the card what the card was charged, surcharge included,
+// so every cap and every allocation here is gross. The NET figures (amount less surcharge) are
+// display-only — what the folio's "Paid" line and the cancel modal's "Paid" show. Do not feed
+// a net figure into an allocation.
+
+export type RefundLegKind = 'booking' | 'folio-payment'
+
+export type RefundLeg = {
+  kind: RefundLegKind
+  // folio-payment legs only.
+  paymentId?: string
+  folioId?: string
+  // 'booking' for the booking leg, otherwise the folio row's method (card/cash/check/venmo…).
+  tender: string
+  // GROSS, and already clamped to every cap that binds it — see the folio budget below.
+  remainingCents: number
+  // Can the software hand this back on its own? Card with a Square payment id. Everything else
+  // — cash, check, Venmo, a card row with no Square id — is recorded but must be physically
+  // returned by the operator, so the UI has to say so before anyone commits.
+  autoRefundable: boolean
+  // Feeds the Square idempotency key so a retried cancel cannot double-refund this leg.
+  priorRefundCount: number
+  // Booking leg only: the context prorateSurcharge needs.
+  originalGrossCents?: number
+  surchargeRemainingCents?: number
+}
+
+export type ReservationRefundable = {
+  // Booking leg first, then folio rows in the order given. Only legs with money left.
+  legs: RefundLeg[]
+  bookingRemainingCents: number
+  folioRemainingCents: number
+  totalRemainingCents: number
+  // The ORIGINAL charge across both legs — what a cancellation percentage applies to. Not the
+  // remaining: a booking already half refunded is still governed by a policy written against
+  // what the guest originally paid.
+  originalGrossTotalCents: number
+  autoRefundableCents: number
+  operatorHandledCents: number
+}
+
+export function reservationRefundable(input: {
+  bookingOriginalGrossCents: number
+  bookingSurchargeCents: number
+  bookingSquarePaymentId?: string | null
+  // Every folio_payments row on every folio of the reservation, any status (filtered here).
+  // Order is significant only for tie-breaking the folio-budget clamp below; callers should
+  // pass them in paid_at order so the result is stable between calls.
+  folioRows: RefundLedgerRow[] | null | undefined
+}): ReservationRefundable {
+  const { bookingOriginalGrossCents, bookingSurchargeCents, bookingSquarePaymentId } = input
+  const scoped = ledgerRows(input.folioRows)
+
+  const booking = bookingLegRefundable(bookingOriginalGrossCents, bookingSurchargeCents, scoped)
+
+  const legs: RefundLeg[] = []
+  if (booking.remainingCents > 0) {
+    legs.push({
+      kind: 'booking',
+      tender: 'booking',
+      remainingCents: booking.remainingCents,
+      autoRefundable: !!bookingSquarePaymentId,
+      priorRefundCount: booking.priorRefundCount,
+      originalGrossCents: bookingOriginalGrossCents,
+      surchargeRemainingCents: booking.remainingSurchargeCents,
+    })
+  }
+
+  // Grouped by folio because the backstop is a per-folio fact. A reservation has one folio in
+  // practice, but nothing in the schema says so, and a cap that silently assumes otherwise is
+  // the kind of assumption that only shows up as an over-refund.
+  const byFolio = new Map<string, RefundLedgerRow[]>()
+  for (const r of scoped) {
+    const key = r.folio_id || ''
+    if (!byFolio.has(key)) byFolio.set(key, [])
+    byFolio.get(key)!.push(r)
+  }
+
+  let folioTakenTotal = 0
+  let folioRemainingTotal = 0
+
+  for (const [, rows] of byFolio) {
+    const taken = rows.filter(r => (r.amount || 0) > 0).reduce((s, r) => s + (r.amount || 0), 0)
+    const returned = rows
+      .filter(r => (r.amount || 0) < 0 && r.reference_number !== BOOKING_REFUND_REF)
+      .reduce((s, r) => s + Math.abs(r.amount || 0), 0)
+    folioTakenTotal += taken
+
+    // ── The clamp that matters ──────────────────────────────────────────────────────────
+    // Per-payment caps CANNOT simply be summed. Each one is `min(its own headroom, the
+    // FOLIO's headroom)`, and that second term is shared: two $100 payments on a folio that
+    // has already returned $150 each compute a $50 cap, and adding them offers $100 of a $50
+    // budget. That is not hypothetical — 55 folios here carry more than one payment, and the
+    // legacy untagged refunds that make the per-payment sum blind are exactly what pushes the
+    // folio backstop into play.
+    //
+    // So the folio budget is spent down as the legs are built. Each leg is capped at what its
+    // own payment allows AND what the folio has left, in the order rows were passed.
+    let budget = Math.max(0, taken - returned)
+
+    for (const row of rows) {
+      if ((row.amount || 0) <= 0) continue
+      if (budget <= 0) break
+      const id = row.id
+      if (!id) continue
+
+      const perPayment = folioPaymentRefundable({ id, amount: row.amount }, rows)
+      const allowed = Math.min(perPayment.remainingOnPayment, budget)
+      if (allowed <= 0) continue
+
+      budget -= allowed
+      folioRemainingTotal += allowed
+
+      legs.push({
+        kind: 'folio-payment',
+        paymentId: id,
+        folioId: row.folio_id || undefined,
+        tender: row.method || 'unknown',
+        remainingCents: allowed,
+        autoRefundable: row.method === 'card' && !!row.square_payment_id,
+        priorRefundCount: perPayment.priorRefundCount,
+      })
+    }
+  }
+
+  const autoRefundableCents = legs.filter(l => l.autoRefundable).reduce((s, l) => s + l.remainingCents, 0)
+  const totalRemainingCents = booking.remainingCents + folioRemainingTotal
+
+  return {
+    legs,
+    bookingRemainingCents: booking.remainingCents,
+    folioRemainingCents: folioRemainingTotal,
+    totalRemainingCents,
+    originalGrossTotalCents: bookingOriginalGrossCents + folioTakenTotal,
+    autoRefundableCents,
+    operatorHandledCents: totalRemainingCents - autoRefundableCents,
+  }
+}
+
+export type RefundAllocation = {
+  leg: RefundLeg
+  amountCents: number
+}
+
+// Spend a refund target across the legs, in the order that returns the most money
+// automatically: the booking leg first (it has no per-row structure to reason about), then
+// folio card rows that Square can credit, then everything a human has to hand back.
+//
+// The order is a deliberate money decision, not a tidiness one. When a policy retains part of
+// the payment, whatever is NOT refunded should be the awkward tender — the cash the operator
+// would otherwise have to count out, the Venmo they would have to send back by hand. Filling
+// the auto-refundable legs first leaves the retained portion sitting on the manual ones.
+//
+// Never exceeds a leg's own remaining, and never exceeds the target in total. If the target is
+// larger than everything available (a policy figure bigger than what is left after earlier
+// refunds), the shortfall is simply not allocated — the caller reports what it could return.
+export function allocateRefund(targetCents: number, legs: RefundLeg[]): RefundAllocation[] {
+  const rank = (l: RefundLeg) => (l.kind === 'booking' ? 0 : l.autoRefundable ? 1 : 2)
+  const ordered = legs
+    .map((leg, i) => ({ leg, i }))
+    .sort((a, b) => rank(a.leg) - rank(b.leg) || a.i - b.i)
+    .map(x => x.leg)
+
+  let left = Math.max(0, targetCents)
+  const out: RefundAllocation[] = []
+  for (const leg of ordered) {
+    if (left <= 0) break
+    const amountCents = Math.min(leg.remainingCents, left)
+    if (amountCents <= 0) continue
+    left -= amountCents
+    out.push({ leg, amountCents })
+  }
+  return out
 }
 
 // Surcharge share of an arbitrary gross refund, prorated on the ORIGINAL charge and capped at

@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { resolveCancellationPolicy, computePolicyRefund } from '@/lib/cancellation-policy'
+import { processReservationRefund, prorateSurcharge } from '@/lib/reservation-refund'
+import { processFolioRefund } from '@/lib/folio-refund'
 import {
-  processReservationRefund, bookingRefundsSoFar, prorateSurcharge,
-} from '@/lib/reservation-refund'
+  reservationRefundable, allocateRefund, REFUNDABLE_STATUSES,
+  type RefundAllocation,
+} from '@/lib/refundable'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -64,61 +67,157 @@ export async function POST(request: NextRequest) {
     const policy = await resolveCancellationPolicy(supabase, reservation.arrival_date)
 
     const surchargeCents = reservation.surcharge_amount || 0
-    const originalGross = (reservation.amount_paid || 0) + surchargeCents
-    const prior = await bookingRefundsSoFar(reservationId)
-    const refundableCents = Math.max(0, originalGross + prior.cents)
+    const bookingOriginalGross = (reservation.amount_paid || 0) + surchargeCents
+
+    // ── What is still refundable, across BOTH legs ──────────────────────────────────────
+    // Money reaches a reservation two ways and this route used to see only one. A booking taken
+    // by staff and paid on the folio has amount_paid = 0, so the cap computed $0, the policy
+    // computed a $0 refund and the cancellation returned nothing while the guest's money sat on
+    // the folio. Ten live future bookings were in that state holding $763 between them.
+    //
+    // Every folio row on the reservation, ordered by paid_at so the aggregate's folio-budget
+    // clamp is stable between calls. `status` is selected, not merely filtered on, because
+    // reservationRefundable re-applies the filter over what it is handed.
+    const { data: folios } = await supabase
+      .from('folios').select('id').eq('reservation_id', reservationId)
+    const folioIds = (folios || []).map((f: any) => f.id)
+
+    let folioRows: any[] = []
+    if (folioIds.length > 0) {
+      const { data } = await supabase
+        .from('folio_payments')
+        .select('id, folio_id, amount, surcharge_amount, reference_number, status, method, square_payment_id')
+        .in('folio_id', folioIds)
+        .in('status', REFUNDABLE_STATUSES)
+        .order('paid_at')
+      folioRows = data || []
+    }
+
+    const refundable = reservationRefundable({
+      bookingOriginalGrossCents: bookingOriginalGross,
+      bookingSurchargeCents: surchargeCents,
+      bookingSquarePaymentId: reservation.square_payment_id,
+      folioRows,
+    })
 
     const today = new Date().toISOString().split('T')[0]
+
+    // ── The policy, applied to the WHOLE charge, once ────────────────────────────────────
+    // originalGrossTotalCents spans both legs, so a 90% rule takes 90% of everything the guest
+    // paid rather than 90% of each leg separately — applying it per-leg would round at each leg
+    // and drift from the figure the operator was shown. Clamped to the aggregate remaining, so
+    // a policy percentage of an original that has since been partly refunded cannot hand back
+    // money already returned.
     const policyRefund = computePolicyRefund({
       policy,
       arrival: reservation.arrival_date,
       today,
-      originalGrossCents: originalGross,
-      refundableCents,
+      originalGrossCents: refundable.originalGrossTotalCents,
+      refundableCents: refundable.totalRemainingCents,
+        // Already handed back against this original: the original less what is still there.
+        // Stops the percentage being re-applied in full on a retry after a partial refund.
+        alreadyRefundedCents: refundable.originalGrossTotalCents - refundable.totalRemainingCents,
       paymentType: reservation.payment_type,
     })
 
     // What to actually refund. The operator may hand back less than the policy allows, or more
     // (a goodwill refund inside the deadline — the modal lets them tick the box and type a
-    // figure). What they may never exceed is what is still refundable on the booking, and that
-    // cap is enforced inside processReservationRefund from the folio rows themselves, not from
-    // anything sent here. An override is recorded in the reason so the folio note says why the
-    // amount is not the policy amount.
+    // figure). What they may never exceed is what is still refundable, and that ceiling is
+    // enforced twice: clamped here against the aggregate, then again inside each writer from
+    // the rows themselves. An override is recorded in the reason.
     const requestedCents = typeof refundAmount === 'number' && Number.isFinite(refundAmount)
       ? Math.max(0, Math.round(refundAmount * 100))
       : policyRefund.refundCents
 
-    const toRefundCents = issueRefund === false ? 0 : Math.min(requestedCents, refundableCents)
+    const toRefundCents = issueRefund === false
+      ? 0
+      : Math.min(requestedCents, refundable.totalRemainingCents)
     const isOverride = toRefundCents > policyRefund.refundCents
+    const refundReason = `Cancellation — ${policy.name}${isOverride ? ' (operator override)' : ''}${reason ? `: ${reason}` : ''}`
 
+    // ── Execute, leg by leg ─────────────────────────────────────────────────────────────
+    // Ordered by allocateRefund: the booking leg, then folio card rows Square can credit, then
+    // the tenders a human has to hand back. Nothing new writes a refund row — processReservation
+    // Refund and processFolioRefund are the same two writers every other refund goes through,
+    // each recomputing its own cap from the rows before it moves anything.
+    const allocations: RefundAllocation[] = toRefundCents > 0
+      ? allocateRefund(toRefundCents, refundable.legs)
+      : []
+
+    const performed: {
+      kind: string; tender: string; amountCents: number; autoRefundable: boolean;
+      paymentId?: string; squareRefundId?: string | null
+    }[] = []
     let refundedCents = 0
-    if (toRefundCents > 0) {
-      const refundReason = `Cancellation — ${policy.name}${isOverride ? ' (operator override)' : ''}${reason ? `: ${reason}` : ''}`
 
-      const result = await processReservationRefund({
-        reservationId,
-        squarePaymentId: reservation.square_payment_id,
-        refundAmountCents: toRefundCents,
-        // Computed here, not sent by the browser: the surcharge share decides how much of the
-        // revenue breakout unwinds, so it is derived from the same original charge the cap is.
-        refundSurchargeCents: prorateSurcharge(
-          toRefundCents, originalGross, surchargeCents, prior.surchargeCents
-        ),
-        reason: refundReason,
-        currentNotes: reservation.notes || '',
-      })
+    for (const { leg, amountCents } of allocations) {
+      if (leg.kind === 'booking') {
+        const result = await processReservationRefund({
+          reservationId,
+          squarePaymentId: reservation.square_payment_id,
+          refundAmountCents: amountCents,
+          // Derived here, not sent by the browser: the surcharge share decides how much of the
+          // revenue breakout unwinds, so it comes from the same original charge the cap does.
+          refundSurchargeCents: prorateSurcharge(
+            amountCents,
+            leg.originalGrossCents ?? bookingOriginalGross,
+            surchargeCents,
+            // bookingLegRefundable reports the surcharge REMAINING; prorateSurcharge expects the
+            // already-refunded figure as a negative, so it is reconstructed here.
+            (leg.surchargeRemainingCents ?? surchargeCents) - surchargeCents
+          ),
+          reason: refundReason,
+          currentNotes: reservation.notes || '',
+        })
 
-      // Money did not move, so nothing else moves either. The reservation stays active and
-      // fully refundable, and the operator sees why and can retry.
-      if (!result.ok) {
-        return NextResponse.json({
-          error: result.error,
-          cancelled: false,
-          refundedAmount: 0,
-        }, { status: result.status })
+        // ── Partial failure: stop, and do NOT cancel ──────────────────────────────────
+        // Whatever already succeeded stays recorded as dated negative rows, so the money is not
+        // lost and the folio tells the truth. The reservation stays active, which is the
+        // recoverable state: a retry recomputes every cap from those rows, sees the reduced
+        // headroom, and cannot hand the same money back twice. Cancelling here instead would
+        // leave a cancelled booking with a half-returned payment and no way back through the UI.
+        if (!result.ok) {
+          return NextResponse.json({
+            error: result.error,
+            cancelled: false,
+            refundedAmount: refundedCents / 100,
+            performed,
+            partial: performed.length > 0,
+          }, { status: result.status })
+        }
+        refundedCents += result.refundedCents
+        performed.push({ kind: 'booking', tender: 'booking', amountCents, autoRefundable: leg.autoRefundable })
+      } else {
+        const result = await processFolioRefund({
+          paymentId: leg.paymentId!,
+          folioId: leg.folioId!,
+          refundAmountCents: amountCents,
+          reason: refundReason,
+        })
+
+        if (!result.ok) {
+          return NextResponse.json({
+            error: result.error,
+            cancelled: false,
+            refundedAmount: refundedCents / 100,
+            performed,
+            partial: performed.length > 0,
+          }, { status: result.status })
+        }
+        refundedCents += result.refundedCents
+        performed.push({
+          kind: 'folio-payment', tender: leg.tender, amountCents,
+          autoRefundable: leg.autoRefundable, paymentId: leg.paymentId,
+          squareRefundId: result.squareRefundId,
+        })
       }
-      refundedCents = result.refundedCents
     }
+
+    // What the operator still has to physically hand over. Recorded on the folio either way —
+    // the money is owed — but no processor moved it, so the response says so and the modal
+    // told them before they committed.
+    const operatorHandled = performed.filter(p => !p.autoRefundable)
+    const operatorHandledCents = operatorHandled.reduce((s, p) => s + p.amountCents, 0)
 
     // ── Only now, the cancellation ──────────────────────────────────────────────────────
     // Notes are re-read rather than reused: the refund above appended its own audit line, and
@@ -130,7 +229,13 @@ export async function POST(request: NextRequest) {
       .single()
 
     const stamp = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    const cancelNote = `[Cancelled ${stamp}] ${policy.name} · ${policyRefund.explanation}${refundedCents > 0 ? ` Refunded $${(refundedCents / 100).toFixed(2)}${isOverride ? ' (override)' : ''}.` : ' No refund issued.'}${reason ? ` — ${reason}` : ''}`
+    // The manual portion is named in the note as well as the response. It is the part nobody
+    // can verify from the data later — the folio shows a refund row either way — so the record
+    // has to say which tenders a human still had to hand over.
+    const manualNote = operatorHandledCents > 0
+      ? ` Return by hand: ${operatorHandled.map(p => `$${(p.amountCents / 100).toFixed(2)} ${p.tender}`).join(', ')}.`
+      : ''
+    const cancelNote = `[Cancelled ${stamp}] ${policy.name} · ${policyRefund.explanation}${refundedCents > 0 ? ` Refunded $${(refundedCents / 100).toFixed(2)}${isOverride ? ' (override)' : ''}.` : ' No refund issued.'}${manualNote}${reason ? ` — ${reason}` : ''}`
     const baseNotes = fresh?.notes ?? reservation.notes ?? ''
     const updatedNotes = baseNotes ? `${baseNotes}\n${cancelNote}` : cancelNote
 
@@ -165,6 +270,11 @@ export async function POST(request: NextRequest) {
       },
       policyRefundAmount: policyRefund.refundCents / 100,
       wasOverride: isOverride,
+      // Per-leg outcomes, so the UI can tell the operator what Square credited and what they
+      // still have to hand over rather than implying every dollar went back automatically.
+      performed,
+      operatorHandledAmount: operatorHandledCents / 100,
+      autoRefundedAmount: (refundedCents - operatorHandledCents) / 100,
     })
 
   } catch (error: any) {

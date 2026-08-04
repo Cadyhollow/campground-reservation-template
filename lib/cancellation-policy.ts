@@ -155,10 +155,24 @@ export type PolicyRefundInput = {
   // What the card was charged on the booking leg: amount_paid + surcharge_amount. The policy
   // percentage applies to this, not to what happens to be left after an earlier refund.
   originalGrossCents: number
-  // That original less the booking-leg refunds already recorded. The ceiling on anything this
-  // flow can hand back, and the same figure /api/reservation-refund recomputes server-side.
+  // That original less the refunds already recorded. The ceiling on anything this flow can hand
+  // back, and the same figure the refund routes recompute server-side.
   refundableCents: number
   paymentType: string | null | undefined
+  // What has ALREADY been handed back against this original, as positive cents.
+  //
+  // The percentage is a claim about the total the guest ends up with, not about each refund
+  // event, so it has to be spent down. Without this, re-applying the percentage to the full
+  // original on a second pass hands back money the policy already accounted for: a $200 booking
+  // under a 90% rule refunded $100 and then cancelled would compute min(90% of $200, $100
+  // remaining) = $100, returning $200 in total on a policy that allowed $180 — the retained fee
+  // silently lost. That path is reachable whenever a partial refund precedes a cancellation, and
+  // C2's multi-leg refund makes it routine: any leg that fails part-way leaves exactly this
+  // state, and the operator's retry would over-refund.
+  //
+  // Optional and defaulting to 0, so callers that genuinely mean "first refund on this charge"
+  // are unaffected.
+  alreadyRefundedCents?: number
 }
 
 export type PolicyRefundResult = {
@@ -202,14 +216,28 @@ export function computePolicyRefund(input: PolicyRefundInput): PolicyRefundResul
     }
   }
 
-  // Prorated on the ORIGINAL charge, then clamped to what is still refundable — the same
-  // basis the refund panel uses, so a booking already partially refunded cannot be talked
-  // into handing back 90% of a figure that is no longer there.
+  // Prorated on the ORIGINAL charge — the percentage is owed against what the guest paid, not
+  // against whatever is left after an earlier refund — then reduced by what has already gone
+  // back, and finally clamped to what is actually still there.
+  //
+  // Two different limits, and both are needed. `stillOwed` stops the policy handing back more
+  // than the percentage across all refunds put together; `refundableCents` stops it handing back
+  // money that is no longer on the payment at all. Either alone lets money through.
   const byPercent = Math.round(originalGrossCents * policy.refund_percent / 100)
-  const refundCents = Math.max(0, Math.min(byPercent, refundableCents))
-  const clamped = refundCents < byPercent
+  const alreadyRefunded = Math.max(0, input.alreadyRefundedCents || 0)
+  const stillOwed = Math.max(0, byPercent - alreadyRefunded)
+  const refundCents = Math.max(0, Math.min(stillOwed, refundableCents))
+
+  const heldByPolicy = alreadyRefunded > 0 && stillOwed < byPercent
+  const heldByRemaining = refundCents < stillOwed
+  const detail = heldByPolicy
+    ? `, less the ${money(alreadyRefunded)} already refunded${heldByRemaining ? ` and held to the ${money(refundCents)} still there` : ''}`
+    : heldByRemaining
+      ? `, held to the ${money(refundCents)} still refundable after earlier refunds`
+      : ''
+
   return {
     refundCents, daysUntil, withinDeadline, basis: 'policy-percent',
-    explanation: `Cancelling ${arrivalPhrase(daysUntil)}, outside the ${policy.cancellation_deadline_days}-day deadline — ${policy.name} refunds ${policy.refund_percent}% of ${money(originalGrossCents)}${clamped ? `, held to the ${money(refundCents)} still refundable after earlier refunds` : ''}.`,
+    explanation: `Cancelling ${arrivalPhrase(daysUntil)}, outside the ${policy.cancellation_deadline_days}-day deadline — ${policy.name} refunds ${policy.refund_percent}% of ${money(originalGrossCents)}${detail}.`,
   }
 }

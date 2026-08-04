@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import {
   bookingLegRefundable, prorateSurcharge, REFUNDABLE_STATUSES,
+  reservationRefundable, allocateRefund, type RefundLedgerRow,
 } from '@/lib/refundable'
 import {
   computePolicyRefund, normalizePolicy, arrivalPhrase,
@@ -132,6 +133,9 @@ function ReservationsPageInner() {
   // offering the original amount a second time.
   const [selectedBookingRefunds, setSelectedBookingRefunds] = useState(0)
   const [selectedBookingRefundSurcharge, setSelectedBookingRefundSurcharge] = useState(0)
+  // The raw folio rows, kept so the cancel modal can compute the same two-leg breakdown the
+  // route computes. Display only — the route re-reads these itself and re-enforces every cap.
+  const [selectedFolioRows, setSelectedFolioRows] = useState<RefundLedgerRow[]>([])
   // Cancel & refund. cancelTarget doubles as "is the modal open" — cancelling is a money
   // action now, so it is aimed at one specific reservation captured when the button was
   // pressed rather than at whatever happens to be selected when the operator confirms.
@@ -147,10 +151,10 @@ function ReservationsPageInner() {
   useEffect(() => {
     let cancelled = false
     async function loadFolioTotals() {
-      if (!selected?.id) { setSelectedFolioPaid(0); setSelectedFolioCharges(0); setSelectedFolioSurcharge(0); setSelectedBookingRefunds(0); setSelectedBookingRefundSurcharge(0); return }
+      if (!selected?.id) { setSelectedFolioPaid(0); setSelectedFolioCharges(0); setSelectedFolioSurcharge(0); setSelectedBookingRefunds(0); setSelectedBookingRefundSurcharge(0); setSelectedFolioRows([]); return }
       const { data: fols } = await supabase.from('folios').select('id').eq('reservation_id', selected.id)
       const ids = (fols || []).map((f: any) => f.id)
-      if (ids.length === 0) { if (!cancelled) { setSelectedFolioPaid(0); setSelectedFolioCharges(0); setSelectedFolioSurcharge(0); setSelectedBookingRefunds(0); setSelectedBookingRefundSurcharge(0) } return }
+      if (ids.length === 0) { if (!cancelled) { setSelectedFolioPaid(0); setSelectedFolioCharges(0); setSelectedFolioSurcharge(0); setSelectedBookingRefunds(0); setSelectedBookingRefundSurcharge(0); setSelectedFolioRows([]) } return }
       const [{ data: pmts }, { data: items }] = await Promise.all([
         // Refund rows count here, not just 'completed' ones. Booking refunds are now recorded
         // as negative folio rows, so excluding them would leave every "paid" figure on this
@@ -158,10 +162,14 @@ function ReservationsPageInner() {
         supabase.from('folio_payments')
           // `status` is selected, not just filtered on: bookingLegRefundable re-applies the
           // filter over the rows it is handed, so a row arriving without the column would be
-          // dropped and the booking's refund history would read as empty.
-          .select('amount, surcharge_amount, reference_number, status')
+          // dropped and the booking's refund history would read as empty. id/folio_id/method/
+          // square_payment_id are here for reservationRefundable, which needs to know which
+          // tender each leg is and whether Square can credit it. Ordered by paid_at so the
+          // aggregate's folio-budget clamp is stable between renders.
+          .select('id, folio_id, amount, surcharge_amount, reference_number, status, method, square_payment_id')
           .in('status', REFUNDABLE_STATUSES)
-          .in('folio_id', ids),
+          .in('folio_id', ids)
+          .order('paid_at'),
         supabase.from('folio_line_items').select('line_total').in('folio_id', ids),
       ])
       const paid = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
@@ -175,6 +183,7 @@ function ReservationsPageInner() {
         bookingLegRefundable(0, 0, pmts || [])
       if (!cancelled) {
         setSelectedFolioPaid(paid); setSelectedFolioCharges(charges); setSelectedFolioSurcharge(surcharge)
+        setSelectedFolioRows((pmts || []) as RefundLedgerRow[])
         setSelectedBookingRefunds(bookingRefunds); setSelectedBookingRefundSurcharge(bookingRefundSurcharge)
       }
     }
@@ -219,17 +228,22 @@ function ReservationsPageInner() {
   //
   // NET of the card surcharge, deliberately: this is the same expression the detail pane above
   // uses and the same basis the folio page's "Paid" line uses, so all three surfaces agree.
-  // The gross figure (grossPaidTotal) is the one a REFUND is measured in — the card is credited
-  // what it was charged, surcharge included — but that is C2's arithmetic. Mixing the two here
-  // would trade one disagreement for another.
+  // The gross figure is the one a REFUND is measured in — the card is credited what it was
+  // charged, surcharge included — and that is what cancelRefundable below works in. Mixing
+  // the two would trade one disagreement for another, so they stay separate and named.
   const netPaidTotal = (selected?.amount_paid || 0) + selectedFolioPaid
 
-  // Money taken ON THE FOLIO, which the cancel flow cannot return. Booking-leg refunds are
-  // themselves negative folio rows, so they are added back out: a booking refunded through the
-  // cancel flow must not read as folio money the operator still has to chase. Without that
-  // correction a reservation with $50 on the booking leg, $30 on the folio and a $45 booking
-  // refund nets to −$15 and the notice would wrongly stay hidden.
-  const folioHeldNet = selectedFolioPaid - (selectedBookingRefunds - selectedBookingRefundSurcharge)
+  // ── What a cancellation can actually return, across both legs ───────────────────────────
+  // The same function the cancel route runs, over the same rows, so the breakdown the operator
+  // approves is the breakdown that executes. GROSS throughout — a refund credits the card what
+  // the card was charged. Display only: the route re-reads the rows and re-enforces every cap,
+  // so nothing here can talk it into refunding more than remains.
+  const cancelRefundable = reservationRefundable({
+    bookingOriginalGrossCents: originalGrossHere,
+    bookingSurchargeCents: resSurchargeAmt,
+    bookingSquarePaymentId: selected?.square_payment_id,
+    folioRows: selectedFolioRows,
+  })
 
   // Surcharge share of an arbitrary gross refund, so a typed amount prorates the same way
   // the percentage presets do rather than only the round numbers being compliant.
@@ -527,12 +541,19 @@ function ReservationsPageInner() {
       // applies, so a rule with a NULL left in a column resolves to the default here too
       // instead of quietly computing a refund from NaN.
       const policy = normalizePolicy(data?.policy)
+      // Across BOTH legs, matching the route exactly. Feeding the booking leg alone is what
+      // made a folio-paid booking compute a $0 refund and announce "nothing left to refund"
+      // over money sitting right there. The percentage applies to the whole original charge
+      // once — per-leg would round twice and drift from what the route computes.
       const prefill = computePolicyRefund({
         policy,
         arrival: res.arrival_date,
         today: new Date().toISOString().split('T')[0],
-        originalGrossCents: originalGrossHere,
-        refundableCents: grossPaidHere,
+        originalGrossCents: cancelRefundable.originalGrossTotalCents,
+        refundableCents: cancelRefundable.totalRemainingCents,
+        // Already handed back against this original: the original less what is still there.
+        // Stops the percentage being re-applied in full on a retry after a partial refund.
+        alreadyRefundedCents: cancelRefundable.originalGrossTotalCents - cancelRefundable.totalRemainingCents,
         paymentType: res.payment_type,
       })
       setCancelPolicy(policy)
@@ -568,17 +589,29 @@ function ReservationsPageInner() {
     const data = await res.json()
 
     if (!data.success) {
-      // Refund first, cancel second: a failure here means no money moved and the reservation
-      // is untouched, so the operator can fix the cause and press the button again.
-      setCancelError(data.error || 'Cancellation failed. The reservation has not been changed.')
+      // Refund first, cancel second. A failure part-way through a multi-leg refund is the case
+      // worth spelling out: whatever already went back IS recorded on the folio, the booking is
+      // still active, and pressing the button again recomputes every cap from those rows — so
+      // the retry finishes the job rather than repeating it.
+      setCancelError(
+        data.partial
+          ? `${data.error} $${(data.refundedAmount || 0).toFixed(2)} was already refunded and is recorded on the folio; the reservation has NOT been cancelled. Press Cancel again to finish — the refunds already made will not be repeated.`
+          : (data.error || 'Cancellation failed. The reservation has not been changed.')
+      )
       setCancelProcessing(false)
       return
     }
 
+    // The manual portion leads, because it is the only part that needs a human to do something
+    // next. A toast that just says "$120 refunded" over Venmo money would be read as done.
+    const manual = data.operatorHandledAmount || 0
     toast.success(
-      data.refundedAmount > 0
-        ? `Reservation cancelled · $${data.refundedAmount.toFixed(2)} refunded.`
-        : 'Reservation cancelled.'
+      manual > 0
+        ? `Reservation cancelled · $${(data.autoRefundedAmount || 0).toFixed(2)} back to the card · RETURN $${manual.toFixed(2)} BY HAND`
+        : data.refundedAmount > 0
+          ? `Reservation cancelled · $${data.refundedAmount.toFixed(2)} refunded.`
+          : 'Reservation cancelled.',
+      manual > 0 ? { duration: 12000 } : undefined
     )
     setCancelProcessing(false)
     setCancelTarget(null)
@@ -1247,36 +1280,13 @@ function ReservationsPageInner() {
                 Paid: <strong>${(netPaidTotal / 100).toFixed(2)}</strong>
                 {resSurchargeAmt > 0 && <span className="text-gray-500"> (plus ${(resSurchargeAmt / 100).toFixed(2)} card surcharge)</span>}
               </div>
-              {grossPaidHere !== originalGrossHere && originalGrossHere > 0 && (
+              {cancelRefundable.totalRemainingCents !== cancelRefundable.originalGrossTotalCents
+                && cancelRefundable.originalGrossTotalCents > 0 && (
                 <div className="text-gray-600">
-                  Still refundable on the booking: <strong>${(grossPaidHere / 100).toFixed(2)}</strong> — the rest has already been refunded.
+                  Still refundable: <strong>${(cancelRefundable.totalRemainingCents / 100).toFixed(2)}</strong> — the rest has already been refunded.
                 </div>
               )}
             </div>
-
-            {/* Money on the folio, which this flow does not return. Naming it is the whole point
-                of C1: the operator was previously shown $0.00 and a "no refund" button over a
-                booking holding real money, with nothing to suggest the money existed or where to
-                find it. The cancellation itself is not blocked — an operator may well want to
-                free the site now and settle the money separately — but it can no longer happen
-                in ignorance. Returning it from here is C2. */}
-            {folioHeldNet > 0 && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-900">
-                <strong>${(folioHeldNet / 100).toFixed(2)} was paid on this reservation&rsquo;s folio.</strong>{' '}
-                Cancelling here will not return it. Use the Refund buttons on the folio to issue
-                that refund — before or after cancelling, either order works.
-                {cancelTarget.id && (
-                  <a
-                    href={`/admin/folio/${cancelTarget.id}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block mt-1 font-medium underline"
-                  >
-                    Open this reservation&rsquo;s folio →
-                  </a>
-                )}
-              </div>
-            )}
 
             {cancelLoadingPolicy && <p className="text-sm text-gray-500">Resolving the cancellation policy…</p>}
 
@@ -1300,7 +1310,7 @@ function ReservationsPageInner() {
                   <div className="text-xs text-gray-500">{cancelPrefill.explanation}</div>
                 </div>
 
-                {grossPaidHere > 0 && (
+                {cancelRefundable.totalRemainingCents > 0 && (
                   <div className="border border-orange-200 bg-orange-50 rounded-lg p-3 space-y-2">
                     <label className="flex items-start gap-2 text-sm text-orange-900 cursor-pointer">
                       <input
@@ -1316,8 +1326,8 @@ function ReservationsPageInner() {
                           // deadline — a defensible starting point the operator can edit.
                           if (on && (!cancelAmount || parseFloat(cancelAmount) === 0)) {
                             const goodwill = Math.min(
-                              Math.round(originalGrossHere * cancelPolicy.refund_percent / 100),
-                              grossPaidHere
+                              Math.round(cancelRefundable.originalGrossTotalCents * cancelPolicy.refund_percent / 100),
+                              cancelRefundable.totalRemainingCents
                             )
                             setCancelAmount((goodwill / 100).toFixed(2))
                           }
@@ -1327,7 +1337,7 @@ function ReservationsPageInner() {
                         Refund the guest
                         {cancelPrefill.refundCents === 0 && (
                           <span className="block text-xs text-orange-700">
-                            Policy retains the full ${(grossPaidHere / 100).toFixed(2)} — no refund. Tick to override.
+                            Policy retains the full ${(cancelRefundable.totalRemainingCents / 100).toFixed(2)} — no refund. Tick to override.
                           </span>
                         )}
                       </span>
@@ -1344,20 +1354,61 @@ function ReservationsPageInner() {
                             onChange={e => setCancelAmount(e.target.value)}
                           />
                         </div>
-                        {Math.round(parseFloat(cancelAmount || '0') * 100) > grossPaidHere && (
+                        {Math.round(parseFloat(cancelAmount || '0') * 100) > cancelRefundable.totalRemainingCents && (
                           <p className="text-xs text-red-600">
-                            More than the ${(grossPaidHere / 100).toFixed(2)} still refundable — the server will cap it.
+                            More than the ${(cancelRefundable.totalRemainingCents / 100).toFixed(2)} still refundable — the server will cap it.
                           </p>
                         )}
                         {Math.round(parseFloat(cancelAmount || '0') * 100) > cancelPrefill.refundCents
-                          && Math.round(parseFloat(cancelAmount || '0') * 100) <= grossPaidHere && (
+                          && Math.round(parseFloat(cancelAmount || '0') * 100) <= cancelRefundable.totalRemainingCents && (
                           <p className="text-xs text-amber-700">
                             Above the ${(cancelPrefill.refundCents / 100).toFixed(2)} this policy allows — recorded as an operator override.
                           </p>
                         )}
-                        {cancelTarget.square_payment_id
-                          ? <p className="text-xs text-green-700">✓ Will refund to card via Square</p>
-                          : <p className="text-xs text-gray-500">Cash/check — return funds manually; the refund is still recorded on the folio.</p>}
+
+                        {/* ── Where this money actually goes ──────────────────────────────
+                            The operator is about to commit to handing money back across
+                            possibly several tenders, and only the card ones settle
+                            themselves. Cash and Venmo get a folio row saying the money is
+                            owed and then sit there until a human counts it out — so the
+                            split has to be on screen BEFORE the button, not discovered
+                            afterwards. Computed by the same allocateRefund the route runs,
+                            over the same legs, so this preview is the plan that executes. */}
+                        {(() => {
+                          const target = Math.min(
+                            Math.round(parseFloat(cancelAmount || '0') * 100),
+                            cancelRefundable.totalRemainingCents
+                          )
+                          if (!(target > 0)) return null
+                          const plan = allocateRefund(target, cancelRefundable.legs)
+                          const auto = plan.filter(a => a.leg.autoRefundable)
+                          const manual = plan.filter(a => !a.leg.autoRefundable)
+                          const sum = (xs: typeof plan) => xs.reduce((s, a) => s + a.amountCents, 0)
+                          return (
+                            <div className="rounded border border-orange-200 bg-white p-2 space-y-1 text-xs">
+                              {auto.length > 0 && (
+                                <div className="text-green-700">
+                                  ✓ ${(sum(auto) / 100).toFixed(2)} refunded automatically to the card via Square
+                                </div>
+                              )}
+                              {manual.length > 0 && (
+                                <div className="text-amber-800">
+                                  <span className="font-semibold">
+                                    ⚠ ${(sum(manual) / 100).toFixed(2)} must be returned by hand:
+                                  </span>
+                                  <ul className="list-disc ml-4 mt-0.5">
+                                    {manual.map((a, i) => (
+                                      <li key={i}>
+                                        ${(a.amountCents / 100).toFixed(2)} in {a.leg.tender} — recorded on the folio, but no
+                                        processor moves it
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })()}
                       </>
                     )}
 
@@ -1378,7 +1429,7 @@ function ReservationsPageInner() {
             {/* Consequences, spelled out — this is the part a confirm() could never say. */}
             <p className="text-xs text-gray-500">
               Marks the reservation cancelled · frees the site for those dates
-              {cancelIssueRefund && parseFloat(cancelAmount || '0') > 0 && ' · records a dated refund on the folio'}
+              {cancelIssueRefund && parseFloat(cancelAmount || '0') > 0 && ' · records dated refunds on the folio'}
             </p>
 
             {cancelError && <p className="text-sm text-red-600">{cancelError}</p>}
@@ -1400,18 +1451,17 @@ function ReservationsPageInner() {
                 disabled={cancelProcessing || cancelLoadingPolicy || !cancelPolicy}
                 className="flex-1 bg-red-600 text-white rounded-lg py-2 text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
               >
-                {/* "Cancel — no refund" is only honest when nothing is owed. On a booking whose
-                    money sits on the folio it was a false statement of fact printed on the
-                    button that commits the action — the money is there and is still owed, it
-                    just is not returned from here. Neutral wording in that case; the amber
-                    notice above says where the money is. */}
+                {/* "Cancel — no refund" is only honest when nothing is owed. C1 made it neutral
+                    where folio money existed but could not be returned; now it CAN be, so the
+                    remaining case is a reservation with money left that the operator has
+                    declined to refund — where "no refund" is true again. */}
                 {cancelProcessing
                   ? 'Processing…'
                   : cancelIssueRefund && parseFloat(cancelAmount || '0') > 0
                     ? `Cancel & refund $${parseFloat(cancelAmount || '0').toFixed(2)}`
-                    : folioHeldNet > 0
-                      ? 'Cancel reservation'
-                      : 'Cancel — no refund'}
+                    : cancelRefundable.totalRemainingCents > 0
+                      ? 'Cancel — no refund'
+                      : 'Cancel reservation'}
               </button>
             </div>
           </div>
