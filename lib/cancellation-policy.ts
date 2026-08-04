@@ -56,6 +56,22 @@ export const DEFAULT_DEPOSIT_REFUNDABLE = true
 
 const DEFAULT_POLICY_TEXT = 'Please contact us for cancellation information.'
 
+// A catch-all rule — the park's standard policy, applying to every date no date-specific rule
+// covers. cancellation_rules has no "applies always" flag and start_date/end_date are NOT
+// NULL, so a catch-all is expressed as a range wide enough to contain every plausible arrival.
+// Sentinel rather than a schema change: the resolver already picks the latest-starting
+// matching rule, so a range starting in 1900 sorts below every real rule and loses to any of
+// them automatically. Specific beats general with no extra ranking logic.
+//
+// Shared from here so the editor writes exactly the range the list view recognises and the
+// Cady migration inserts — three places that would otherwise drift apart on a typo.
+export const CATCH_ALL_START = '1900-01-01'
+export const CATCH_ALL_END = '2999-12-31'
+
+export function isCatchAllRule(rule: { start_date?: string | null; end_date?: string | null } | null | undefined): boolean {
+  return rule?.start_date === CATCH_ALL_START && rule?.end_date === CATCH_ALL_END
+}
+
 // Coerces a rule row — or a partial/legacy one — into fully numeric terms. A rule saved
 // before a column existed, or with a NULL left in it, resolves to the default rather than to
 // NaN or to "no refund".
