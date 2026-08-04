@@ -28,16 +28,49 @@ export type ResolvedPolicy = {
 }
 
 // The guaranteed floor. A client configures a default rule plus date-range exceptions, but
-// until they do — and Cady today has only three holiday rules and no catch-all — a booking
-// outside every range still has to resolve to something computable. Nulls used to come back
-// here, which is exactly why the refund UI could not read the policy and hardcoded 90%.
-// These match the cancellation_rules column defaults, so an unconfigured park and a park that
-// saved the form without touching the numbers behave identically.
-export const DEFAULT_REFUND_PERCENT = 90
-export const DEFAULT_DEADLINE_DAYS = 7
+// until they do, a booking outside every range still has to resolve to something computable.
+// Nulls used to come back here, which is exactly why the refund UI could not read the policy
+// and hardcoded 90%. These match the cancellation_rules column defaults, so an unconfigured
+// park and a park that saved the form without touching the numbers behave identically.
+//
+// NEUTRAL, not opinionated. These were 90% and 7 days — which is Cady's cancellation fee, not
+// a fact about campgrounds. Baked into the template it meant every future client silently
+// inherited Cady's business rule and kept 10% of a camper's money under a policy nobody at
+// that park had chosen. A default that moves money has to be the one that cannot surprise
+// anyone: refund everything, right up to arrival.
+//
+// The two failure modes are not symmetrical. A park that wanted to retain a fee and has not
+// configured one yet refunds too generously and notices. A park that never chose to retain
+// anything keeps money it has no basis to keep, and nobody notices — least of all the camper.
+//
+// A deadline of 0 means "full refund up to the arrival date, none after": computePolicyRefund
+// tests `daysUntil < deadline`, so only a cancellation AFTER arrival (negative days) lands
+// inside the deadline. Parks that want a real cutoff configure one.
+//
+// Cady keeps 90/7 through an explicit "Standard Policy" catch-all rule covering all dates, so
+// its behaviour is unchanged by this — its policy is now data it owns rather than a constant
+// every other client inherits.
+export const DEFAULT_REFUND_PERCENT = 100
+export const DEFAULT_DEADLINE_DAYS = 0
 export const DEFAULT_DEPOSIT_REFUNDABLE = true
 
 const DEFAULT_POLICY_TEXT = 'Please contact us for cancellation information.'
+
+// A catch-all rule — the park's standard policy, applying to every date no date-specific rule
+// covers. cancellation_rules has no "applies always" flag and start_date/end_date are NOT
+// NULL, so a catch-all is expressed as a range wide enough to contain every plausible arrival.
+// Sentinel rather than a schema change: the resolver already picks the latest-starting
+// matching rule, so a range starting in 1900 sorts below every real rule and loses to any of
+// them automatically. Specific beats general with no extra ranking logic.
+//
+// Shared from here so the editor writes exactly the range the list view recognises and the
+// Cady migration inserts — three places that would otherwise drift apart on a typo.
+export const CATCH_ALL_START = '1900-01-01'
+export const CATCH_ALL_END = '2999-12-31'
+
+export function isCatchAllRule(rule: { start_date?: string | null; end_date?: string | null } | null | undefined): boolean {
+  return rule?.start_date === CATCH_ALL_START && rule?.end_date === CATCH_ALL_END
+}
 
 // Coerces a rule row — or a partial/legacy one — into fully numeric terms. A rule saved
 // before a column existed, or with a NULL left in it, resolves to the default rather than to

@@ -53,8 +53,12 @@ CREATE TABLE IF NOT EXISTS cancellation_rules (
   start_date date NOT NULL,
   end_date date NOT NULL,
   deposit_refundable boolean DEFAULT true,
-  refund_percent integer DEFAULT 90,
-  cancellation_deadline_days integer DEFAULT 7,
+  -- Neutral: full refund up to arrival. These were 90/7, which is Cady's own cancellation
+  -- fee rather than a fact about campgrounds, and a column default that moves money must not
+  -- surprise a park that never configured one. Must agree with DEFAULT_REFUND_PERCENT /
+  -- DEFAULT_DEADLINE_DAYS in lib/cancellation-policy.ts.
+  refund_percent integer DEFAULT 100,
+  cancellation_deadline_days integer DEFAULT 0,
   policy_text text NOT NULL,
   is_active boolean DEFAULT true,
   created_at timestamptz DEFAULT now()
