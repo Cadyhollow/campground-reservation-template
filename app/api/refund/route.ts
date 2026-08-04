@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { BOOKING_REFUND_REF, folioRefundRef } from '@/lib/refund-refs'
+import { folioRefundRef } from '@/lib/refund-refs'
+import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -48,40 +49,25 @@ export async function POST(request: NextRequest) {
     // refunding more than remains.
     const { data: folioRows } = await supabase
       .from('folio_payments')
-      .select('id, amount, reference_number, status')
+      .select('id, amount, surcharge_amount, reference_number, status')
       .eq('folio_id', payment.folio_id)
       // Same widened status filter revenue uses. 'voided' stays out: a voided payment never
-      // happened, so it neither adds headroom nor consumes it.
-      .in('status', ['completed', 'refunded', 'partially_refunded'])
+      // happened, so it neither adds headroom nor consumes it. folioPaymentRefundable applies
+      // this filter too, so the reports drawer — which selects every status — gets the same
+      // number this route does.
+      .in('status', REFUNDABLE_STATUSES)
 
     const rows = folioRows || []
 
-    // Refunds already recorded against THIS payment, as positive cents. Exact for every row
-    // written since refunds started carrying the tag.
+    // The arithmetic itself now lives in lib/refundable.ts, unchanged, because the UI has to
+    // decide whether to SHOW a Refund button using exactly the number this route will enforce
+    // on submit. When they were separate the UI approximated with status === 'completed', which
+    // hid the button on partially-refunded payments that still had headroom. One function, two
+    // callers, pinned together by lib/refundable.test.ts.
+    const { remainingCents: refundableCents, priorOnPayment, priorRefundCount } =
+      folioPaymentRefundable({ id: paymentId, amount: payment.amount }, rows)
+
     const thisPaymentRef = folioRefundRef(paymentId)
-    const priorOnPayment = rows
-      .filter((r: any) => r.reference_number === thisPaymentRef)
-      .reduce((sum: number, r: any) => sum + Math.abs(r.amount || 0), 0)
-    const remainingOnPayment = Math.max(0, payment.amount - priorOnPayment)
-
-    // Folio-wide backstop. Refunds issued before the tag existed carry reference_number ''
-    // and so are invisible to the per-payment sum above — without this, a payment that was
-    // already partially refunded under the old code would still offer its full original
-    // amount. Money returned from a folio cannot exceed money taken on it, whatever each
-    // refund was attributed to.
-    //
-    // Booking-leg refunds are excluded: they hand back reservations.amount_paid, which is
-    // NOT a folio_payments row, so counting them here would eat headroom that belongs to
-    // the folio's own payments and wrongly block a legitimate refund.
-    const folioTaken = rows
-      .filter((r: any) => (r.amount || 0) > 0)
-      .reduce((sum: number, r: any) => sum + r.amount, 0)
-    const folioReturned = rows
-      .filter((r: any) => (r.amount || 0) < 0 && r.reference_number !== BOOKING_REFUND_REF)
-      .reduce((sum: number, r: any) => sum + Math.abs(r.amount), 0)
-    const remainingOnFolio = Math.max(0, folioTaken - folioReturned)
-
-    const refundableCents = Math.min(remainingOnPayment, remainingOnFolio)
 
     if (refundAmountCents > refundableCents) {
       return NextResponse.json({
@@ -116,7 +102,13 @@ export async function POST(request: NextRequest) {
           'Square-Version': '2024-01-18',
         },
         body: JSON.stringify({
-          idempotency_key: `refund-${paymentId}-${Date.now()}`,
+          // Derived from stable inputs, never from the clock. A double-submit — an impatient
+          // second click, a retried request, a flaky connection — reaches Square with the same
+          // key and gets back the refund that already happened instead of issuing a second
+          // one. Date.now() made every attempt look new, so the only thing standing between a
+          // double-click and a double refund was how fast the button disabled itself. Same
+          // construction the booking leg has used since Part 2 (lib/reservation-refund.ts).
+          idempotency_key: `refund-${paymentId}-${refundAmountCents}-${priorRefundCount}`,
           payment_id: payment.square_payment_id,
           amount_money: {
             amount: refundAmountCents,

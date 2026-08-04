@@ -3,11 +3,14 @@
 import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { BOOKING_REFUND_REF } from '@/lib/refund-refs'
+import {
+  bookingLegRefundable, prorateSurcharge, REFUNDABLE_STATUSES,
+} from '@/lib/refundable'
 import {
   computePolicyRefund, normalizePolicy, arrivalPhrase,
   type ResolvedPolicy, type PolicyRefundResult,
 } from '@/lib/cancellation-policy'
+import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
 import WaiverActions from './WaiverActions'
 import toast, { Toaster } from 'react-hot-toast'
 
@@ -108,11 +111,13 @@ function ReservationsPageInner() {
   const [pricingRules, setPricingRules] = useState<any[]>([])
   const [overrideTotal, setOverrideTotal] = useState(false)
   const [overrideTotalValue, setOverrideTotalValue] = useState('')
-  const [showResRefund, setShowResRefund] = useState(false)
-  const [resRefundAmount, setResRefundAmount] = useState('')
-  const [resRefundReason, setResRefundReason] = useState('')
-  const [processingResRefund, setProcessingResRefund] = useState(false)
-  const [resRefundError, setResRefundError] = useState('')
+  // The inline refund panel became the shared modal. Its five pieces of state collapse to a
+  // target plus the policy-derived seed the modal opens with.
+  const [refundTarget, setRefundTarget] = useState<RefundTarget | null>(null)
+  const [refundSeed, setRefundSeed] = useState<{ cents: number; policyLabel: string | null; hint: string | null }>(
+    { cents: 0, policyLabel: null, hint: null }
+  )
+  const [loadingRefundPolicy, setLoadingRefundPolicy] = useState(false)
   // Folio totals for the selected reservation (money/charges that live on its folio,
   // not in reservations.amount_paid). Lets the list show true paid status.
   const [selectedFolioPaid, setSelectedFolioPaid] = useState(0)
@@ -151,8 +156,11 @@ function ReservationsPageInner() {
         // as negative folio rows, so excluding them would leave every "paid" figure on this
         // screen reading as though nothing had been given back.
         supabase.from('folio_payments')
-          .select('amount, surcharge_amount, reference_number')
-          .in('status', ['completed', 'refunded', 'partially_refunded'])
+          // `status` is selected, not just filtered on: bookingLegRefundable re-applies the
+          // filter over the rows it is handed, so a row arriving without the column would be
+          // dropped and the booking's refund history would read as empty.
+          .select('amount, surcharge_amount, reference_number, status')
+          .in('status', REFUNDABLE_STATUSES)
           .in('folio_id', ids),
         supabase.from('folio_line_items').select('line_total').in('folio_id', ids),
       ])
@@ -161,10 +169,10 @@ function ReservationsPageInner() {
       // Same rows already fetched above — no extra query, just the sum `paid` throws away.
       const surcharge = (pmts || []).reduce((sum: number, p: any) => sum + (p.surcharge_amount || 0), 0)
       // Refunds of the BOOKING leg specifically, as negative cents. Kept apart from folio-side
-      // refunds because only these reduce what this panel is still allowed to refund.
-      const bookingRefundRows = (pmts || []).filter((p: any) => p.reference_number === BOOKING_REFUND_REF)
-      const bookingRefunds = bookingRefundRows.reduce((sum: number, p: any) => sum + (p.amount || 0), 0)
-      const bookingRefundSurcharge = bookingRefundRows.reduce((sum: number, p: any) => sum + (p.surcharge_amount || 0), 0)
+      // refunds because only these reduce what this panel is still allowed to refund. Summed
+      // through the shared function so the ceiling shown here is the one the route enforces.
+      const { priorRefundCents: bookingRefunds, priorRefundSurchargeCents: bookingRefundSurcharge } =
+        bookingLegRefundable(0, 0, pmts || [])
       if (!cancelled) {
         setSelectedFolioPaid(paid); setSelectedFolioCharges(charges); setSelectedFolioSurcharge(surcharge)
         setSelectedBookingRefunds(bookingRefunds); setSelectedBookingRefundSurcharge(bookingRefundSurcharge)
@@ -178,10 +186,7 @@ function ReservationsPageInner() {
   // booking's amount still in the box — so a figure computed for one guest sat under a
   // Refund button now pointing at another. Reset it whenever the selection changes.
   useEffect(() => {
-    setShowResRefund(false)
-    setResRefundAmount('')
-    setResRefundReason('')
-    setResRefundError('')
+    setRefundTarget(null)
   }, [selected?.id])
 
   // ── Refund basis: GROSS ─────────────────────────────────────────────────────
@@ -212,10 +217,8 @@ function ReservationsPageInner() {
   // payment is a fixed ratio, and dividing by the shrinking remainder would inflate the
   // surcharge portion of each successive partial refund. Capped at the surcharge not yet
   // returned (the recorded refund surcharges are negative, so this subtracts).
-  const remainingSurcharge = Math.max(0, resSurchargeAmt + selectedBookingRefundSurcharge)
   function surchargePortionFor(grossCents: number) {
-    if (originalGrossHere <= 0 || resSurchargeAmt <= 0) return 0
-    return Math.min(remainingSurcharge, Math.round(grossCents * resSurchargeAmt / originalGrossHere))
+    return prorateSurcharge(grossCents, originalGrossHere, resSurchargeAmt, selectedBookingRefundSurcharge)
   }
 
   useEffect(() => {
@@ -418,39 +421,64 @@ function ReservationsPageInner() {
     if (data) { setSelected(data); fetchAddons(data.id) }
   }
 
-  async function handleResRefund() {
-    if (!selected || !resRefundAmount) return
-    setProcessingResRefund(true)
-    setResRefundError('')
-
-    const res = await fetch('/api/reservation-refund', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        reservationId: selected.id,
-        squarePaymentId: selected.square_payment_id,
-        refundAmount: parseFloat(resRefundAmount),
-        reason: resRefundReason || 'Refund',
-        refundSurchargeAmount: surchargePortionFor(Math.round(parseFloat(resRefundAmount) * 100)) / 100,
-        // The route recomputes what is still refundable from the reservation and the refunds
-        // already recorded, so nothing here is trusted as a cap. amount_paid and
-        // surcharge_amount are no longer sent because the route no longer mutates them.
-        currentNotes: selected.notes || '',
-      }),
-    })
-    const data = await res.json()
-
-    if (!data.success) {
-      setResRefundError(data.error || 'Refund failed. Please try again.')
-      setProcessingResRefund(false)
-      return
+  // ── Booking-leg refund, outside a cancellation ────────────────────────────────────────
+  // Opens the shared modal rather than the inline panel that used to live in the detail pane.
+  // The submit itself is the modal's — same /api/reservation-refund call, same server-side cap.
+  //
+  // The suggested amount now comes from the resolved cancellation policy instead of a hardcoded
+  // 90%. That 90 WAS Cady's policy, but writing it into the UI meant the software applied a
+  // rule it could not read: a holiday booking under a 30-day/90% rule and an ordinary one under
+  // the standard rule were offered the same figure, and any other park inherited Cady's fee.
+  // computePolicyRefund reads the rule that actually governs this arrival date.
+  async function openBookingRefund(res: Reservation) {
+    setLoadingRefundPolicy(true)
+    let seed = { cents: grossPaidHere, policyLabel: null as string | null, hint: null as string | null }
+    try {
+      const r = await fetch(`/api/cancellation-policy?arrival=${res.arrival_date}`)
+      const data = await r.json()
+      // normalizePolicy rather than the response as-is — the same coercion the server applies,
+      // so a partial or legacy rule resolves to the defaults instead of to NaN.
+      const policy = normalizePolicy(data?.policy)
+      const prefill = computePolicyRefund({
+        policy,
+        arrival: res.arrival_date,
+        today: new Date().toISOString().split('T')[0],
+        originalGrossCents: originalGrossHere,
+        refundableCents: grossPaidHere,
+        paymentType: res.payment_type,
+      })
+      seed = {
+        // Inside the deadline the policy owes nothing. This is not a cancellation, though —
+        // an operator refunding here has already decided to — so the box opens at what the
+        // policy WOULD give outside the deadline rather than at $0.00 under a Refund button.
+        cents: prefill.refundCents > 0
+          ? prefill.refundCents
+          : Math.min(Math.round(originalGrossHere * policy.refund_percent / 100), grossPaidHere),
+        policyLabel: `${policy.name} · ${policy.refund_percent}%`,
+        hint: prefill.explanation,
+      }
+    } catch {
+      // No policy, no suggestion — the operator types the figure. Better than seeding from a
+      // rule we failed to read.
+      seed = { cents: grossPaidHere, policyLabel: null, hint: null }
     }
+    setRefundSeed(seed)
+    setRefundTarget({
+      kind: 'booking-leg',
+      reservationId: res.id,
+      squarePaymentId: res.square_payment_id,
+      originalCents: originalGrossHere,
+      remainingCents: grossPaidHere,
+      surchargeForCents: surchargePortionFor,
+      currentNotes: res.notes || '',
+      folioPaidCents: grossPaidFolio,
+    })
+    setLoadingRefundPolicy(false)
+  }
 
+  async function afterBookingRefund() {
+    if (!selected) return
     toast.success('Refund recorded successfully!')
-    setProcessingResRefund(false)
-    setShowResRefund(false)
-    setResRefundAmount('')
-    setResRefundReason('')
     await fetchReservations()
     const { data: updated } = await supabase.from('reservations').select('*, sites(site_number, site_type), square_payment_id').eq('id', selected.id).single()
     if (updated) { setSelected(updated); fetchAddons(updated.id) }
@@ -953,63 +981,25 @@ function ReservationsPageInner() {
                   </div>
                   </>
                 )}
-                {grossPaidHere > 0 && selected.status !== 'cancelled' && (
+                {/* The cancelled-reservation guard is gone. It was hiding the ONLY refund
+                    path for a booking cancelled with money still on it — cancel first and the
+                    guest's payment became unreachable, which is the state Part 2's
+                    cancel-and-refund flow was built to avoid creating going forward but could
+                    not undo for bookings already in it. What remains is the honest test: is
+                    there anything left to refund? */}
+                {grossPaidHere > 0 && (
                   <div className="pt-2">
-                    {!showResRefund ? (
-                      <button
-                        onClick={() => { setResRefundAmount(((grossPaidHere * 0.9) / 100).toFixed(2)); setShowResRefund(true); setResRefundError('') }}
-                        className="w-full bg-orange-50 text-orange-700 border border-orange-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-100"
-                      >
-                        Issue Refund
-                      </button>
-                    ) : (
-                      <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-semibold text-orange-800">Issue Refund</span>
-                          <span className="text-xs text-gray-500">Paid: ${(grossPaidTotal / 100).toFixed(2)}</span>
-                        </div>
-                        {grossPaidFolio > 0 && (
-                          <p className="text-xs text-orange-700">
-                            ${(grossPaidHere / 100).toFixed(2)} is still refundable here against the booking
-                            charge. The ${(grossPaidFolio / 100).toFixed(2)} taken on the folio is refunded from the
-                            folio page.
-                          </p>
-                        )}
-                        {resSurchargeAmt > 0 && (
-                          <p className="text-xs text-gray-500">
-                            Amounts include the ${(resSurchargeAmt / 100).toFixed(2)} card surcharge, so a refund
-                            returns what the card was charged. A partial refund returns a proportional share of it.
-                          </p>
-                        )}
-                        <div className="flex gap-2">
-                          {[100, 90, 50].map(pct => (
-                            <button key={pct} onClick={() => setResRefundAmount((grossPaidHere * pct / 10000).toFixed(2))}
-                              className="flex-1 bg-white border border-gray-200 rounded text-xs font-semibold py-1 hover:bg-gray-50">
-                              {pct}%
-                            </button>
-                          ))}
-                        </div>
-                        <div className="relative">
-                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400">$</span>
-                          <input type="number" step="0.01" className="w-full border border-gray-200 rounded pl-6 pr-2 py-1.5 text-sm"
-                            value={resRefundAmount} onChange={e => setResRefundAmount(e.target.value)} />
-                        </div>
-                        <input type="text" placeholder="Reason (e.g. Cancellation — outside 7 days)"
-                          className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm"
-                          value={resRefundReason} onChange={e => setResRefundReason(e.target.value)} />
-                        {selected.square_payment_id
-                          ? <p className="text-xs text-green-700">✓ Will refund to card via Square</p>
-                          : <p className="text-xs text-gray-500">Cash/check — return funds manually</p>}
-                        {resRefundError && <p className="text-xs text-red-600">{resRefundError}</p>}
-                        <div className="flex gap-2">
-                          <button onClick={() => setShowResRefund(false)}
-                            className="flex-1 bg-white border border-gray-200 rounded py-1.5 text-sm">Cancel</button>
-                          <button onClick={handleResRefund} disabled={processingResRefund || !resRefundAmount}
-                            className="flex-1 bg-red-600 text-white rounded py-1.5 text-sm font-semibold disabled:opacity-50">
-                            {processingResRefund ? 'Processing...' : `Refund $${resRefundAmount}`}
-                          </button>
-                        </div>
-                      </div>
+                    <button
+                      onClick={() => openBookingRefund(selected)}
+                      disabled={loadingRefundPolicy}
+                      className="w-full bg-orange-50 text-orange-700 border border-orange-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-100 disabled:opacity-50"
+                    >
+                      {loadingRefundPolicy ? 'Resolving policy…' : 'Issue Refund'}
+                    </button>
+                    {selected.status === 'cancelled' && (
+                      <p className="text-xs text-gray-500 mt-1 text-center">
+                        Cancelled, with ${(grossPaidHere / 100).toFixed(2)} still refundable.
+                      </p>
                     )}
                   </div>
                 )}
@@ -1371,6 +1361,20 @@ function ReservationsPageInner() {
           </div>
         </div>
       )}
+
+      {/* The booking-leg refund, in the same modal the folio ledger and the reports drawer
+          use. The cancel modal above stays separate: it is a different decision, with the
+          policy, the deadline and the cancellation itself wrapped into it. */}
+      <RefundModal
+        target={refundTarget}
+        onClose={() => setRefundTarget(null)}
+        onRefunded={afterBookingRefund}
+        defaultAmountCents={refundSeed.cents}
+        policyPreset={refundSeed.policyLabel && refundSeed.cents > 0
+          ? { label: refundSeed.policyLabel, cents: refundSeed.cents }
+          : null}
+        hint={refundSeed.hint}
+      />
     </div>
   )
 }
