@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
+import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
+import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -104,6 +106,9 @@ export default function GuestAccountPage() {
   const [customPrice, setCustomPrice] = useState('')
   const [customQty, setCustomQty] = useState('1')
   const [showEarlier, setShowEarlier] = useState(false)
+  // The shared modal, same as the main folio and the reports drawer. This surface had void
+  // only, so a refund on a guest account had to be issued from somewhere else entirely.
+  const [refundTarget, setRefundTarget] = useState<RefundTarget | null>(null)
 
   useEffect(() => { init() }, [guestId])
 
@@ -155,7 +160,17 @@ export default function GuestAccountPage() {
   async function loadFolioData(folioId: string) {
     const [{ data: items }, { data: pmts }] = await Promise.all([
       supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at'),
-      supabase.from('folio_payments').select('*').eq('folio_id', folioId).eq('status', 'completed').order('paid_at'),
+      // Refund rows count here too — the same widening the main folio, the reservations pane
+      // and every revenue query already had. Filtering to 'completed' dropped BOTH halves of a
+      // refund: the negative row AND the original, whose status flips to 'refunded' /
+      // 'partially_refunded' when it is refunded. So a refunded guest account understated what
+      // had been paid and overstated the balance due.
+      //
+      // The arithmetic below is already signed — paymentsTotal sums `amount - surcharge_amount`
+      // and a refund row is negative in both — so including these rows SUBTRACTS them. Widening
+      // the filter makes the balance more correct, not merely longer.
+      supabase.from('folio_payments').select('*').eq('folio_id', folioId)
+        .in('status', REFUNDABLE_STATUSES).order('paid_at'),
     ])
     setLineItems(items || [])
     setPayments(pmts || [])
@@ -209,6 +224,24 @@ export default function GuestAccountPage() {
     if (!confirm('Remove this item?')) return
     await supabase.from('folio_line_items').delete().eq('id', id)
     await loadFolioData(folio!.id)
+  }
+
+  // Seeded at the full remaining. A guest-account payment is an electric bill, a storage fee,
+  // a prepayment — nothing a cancellation policy governs — so there is no percentage to apply,
+  // exactly as on the main folio's own payment rows.
+  function openRefund(payment: any) {
+    if (!folio) return
+    const { remainingCents } = folioPaymentRefundable(payment, payments)
+    setRefundTarget({
+      kind: 'folio-payment',
+      paymentId: payment.id,
+      folioId: folio.id,
+      method: payment.method,
+      squarePaymentId: payment.square_payment_id,
+      originalCents: payment.amount,
+      remainingCents,
+      note: payment.note,
+    })
   }
 
   async function voidPayment(id: string) {
@@ -330,6 +363,10 @@ export default function GuestAccountPage() {
     amount: number
     itemId?: string
     paymentId?: string
+    // The row itself, and what it can still hand back. Same guard the main folio uses: the
+    // button follows the money that is actually refundable, not the row's status string.
+    payment?: any
+    refundableCents?: number
     balanceAfter: number
   }
   const ledgerEvents: LedgerEvent[] = []
@@ -338,7 +375,10 @@ export default function GuestAccountPage() {
     ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, itemId: item.id, balanceAfter: 0 })
   })
   payments.forEach((p) => {
-    ledgerEvents.push({ key: `pay-${p.id}`, kind: 'payment', ts: p.paid_at ? new Date(p.paid_at).getTime() : 0, order: _lOrder++, label: p.method.charAt(0).toUpperCase() + p.method.slice(1), sub: fmtLedgerDate(p.paid_at), note: p.note, amount: p.amount - (p.surcharge_amount || 0), paymentId: p.id, balanceAfter: 0 })
+    // A refund row is itself a payment event with a negative amount; folioPaymentRefundable
+    // returns 0 for it, so refunds of refunds are never offered.
+    const { remainingCents } = folioPaymentRefundable(p, payments)
+    ledgerEvents.push({ key: `pay-${p.id}`, kind: 'payment', ts: p.paid_at ? new Date(p.paid_at).getTime() : 0, order: _lOrder++, label: p.method.charAt(0).toUpperCase() + p.method.slice(1), sub: fmtLedgerDate(p.paid_at), note: p.note, amount: p.amount - (p.surcharge_amount || 0), paymentId: p.id, payment: p, refundableCents: remainingCents, balanceAfter: 0 })
   })
   ledgerEvents.sort((a, b) => a.ts - b.ts || a.order - b.order)
   let _lBal = 0
@@ -428,7 +468,13 @@ export default function GuestAccountPage() {
                       {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
                     </div>
                     <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 600, color: isPay ? '#15803d' : '#111827' }}>
-                      {isPay ? '−' : ''}${(ev.amount/100).toFixed(2)}
+                      {/* A refund is a payment event with a NEGATIVE amount, so the literal
+                          '−' was prepended to an already-negative number: "−$-36.00". This
+                          could not render before — the query filtered refund rows out — so
+                          widening the filter above is exactly what exposes it. Same fix the
+                          main folio got in C1: take the magnitude, let one sign carry the
+                          meaning. '−' reduces the balance, '+' gives money back. */}
+                      {isPay && ev.amount < 0 ? '+' : isPay ? '−' : ''}${(Math.abs(ev.amount)/100).toFixed(2)}
                     </div>
                     <div style={{ width: 92, textAlign: 'right' }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: balColor }}>${(Math.abs(ev.balanceAfter)/100).toFixed(2)}</div>
@@ -438,7 +484,13 @@ export default function GuestAccountPage() {
                       {ev.itemId && (
                         <button onClick={() => removeLineItem(ev.itemId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: '1' }}>×</button>
                       )}
-                      {ev.paymentId && (
+                      {/* Gated on what is still refundable, like every other surface — not on
+                          the row's status, which flips to 'partially_refunded' after the first
+                          partial and used to retire the button for good. */}
+                      {ev.payment && (ev.refundableCents || 0) > 0 && (
+                        <button onClick={() => openRefund(ev.payment)} style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 5, color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontWeight: 600, marginRight: 6 }}>Refund</button>
+                      )}
+                      {ev.paymentId && ev.payment?.status === 'completed' && (
                         <button onClick={() => voidPayment(ev.paymentId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: '1' }}>×</button>
                       )}
                     </div>
@@ -702,6 +754,15 @@ export default function GuestAccountPage() {
           </div>
         </div>
       )}
+
+      {/* The same modal the main folio and the reports drawer use. Guest accounts had void
+          only, so the money on a seasonal camper's account could be cancelled but never
+          returned from the screen an operator actually works on. */}
+      <RefundModal
+        target={refundTarget}
+        onClose={() => setRefundTarget(null)}
+        onRefunded={async () => { if (folio) await loadFolioData(folio.id) }}
+      />
     </div>
   )
 }
