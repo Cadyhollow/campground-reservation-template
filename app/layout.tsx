@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
-import { cache } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import AccentColorProvider from "./components/AccentColorProvider";
-import { createClient } from "@supabase/supabase-js";
+import { getSettings } from "@/lib/settings-server";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,20 +29,10 @@ const geistMono = Geist_Mono({
 // next.config.ts — it would need migrating then.
 export const dynamic = 'force-dynamic'
 
-// select('*') on purpose, not select('park_name, theme'): naming a column that doesn't
-// exist yet makes PostgREST error, and `theme` isn't in every tenant's settings table.
-// With '*' a missing column is simply absent from the row, so the theme read below falls
-// back to light instead of throwing.
-//
-// cache() so metadata and the layout share ONE query per request instead of issuing two.
-const getSettings = cache(async () => {
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-  const { data } = await supabase.from('settings').select('*').limit(1).single();
-  return data;
-});
+// getSettings moved to lib/settings-server.ts so the booking page can share the same
+// cache()'d read: metadata, this layout and the page now issue ONE query per request
+// between them rather than one each. Its select('*') and the reasoning behind it are
+// documented there.
 
 // Anything that isn't exactly 'dark' — missing column, null, '', a typo — resolves to
 // light. Fail toward the default rather than toward a half-applied dark theme.
