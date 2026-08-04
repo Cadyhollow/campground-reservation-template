@@ -5,7 +5,8 @@ import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
-import { folioPaymentRefundable } from '@/lib/refundable'
+import { folioPaymentRefundable, bookingLegRefundable, prorateSurcharge } from '@/lib/refundable'
+import { computePolicyRefund, normalizePolicy } from '@/lib/cancellation-policy'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -58,6 +59,13 @@ type Reservation = {
   departure_date: string
   total_price: number
   amount_paid: number
+  // Already present in the row (the query selects *); declared here because the booking-leg
+  // refund needs them — the gross the card was charged, the Square payment to credit, the
+  // deposit-vs-full distinction the policy reads, and the notes the refund appends to.
+  surcharge_amount: number
+  square_payment_id: string | null
+  payment_type: string | null
+  notes: string | null
   fees_total: number
   num_adults: number
   num_children: number
@@ -134,6 +142,12 @@ export default function FolioPage() {
   // One target, one modal. The seven pieces of refund state this replaces were a private copy
   // of the same thing the reports drawer and the reservations panel each also kept.
   const [refundTarget, setRefundTarget] = useState<RefundTarget | null>(null)
+  // The booking leg's suggested amount comes from the cancellation policy, which has to be
+  // fetched — so the modal opens with a seed rather than computing one synchronously.
+  const [bookingRefundSeed, setBookingRefundSeed] = useState<{ cents: number; policyLabel: string | null; hint: string | null }>(
+    { cents: 0, policyLabel: null, hint: null }
+  )
+  const [loadingBookingPolicy, setLoadingBookingPolicy] = useState(false)
   const [showEarlier, setShowEarlier] = useState(false)
 
   useEffect(() => { init() }, [reservationId])
@@ -381,6 +395,74 @@ export default function FolioPage() {
     })
   }
 
+  // ── The booking leg, refundable from the folio ─────────────────────────────────────────
+  // "Paid at booking" is reservations.amount_paid, not a folio_payments row, so it has no
+  // payment object and A1's guard could not offer it. The money was always refundable — the
+  // reservations pane has refunded it since Part 2 — but an operator standing on the folio,
+  // looking at the guest's whole account, had to know to go somewhere else. Same shared modal,
+  // same /api/reservation-refund, same server-side cap; only the button is new.
+  //
+  // Unlike a folio payment, this one IS governed by the cancellation policy — it is the stay
+  // itself — so the suggestion comes from computePolicyRefund for this arrival date, exactly as
+  // the reservations pane does it.
+  async function openBookingLegRefund() {
+    if (!reservation) return
+    const originalGross = (reservation.amount_paid || 0) + (reservation.surcharge_amount || 0)
+    const leg = bookingLegRefundable(originalGross, reservation.surcharge_amount || 0, payments)
+    if (leg.remainingCents <= 0) return
+
+    setLoadingBookingPolicy(true)
+    let seed = { cents: leg.remainingCents, policyLabel: null as string | null, hint: null as string | null }
+    try {
+      const r = await fetch(`/api/cancellation-policy?arrival=${reservation.arrival_date}`)
+      const data = await r.json()
+      // normalizePolicy rather than the response as-is: the same coercion the server applies,
+      // so a rule with a NULL in a column resolves to the default instead of to NaN.
+      const policy = normalizePolicy(data?.policy)
+      const prefill = computePolicyRefund({
+        policy,
+        arrival: reservation.arrival_date,
+        today: new Date().toISOString().split('T')[0],
+        originalGrossCents: originalGross,
+        refundableCents: leg.remainingCents,
+        // What has already gone back against this charge, so the percentage is spent down
+        // rather than re-applied in full to the original.
+        alreadyRefundedCents: originalGross - leg.remainingCents,
+        paymentType: reservation.payment_type,
+      })
+      seed = {
+        // Inside the deadline the policy owes nothing, but an operator opening this modal has
+        // already decided to refund — so seed what the rule WOULD give rather than $0.00 under
+        // a Refund button. Clamped to what is actually left either way.
+        cents: prefill.refundCents > 0
+          ? prefill.refundCents
+          : Math.min(Math.round(originalGross * policy.refund_percent / 100), leg.remainingCents),
+        policyLabel: `${policy.name} · ${policy.refund_percent}%`,
+        hint: prefill.explanation,
+      }
+    } catch {
+      // Could not read the policy — no suggestion beyond the remaining. Better than seeding
+      // from a rule we failed to load.
+      seed = { cents: leg.remainingCents, policyLabel: null, hint: null }
+    }
+    setBookingRefundSeed(seed)
+    setRefundTarget({
+      kind: 'booking-leg',
+      reservationId: reservation.id,
+      squarePaymentId: reservation.square_payment_id,
+      originalCents: originalGross,
+      remainingCents: leg.remainingCents,
+      // Prorated on the ORIGINAL charge and capped at the surcharge not yet returned — the
+      // shared helper, so this matches what the route recomputes rather than approximating it.
+      surchargeForCents: (grossCents: number) => prorateSurcharge(
+        grossCents, originalGross, reservation.surcharge_amount || 0,
+        leg.remainingSurchargeCents - (reservation.surcharge_amount || 0)
+      ),
+      currentNotes: reservation.notes || '',
+    })
+    setLoadingBookingPolicy(false)
+  }
+
   async function collectPayment() {
     // Credit cap check for guest account folios
     if (folio?.folio_type === 'guest_account') {
@@ -426,6 +508,11 @@ export default function FolioPage() {
 
   // Totals — single source of truth
   const activeItems = lineItems.filter(i => !i.voided)
+  // What the card was charged on the booking leg. GROSS — amount_paid is cash-canonical with
+  // the surcharge stored beside it — and immutable, so this stays the ORIGINAL charge for the
+  // life of the reservation. Only used for the refund cap; the ledger line still DISPLAYS
+  // amount_paid, unchanged.
+  const bookingOriginalGross = (reservation?.amount_paid || 0) + (reservation?.surcharge_amount || 0)
   async function sendToTerminal() {
     if (!folio) return
     const amount = Math.max(0, (reservation ? Math.max(0, reservation.total_price - reservation.amount_paid) : 0) + activeItems.reduce((sum, i) => sum + i.line_total, 0) - payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0))
@@ -562,6 +649,11 @@ export default function FolioPage() {
     // The button is gated on this rather than on the payment's status: 'partially_refunded'
     // used to hide it permanently while the server was still willing to refund the remainder.
     refundableCents?: number
+    // Set on the synthetic "Paid at booking" line. That row has no folio_payments record
+    // behind it — it is reservations.amount_paid — so it carries no `payment`, which is why
+    // A1's guard left it as the one payment on this page with no Refund button. The money is
+    // refundable; only the button was missing.
+    isBookingLeg?: boolean
     isOpening?: boolean
     balanceAfter: number
   }
@@ -573,7 +665,17 @@ export default function FolioPage() {
       ledgerEvents.push({ key: `res-${i}`, kind: 'charge', ts: LEDGER_OPENING_TS, order: _lOrder++, label: l.label, sub: 'At booking', amount: l.amount, negative: l.negative, isOpening: true, balanceAfter: 0 })
     })
     if (reservation.amount_paid > 0) {
-      ledgerEvents.push({ key: 'res-deposit', kind: 'payment', ts: LEDGER_OPENING_TS, order: _lOrder++, label: 'Paid at booking', sub: 'At booking', amount: reservation.amount_paid, isOpening: true, balanceAfter: 0 })
+      ledgerEvents.push({
+        key: 'res-deposit', kind: 'payment', ts: LEDGER_OPENING_TS, order: _lOrder++,
+        label: 'Paid at booking', sub: 'At booking', amount: reservation.amount_paid,
+        isOpening: true, isBookingLeg: true,
+        // The same cap /api/reservation-refund enforces: the original charge less the
+        // booking-leg refunds already recorded (those are negative rows in `payments`).
+        // GROSS — the card is credited the surcharge it was charged — while the amount
+        // DISPLAYED on this line stays cash-canonical amount_paid, as it always has.
+        refundableCents: bookingLegRefundable(bookingOriginalGross, reservation.surcharge_amount || 0, payments).remainingCents,
+        balanceAfter: 0,
+      })
     }
   }
   activeItems.forEach((item) => {
@@ -738,6 +840,19 @@ export default function FolioPage() {
                       {ev.payment && (ev.refundableCents || 0) > 0 && (
                         <button onClick={() => openRefund(ev.payment)} style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 5, color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontWeight: 600 }}>Refund</button>
                       )}
+                      {/* The booking leg. Same button, same modal, different route on submit —
+                          it has no folio_payments row to refund against, so it goes through
+                          /api/reservation-refund. It was the only payment on this page with no
+                          way to give the money back from here. */}
+                      {ev.isBookingLeg && (ev.refundableCents || 0) > 0 && (
+                        <button
+                          onClick={openBookingLegRefund}
+                          disabled={loadingBookingPolicy}
+                          style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 5, color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontWeight: 600, opacity: loadingBookingPolicy ? 0.5 : 1 }}
+                        >
+                          {loadingBookingPolicy ? '…' : 'Refund'}
+                        </button>
+                      )}
                       {ev.payment && ev.payment.status === 'completed' && (
                         <button onClick={() => voidPayment(ev.payment!.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
                       )}
@@ -873,7 +988,23 @@ export default function FolioPage() {
       <RefundModal
         target={refundTarget}
         onClose={() => setRefundTarget(null)}
-        onRefunded={async () => { if (folio) await loadFolioData(folio.id) }}
+        // Both kinds land here. A booking-leg refund changes reservations.notes as well as the
+        // folio, so the reservation is re-read too — otherwise the page would keep showing the
+        // pre-refund copy and a second refund would append to stale notes.
+        onRefunded={async () => {
+          if (folio) await loadFolioData(folio.id)
+          if (reservation) {
+            const { data } = await supabase.from('reservations').select('*').eq('id', reservation.id).single()
+            if (data) setReservation(data)
+          }
+        }}
+        // Only meaningful for the booking leg; a folio payment passes neither and the modal
+        // falls back to the full remaining, as it has since A1.
+        defaultAmountCents={refundTarget?.kind === 'booking-leg' ? bookingRefundSeed.cents : undefined}
+        policyPreset={refundTarget?.kind === 'booking-leg' && bookingRefundSeed.policyLabel && bookingRefundSeed.cents > 0
+          ? { label: bookingRefundSeed.policyLabel, cents: bookingRefundSeed.cents }
+          : null}
+        hint={refundTarget?.kind === 'booking-leg' ? bookingRefundSeed.hint : null}
       />
 
       {(terminalStatus === 'waiting' || terminalStatus === 'timeout') && terminalCheckoutId && (
