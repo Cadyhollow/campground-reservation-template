@@ -10,6 +10,12 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { BOOKING_REFUND_REF } from '@/lib/refund-refs'
+import { bookingLegRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
+
+// prorateSurcharge now lives in lib/refundable.ts so the admin pages can use it without
+// dragging this module's service-role client into the client bundle. Re-exported here because
+// /api/reservation-cancel imports it from this path.
+export { prorateSurcharge } from '@/lib/refundable'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -47,30 +53,19 @@ export async function bookingRefundsSoFar(
 
   const { data: priorRefunds } = await supabase
     .from('folio_payments')
-    .select('amount, surcharge_amount')
+    .select('amount, surcharge_amount, reference_number, status')
     .in('folio_id', folioIds)
-    .eq('reference_number', BOOKING_REFUND_REF)
+    .in('status', REFUNDABLE_STATUSES)
 
-  const rows = priorRefunds || []
-  return {
-    cents: rows.reduce((s: number, r: any) => s + (r.amount || 0), 0),
-    surchargeCents: rows.reduce((s: number, r: any) => s + (r.surcharge_amount || 0), 0),
-    count: rows.length,
-  }
-}
+  // Counted through the shared function so this and the refund panel that displays it cannot
+  // disagree. The status filter is new here — it previously summed booking-refund rows of ANY
+  // status. No such row exists at any status other than 'refunded' (they are only ever written
+  // by processReservationRefund below), so this changes no current number; it means a VOIDED
+  // refund correctly stops consuming headroom, matching how the folio side already behaves.
+  const { priorRefundCents, priorRefundSurchargeCents, priorRefundCount } =
+    bookingLegRefundable(0, 0, priorRefunds || [])
 
-// Surcharge share of an arbitrary gross refund, prorated on the ORIGINAL charge and capped at
-// the surcharge not yet returned. Same formula the refund panel uses to fill its request in;
-// exported so the cancel route can compute its own rather than trusting the browser's.
-export function prorateSurcharge(
-  grossCents: number,
-  originalGrossCents: number,
-  surchargeCents: number,
-  alreadyRefundedSurchargeCents: number
-): number {
-  if (originalGrossCents <= 0 || surchargeCents <= 0) return 0
-  const remaining = Math.max(0, surchargeCents + alreadyRefundedSurchargeCents)
-  return Math.min(remaining, Math.round(grossCents * surchargeCents / originalGrossCents))
+  return { cents: priorRefundCents, surchargeCents: priorRefundSurchargeCents, count: priorRefundCount }
 }
 
 export async function processReservationRefund(
@@ -103,24 +98,25 @@ export async function processReservationRefund(
 
   const folioIds = (existingFolios || []).map((f: any) => f.id)
 
-  // Booking-leg refunds already recorded, as negative cents.
-  let alreadyRefunded = 0
-  let priorRefundCount = 0
+  // Booking-leg refunds already recorded. Read through the same shared function the refund
+  // panel uses to decide what to offer, so the figure the operator was shown and the ceiling
+  // enforced here are computed identically.
+  let priorRows: any[] = []
   if (folioIds.length > 0) {
     const { data: priorRefunds } = await supabase
       .from('folio_payments')
-      .select('amount')
+      .select('amount, surcharge_amount, reference_number, status')
       .in('folio_id', folioIds)
-      .eq('reference_number', BOOKING_REFUND_REF)
-    alreadyRefunded = (priorRefunds || []).reduce((s: number, r: any) => s + (r.amount || 0), 0)
-    priorRefundCount = (priorRefunds || []).length
+      .in('status', REFUNDABLE_STATUSES)
+    priorRows = priorRefunds || []
   }
 
   // amount_paid is cash-canonical and surcharge_amount sits beside it, so the card was
   // charged the sum. Both are now immutable, so this stays the ORIGINAL booking charge for
   // the life of the reservation and the remaining headroom comes from the refunds instead.
   const originalGross = (reservation.amount_paid || 0) + (reservation.surcharge_amount || 0)
-  const remainingRefundable = Math.max(0, originalGross + alreadyRefunded)
+  const { remainingCents: remainingRefundable, priorRefundCount } =
+    bookingLegRefundable(originalGross, reservation.surcharge_amount || 0, priorRows)
 
   if (refundAmountCents > remainingRefundable) {
     return {

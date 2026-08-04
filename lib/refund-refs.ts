@@ -5,14 +5,15 @@
 //
 // reference_number is an existing text column (default '') that nothing else writes or
 // reads, so tagging needs no schema change.
+//
+// The definitions moved to lib/refundable.ts, which is the code that actually reads them: the
+// over-refund cap is the reason the tags exist. That module deliberately imports nothing so it
+// can run under `node --test`, so the dependency points that way rather than this way.
+// Re-exported here because the API routes import them from this path, and a tag string is
+// exactly the kind of thing that must have one definition.
 
-// Refund of the BOOKING leg: reservations.amount_paid + surcharge_amount. There is no
-// folio_payments row for the original, so these are keyed to the reservation, not a payment.
-export const BOOKING_REFUND_REF = 'booking-refund'
-
-// Refund of a specific folio_payments row. Keyed to the original payment's id so the cap
-// can sum exactly what has already been handed back on that one payment.
-export const FOLIO_REFUND_REF_PREFIX = 'refund-of:'
-export function folioRefundRef(paymentId: string): string {
-  return `${FOLIO_REFUND_REF_PREFIX}${paymentId}`
-}
+export {
+  BOOKING_REFUND_REF,
+  FOLIO_REFUND_REF_PREFIX,
+  folioRefundRef,
+} from './refundable'

@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
+import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
+import { folioPaymentRefundable } from '@/lib/refundable'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -129,13 +131,9 @@ export default function FolioPage() {
   const [squareCardRef, setSquareCardRef] = useState<any>(null)
   const [squareInstanceRef, setSquareInstanceRef] = useState<any>(null)
   const [chargingCard, setChargingCard] = useState(false)
-  const [showRefund, setShowRefund] = useState(false)
-  const [refundPayment, setRefundPayment] = useState<any>(null)
-  const [refundAmount, setRefundAmount] = useState('')
-  const [refundReason, setRefundReason] = useState('')
-  const [processingRefund, setProcessingRefund] = useState(false)
-  const [refundError, setRefundError] = useState('')
-  const [refundSuccess, setRefundSuccess] = useState(false)
+  // One target, one modal. The seven pieces of refund state this replaces were a private copy
+  // of the same thing the reports drawer and the reservations panel each also kept.
+  const [refundTarget, setRefundTarget] = useState<RefundTarget | null>(null)
   const [showEarlier, setShowEarlier] = useState(false)
 
   useEffect(() => { init() }, [reservationId])
@@ -361,45 +359,26 @@ export default function FolioPage() {
 
   // Refunds are GROSS — the card is credited what it was charged, surcharge included and
   // prorated, as the card brands require. folio_payments.amount is already stored gross, so
-  // the surcharge no longer has to be subtracted back out. /api/refund already caps at
-  // payment.amount, so it accepted gross all along; only this UI held it to net, quietly
-  // shorting the customer their surcharge on what the button called a 100% refund.
+  // the surcharge no longer has to be subtracted back out.
+  //
+  // The suggested amount is now the full REMAINING refundable, not 90% of the original. That
+  // 90% was one park's cancellation fee, and a folio payment is an add-on, a POS sale, an extra
+  // night — nothing a cancellation policy governs. Withholding a tenth of a $12 firewood charge
+  // encoded a rule that never applied to it. Where a policy DOES apply — a booking-leg refund
+  // on a reservation — the reservations page seeds the modal from computePolicyRefund instead.
   function openRefund(payment: any) {
-    const suggestedAmount = (payment.amount * 0.9 / 100).toFixed(2)
-    setRefundPayment(payment)
-    setRefundAmount(suggestedAmount)
-    setRefundReason('')
-    setRefundError('')
-    setShowRefund(true)
-  }
-
-  async function processRefund() {
-    if (!refundPayment || !refundAmount || !folio) return
-    setProcessingRefund(true)
-    setRefundError('')
-    const res = await fetch('/api/refund', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        paymentId: refundPayment.id,
-        refundAmount: parseFloat(refundAmount),
-        reason: refundReason,
-        folioId: folio.id,
-      }),
+    if (!folio) return
+    const { remainingCents } = folioPaymentRefundable(payment, payments)
+    setRefundTarget({
+      kind: 'folio-payment',
+      paymentId: payment.id,
+      folioId: folio.id,
+      method: payment.method,
+      squarePaymentId: payment.square_payment_id,
+      originalCents: payment.amount,
+      remainingCents,
+      note: payment.note,
     })
-    const data = await res.json()
-    setProcessingRefund(false)
-    if (data.success) {
-      setRefundSuccess(true)
-      await loadFolioData(folio.id)
-      setTimeout(() => {
-        setShowRefund(false)
-        setRefundPayment(null)
-        setRefundSuccess(false)
-      }, 3000)
-    } else {
-      setRefundError(data.error || 'Refund failed. Please try again.')
-    }
   }
 
   async function collectPayment() {
@@ -579,6 +558,10 @@ export default function FolioPage() {
     negative?: boolean
     itemId?: string
     payment?: Payment
+    // What this event can still hand back, from the same function /api/refund enforces with.
+    // The button is gated on this rather than on the payment's status: 'partially_refunded'
+    // used to hide it permanently while the server was still willing to refund the remainder.
+    refundableCents?: number
     isOpening?: boolean
     balanceAfter: number
   }
@@ -597,7 +580,10 @@ export default function FolioPage() {
     ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, itemId: item.id, balanceAfter: 0 })
   })
   payments.forEach((p) => {
-    ledgerEvents.push({ key: `pay-${p.id}`, kind: 'payment', ts: p.paid_at ? new Date(p.paid_at).getTime() : 0, order: _lOrder++, label: p.method.charAt(0).toUpperCase() + p.method.slice(1), sub: fmtLedgerDate(p.paid_at), note: p.note, amount: p.amount - (p.surcharge_amount || 0), payment: p, balanceAfter: 0 })
+    // A refund row is itself a payment event with a negative amount, and folioPaymentRefundable
+    // returns 0 for it (max(0, negative - 0)), so refunds of refunds never get offered.
+    const { remainingCents } = folioPaymentRefundable(p, payments)
+    ledgerEvents.push({ key: `pay-${p.id}`, kind: 'payment', ts: p.paid_at ? new Date(p.paid_at).getTime() : 0, order: _lOrder++, label: p.method.charAt(0).toUpperCase() + p.method.slice(1), sub: fmtLedgerDate(p.paid_at), note: p.note, amount: p.amount - (p.surcharge_amount || 0), payment: p, refundableCents: remainingCents, balanceAfter: 0 })
   })
   ledgerEvents.sort((a, b) => a.ts - b.ts || a.order - b.order)
   let _lBal = 0
@@ -737,11 +723,17 @@ export default function FolioPage() {
                       {ev.itemId && (
                         <button onClick={() => removeLineItem(ev.itemId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
                       )}
+                      {/* Refund shows whenever money is still refundable — which is what the
+                          server will actually allow — rather than when the row happens to read
+                          'completed'. That status flips to 'partially_refunded' after the first
+                          partial, which used to retire the button for good and strand the
+                          remainder. Void keeps its stricter guard: a payment that has already
+                          been partly returned should be refunded down, not voided wholesale. */}
+                      {ev.payment && (ev.refundableCents || 0) > 0 && (
+                        <button onClick={() => openRefund(ev.payment)} style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 5, color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontWeight: 600 }}>Refund</button>
+                      )}
                       {ev.payment && ev.payment.status === 'completed' && (
-                        <>
-                          <button onClick={() => openRefund(ev.payment)} style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 5, color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontWeight: 600 }}>Refund</button>
-                          <button onClick={() => voidPayment(ev.payment!.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
-                        </>
+                        <button onClick={() => voidPayment(ev.payment!.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: 1 }}>×</button>
                       )}
                     </div>
                   </div>
@@ -871,74 +863,12 @@ export default function FolioPage() {
 
       {/* Payment modal */}
       {/* Terminal status */}
-      {/* Refund Modal */}
-      {showRefund && refundPayment && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-          <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', padding: '1.5rem', width: '100%', maxWidth: 520 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Issue Refund</h2>
-              <button onClick={() => setShowRefund(false)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
-            </div>
-            <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '12px 14px', marginBottom: 16 }}>
-              <div style={{ fontSize: 13, color: '#6b7280' }}>Original payment</div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: '#111827', marginTop: 2 }}>
-                ${(refundPayment.amount / 100).toFixed(2)} · {refundPayment.method}
-                {refundPayment.method === 'card' && refundPayment.square_payment_id
-                  ? <span style={{ fontSize: 11, color: '#15803d', marginLeft: 8 }}>✓ Will refund to card via Square</span>
-                  : refundPayment.method === 'card'
-                  ? <span style={{ fontSize: 11, color: '#f59e0b', marginLeft: 8 }}>⚠ No Square ID — record manually</span>
-                  : <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 8 }}>Cash/check — record return manually</span>
-                }
-              </div>
-              {refundPayment.note && <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>{refundPayment.note}</div>}
-            </div>
-            <label style={ml}>Refund amount ($)</label>
-            <div style={{ position: 'relative', marginBottom: 12 }}>
-              <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 18 }}>$</span>
-              <input
-                style={{ ...si, paddingLeft: 30, fontSize: 22, fontWeight: 700, height: 52 }}
-                type='number'
-                step='0.01'
-                min='0'
-                max={(refundPayment.amount / 100).toFixed(2)}
-                value={refundAmount}
-                onChange={e => setRefundAmount(e.target.value)}
-              />
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-              {[100, 90, 50].map(pct => (
-                <button key={pct} onClick={() => setRefundAmount((refundPayment.amount * pct / 10000).toFixed(2))}
-                  style={{ flex: 1, background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 7, padding: '7px', fontSize: 13, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>
-                  {pct}%
-                </button>
-              ))}
-            </div>
-            <label style={ml}>Reason</label>
-            <input style={{ ...si, marginBottom: 16 }} placeholder='e.g. Cancellation — outside 7 days' value={refundReason} onChange={e => setRefundReason(e.target.value)} />
-            {refundError && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#dc2626' }}>{refundError}</div>}
-            {refundSuccess ? (
-              <div style={{ textAlign: 'center', padding: '1.5rem 0' }}>
-                <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
-                <div style={{ fontSize: 20, fontWeight: 700, color: '#15803d', marginBottom: 6 }}>Refund Successful!</div>
-                <div style={{ fontSize: 14, color: '#6b7280' }}>${refundAmount} has been refunded{refundPayment?.method === 'card' ? ' to the card' : ' — return cash to guest'}</div>
-              </div>
-            ) : (
-              <button
-                onClick={processRefund}
-                disabled={processingRefund || !refundAmount || parseFloat(refundAmount) <= 0}
-                style={{ width: '100%', background: processingRefund || !refundAmount ? '#d1d5db' : '#dc2626', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer' }}
-              >
-                {processingRefund ? 'Processing...' : `Issue Refund · $${refundAmount || '0.00'}`}
-              </button>
-            )}
-            {refundPayment.method !== 'card' && (
-              <p style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', marginTop: 8 }}>
-                Cash/check refunds are recorded here. Please return ${refundAmount} to the guest manually.
-              </p>
-            )}
-          </div>
-        </div>
-      )}
+      {/* The shared modal, in place of the copy that used to live here. */}
+      <RefundModal
+        target={refundTarget}
+        onClose={() => setRefundTarget(null)}
+        onRefunded={async () => { if (folio) await loadFolioData(folio.id) }}
+      />
 
       {(terminalStatus === 'waiting' || terminalStatus === 'timeout') && terminalCheckoutId && (
         <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', width: 'min(460px, 92vw)', zIndex: 60 }}>

@@ -3,6 +3,8 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { fetchUnifiedTransactions, ymd, dayStartUTC, dayEndUTC, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
+import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
+import { folioPaymentRefundable } from '@/lib/refundable'
 
 type Reservation = {
   id: string
@@ -109,13 +111,9 @@ export default function ReportsPage() {
   const [txFolioItems, setTxFolioItems] = useState<LineItemRow[]>([])
   const [txFolioPayments, setTxFolioPayments] = useState<PaymentRow[]>([])
   const [txFolioLoading, setTxFolioLoading] = useState(false)
-  const [showRefund, setShowRefund] = useState(false)
-  const [refundPayment, setRefundPayment] = useState<any>(null)
-  const [refundAmount, setRefundAmount] = useState('')
-  const [refundReason, setRefundReason] = useState('')
-  const [refundError, setRefundError] = useState('')
-  const [refundSuccess, setRefundSuccess] = useState(false)
-  const [processingRefund, setProcessingRefund] = useState(false)
+  // Replaces seven pieces of local refund state — this drawer kept its own copy of the same
+  // modal the folio page and the reservations panel each also had.
+  const [refundTarget, setRefundTarget] = useState<RefundTarget | null>(null)
 
   // Transactions filters
   const [txSearch, setTxSearch] = useState('')
@@ -357,7 +355,7 @@ export default function ReportsPage() {
   async function openTransaction(tx: PaymentRow) {
     setSelectedTx(tx)
     setTxFolioLoading(true)
-    setShowRefund(false)
+    setRefundTarget(null)
     const [{ data: items }, { data: pmts }] = await Promise.all([
       supabase.from('folio_line_items').select('id, folio_id, description, quantity, unit_price, tax_amount, line_total, category, charged_at').eq('folio_id', tx.folio_id).order('charged_at'),
       supabase.from('folio_payments').select('*').eq('folio_id', tx.folio_id).order('paid_at'),
@@ -369,35 +367,30 @@ export default function ReportsPage() {
 
   // Refunds are GROSS — the card is credited what it was charged, surcharge included and
   // prorated, matching the folio page and the reservation panel. folio_payments.amount is
-  // stored gross and /api/refund already caps at it, so only this modal was holding refunds
-  // to net and shorting the customer their surcharge.
+  // stored gross and /api/refund already caps at it.
+  //
+  // txFolioPayments is fetched without a status filter here (voided rows included), which is
+  // why folioPaymentRefundable does its own filtering: this drawer and the folio page have to
+  // agree on what a payment can return, whatever each happened to select.
   function openRefund(payment: any) {
-    const suggested = (payment.amount / 100).toFixed(2)
-    setRefundPayment(payment)
-    setRefundAmount(suggested)
-    setRefundReason('')
-    setRefundError('')
-    setRefundSuccess(false)
-    setShowRefund(true)
+    if (!selectedTx) return
+    const { remainingCents } = folioPaymentRefundable(payment, txFolioPayments)
+    setRefundTarget({
+      kind: 'folio-payment',
+      paymentId: payment.id,
+      folioId: selectedTx.folio_id,
+      method: payment.method,
+      squarePaymentId: payment.square_payment_id,
+      originalCents: payment.amount,
+      remainingCents,
+      note: payment.note,
+    })
   }
 
-  async function processRefund() {
-    if (!refundPayment || !refundAmount || !selectedTx) return
-    setProcessingRefund(true)
-    setRefundError('')
-    const res = await fetch('/api/refund', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paymentId: refundPayment.id, refundAmount: parseFloat(refundAmount), reason: refundReason, folioId: selectedTx.folio_id }),
-    })
-    const data = await res.json()
-    setProcessingRefund(false)
-    if (data.success) {
-      setRefundSuccess(true)
-      const { data: pmts } = await supabase.from('folio_payments').select('*').eq('folio_id', selectedTx.folio_id).order('paid_at')
-      setTxFolioPayments(pmts as any || [])
-      setTimeout(() => { setShowRefund(false); setRefundPayment(null); setRefundSuccess(false) }, 3000)
-    } else { setRefundError(data.error || 'Refund failed. Please try again.') }
+  async function reloadTxFolioPayments() {
+    if (!selectedTx) return
+    const { data: pmts } = await supabase.from('folio_payments').select('*').eq('folio_id', selectedTx.folio_id).order('paid_at')
+    setTxFolioPayments(pmts as any || [])
   }
 
   // ── Computed values ────────────────────────────────────────────────────────
@@ -1216,7 +1209,7 @@ export default function ReportsPage() {
       {/* ── TRANSACTION SLIDE-OUT PANEL ── */}
       {selectedTx&&(
         <>
-          <div className="fixed inset-0 bg-black/40 z-40" onClick={()=>{setSelectedTx(null);setShowRefund(false)}}/>
+          <div className="fixed inset-0 bg-black/40 z-40" onClick={()=>{setSelectedTx(null);setRefundTarget(null)}}/>
           <div className="fixed right-0 top-0 h-full w-full max-w-lg bg-white z-50 shadow-2xl flex flex-col overflow-hidden">
             {/* Panel header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-white">
@@ -1228,7 +1221,7 @@ export default function ReportsPage() {
               </div>
               <div className="flex items-center gap-3">
                 <button onClick={()=>router.push(`/admin/folio/${selectedTx.folio_id}`)} className="text-xs text-blue-600 font-semibold hover:underline">Open Full Folio →</button>
-                <button onClick={()=>{setSelectedTx(null);setShowRefund(false)}} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 font-bold text-lg">×</button>
+                <button onClick={()=>{setSelectedTx(null);setRefundTarget(null)}} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 font-bold text-lg">×</button>
               </div>
             </div>
 
@@ -1288,7 +1281,10 @@ export default function ReportsPage() {
                                 <span className={`text-sm font-bold ${p.status==='refunded'?'text-red-500':'text-emerald-600'}`}>
                                   {p.status==='refunded'?'':'-'}${(Math.abs(p.amount)/100).toFixed(2)}
                                 </span>
-                                {p.status==='completed'&&(
+                                {/* Gated on what is still refundable, not on the row reading
+                                    'completed' — the same swap the folio ledger got, so a
+                                    partially-refunded payment stops losing its button here too. */}
+                                {folioPaymentRefundable(p, txFolioPayments).remainingCents>0&&(
                                   <button onClick={()=>openRefund(p)} className="text-xs border border-gray-200 rounded-lg px-2 py-1 text-gray-500 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors font-semibold">
                                     Refund
                                   </button>
@@ -1318,62 +1314,21 @@ export default function ReportsPage() {
                     )
                   })()}
 
-                  {/* Refund panel */}
-                  {showRefund&&refundPayment&&(
-                    <div className="bg-red-50 border border-red-200 rounded-xl p-5">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="font-bold text-gray-900">Issue Refund</h3>
-                        <button onClick={()=>setShowRefund(false)} className="text-gray-400 hover:text-gray-600 text-xl font-bold">×</button>
-                      </div>
-                      <div className="bg-white rounded-lg p-3 mb-4 border border-red-100">
-                        <p className="text-xs text-gray-500">Original payment</p>
-                        <p className="text-sm font-bold text-gray-900 mt-0.5">
-                          ${(refundPayment.amount/100).toFixed(2)} · {refundPayment.method}
-                          {refundPayment.method==='card'&&refundPayment.square_payment_id
-                            ?<span className="text-xs text-emerald-600 ml-2">✓ Will refund to card</span>
-                            :refundPayment.method==='card'
-                            ?<span className="text-xs text-amber-600 ml-2">⚠ No Square ID</span>
-                            :<span className="text-xs text-gray-400 ml-2">Cash — return manually</span>
-                          }
-                        </p>
-                      </div>
-                      <label className="block text-xs font-semibold text-gray-700 mb-1">Refund amount ($)</label>
-                      <input type="number" step="0.01" min="0" max={(refundPayment.amount/100).toFixed(2)}
-                        value={refundAmount} onChange={e=>setRefundAmount(e.target.value)}
-                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xl font-bold mb-3"/>
-                      <div className="flex gap-2 mb-3">
-                        {[100,90,50].map(pct=>(
-                          <button key={pct} onClick={()=>setRefundAmount((refundPayment.amount*pct/10000).toFixed(2))}
-                            className="flex-1 bg-white border border-gray-200 rounded-lg py-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-50">
-                            {pct}%
-                          </button>
-                        ))}
-                      </div>
-                      <label className="block text-xs font-semibold text-gray-700 mb-1">Reason</label>
-                      <input type="text" placeholder="e.g. Cancellation" value={refundReason} onChange={e=>setRefundReason(e.target.value)}
-                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-3"/>
-                      {refundError&&<div className="bg-red-100 text-red-700 rounded-lg px-3 py-2 text-sm mb-3">{refundError}</div>}
-                      {refundSuccess?(
-                        <div className="text-center py-4">
-                          <div className="text-4xl mb-2">✅</div>
-                          <p className="font-bold text-emerald-600">Refund Successful!</p>
-                          <p className="text-sm text-gray-500">${refundAmount} refunded{refundPayment.method==='card'?' to card':' — return cash to guest'}</p>
-                        </div>
-                      ):(
-                        <button onClick={processRefund} disabled={processingRefund||!refundAmount||parseFloat(refundAmount)<=0}
-                          className="w-full py-3 rounded-xl font-bold text-white transition-colors"
-                          style={{background:processingRefund||!refundAmount?'#d1d5db':'#dc2626'}}>
-                          {processingRefund?'Processing...':'Issue Refund · $'+(refundAmount||'0.00')}
-                        </button>
-                      )}
-                    </div>
-                  )}
                 </>
               )}
             </div>
           </div>
         </>
       )}
+
+      {/* The shared modal, in place of the inline panel this drawer used to carry. Mounted at
+          the page root rather than inside the drawer so its overlay is not clipped by the
+          drawer's own stacking context. */}
+      <RefundModal
+        target={refundTarget}
+        onClose={() => setRefundTarget(null)}
+        onRefunded={reloadTxFolioPayments}
+      />
     </div>
   )
 }
