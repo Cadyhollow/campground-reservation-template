@@ -211,6 +211,26 @@ function ReservationsPageInner() {
   // "Paid" nets the refunds, since selectedFolioPaid/Surcharge now include the negative rows.
   const grossPaidTotal = originalGrossHere + grossPaidFolio
 
+  // ── What this reservation has actually been paid, across BOTH legs ──────────────────────
+  // Money reaches a reservation two ways: reservations.amount_paid (taken at booking) and
+  // folio_payments rows (taken at the desk, on the terminal, later). A booking made by staff
+  // and paid on the folio has amount_paid = 0 with real money sitting beside it, which is why
+  // a figure built from the booking leg alone reads $0.00 on a reservation holding $162.
+  //
+  // NET of the card surcharge, deliberately: this is the same expression the detail pane above
+  // uses and the same basis the folio page's "Paid" line uses, so all three surfaces agree.
+  // The gross figure (grossPaidTotal) is the one a REFUND is measured in — the card is credited
+  // what it was charged, surcharge included — but that is C2's arithmetic. Mixing the two here
+  // would trade one disagreement for another.
+  const netPaidTotal = (selected?.amount_paid || 0) + selectedFolioPaid
+
+  // Money taken ON THE FOLIO, which the cancel flow cannot return. Booking-leg refunds are
+  // themselves negative folio rows, so they are added back out: a booking refunded through the
+  // cancel flow must not read as folio money the operator still has to chase. Without that
+  // correction a reservation with $50 on the booking leg, $30 on the folio and a $45 booking
+  // refund nets to −$15 and the notice would wrongly stay hidden.
+  const folioHeldNet = selectedFolioPaid - (selectedBookingRefunds - selectedBookingRefundSurcharge)
+
   // Surcharge share of an arbitrary gross refund, so a typed amount prorates the same way
   // the percentage presets do rather than only the round numbers being compliant.
   // Prorated on the ORIGINAL charge, not on what is left: the surcharge's share of the
@@ -1218,16 +1238,45 @@ function ReservationsPageInner() {
               <div className="text-gray-600">
                 Site {cancelTarget.sites?.site_number || '—'} · {cancelTarget.arrival_date} → {cancelTarget.departure_date}
               </div>
+              {/* The true total across both legs, not the booking leg alone. This line read
+                  amount_paid + surcharge, so a reservation taken by staff and paid on the folio
+                  announced "Paid: $0.00" over real money — and then, following its own figure,
+                  offered no refund and labelled the button "Cancel — no refund". Same expression
+                  as the detail pane and the folio's "Paid" line, so the three agree. */}
               <div className="text-gray-600">
-                Paid: <strong>${(originalGrossHere / 100).toFixed(2)}</strong>
-                {resSurchargeAmt > 0 && <span className="text-gray-500"> (incl. ${(resSurchargeAmt / 100).toFixed(2)} card surcharge)</span>}
+                Paid: <strong>${(netPaidTotal / 100).toFixed(2)}</strong>
+                {resSurchargeAmt > 0 && <span className="text-gray-500"> (plus ${(resSurchargeAmt / 100).toFixed(2)} card surcharge)</span>}
               </div>
-              {grossPaidHere !== originalGrossHere && (
+              {grossPaidHere !== originalGrossHere && originalGrossHere > 0 && (
                 <div className="text-gray-600">
-                  Still refundable: <strong>${(grossPaidHere / 100).toFixed(2)}</strong> — the rest has already been refunded.
+                  Still refundable on the booking: <strong>${(grossPaidHere / 100).toFixed(2)}</strong> — the rest has already been refunded.
                 </div>
               )}
             </div>
+
+            {/* Money on the folio, which this flow does not return. Naming it is the whole point
+                of C1: the operator was previously shown $0.00 and a "no refund" button over a
+                booking holding real money, with nothing to suggest the money existed or where to
+                find it. The cancellation itself is not blocked — an operator may well want to
+                free the site now and settle the money separately — but it can no longer happen
+                in ignorance. Returning it from here is C2. */}
+            {folioHeldNet > 0 && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-900">
+                <strong>${(folioHeldNet / 100).toFixed(2)} was paid on this reservation&rsquo;s folio.</strong>{' '}
+                Cancelling here will not return it. Use the Refund buttons on the folio to issue
+                that refund — before or after cancelling, either order works.
+                {cancelTarget.id && (
+                  <a
+                    href={`/admin/folio/${cancelTarget.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block mt-1 font-medium underline"
+                  >
+                    Open this reservation&rsquo;s folio →
+                  </a>
+                )}
+              </div>
+            )}
 
             {cancelLoadingPolicy && <p className="text-sm text-gray-500">Resolving the cancellation policy…</p>}
 
@@ -1351,11 +1400,18 @@ function ReservationsPageInner() {
                 disabled={cancelProcessing || cancelLoadingPolicy || !cancelPolicy}
                 className="flex-1 bg-red-600 text-white rounded-lg py-2 text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
               >
+                {/* "Cancel — no refund" is only honest when nothing is owed. On a booking whose
+                    money sits on the folio it was a false statement of fact printed on the
+                    button that commits the action — the money is there and is still owed, it
+                    just is not returned from here. Neutral wording in that case; the amber
+                    notice above says where the money is. */}
                 {cancelProcessing
                   ? 'Processing…'
                   : cancelIssueRefund && parseFloat(cancelAmount || '0') > 0
                     ? `Cancel & refund $${parseFloat(cancelAmount || '0').toFixed(2)}`
-                    : 'Cancel — no refund'}
+                    : folioHeldNet > 0
+                      ? 'Cancel reservation'
+                      : 'Cancel — no refund'}
               </button>
             </div>
           </div>

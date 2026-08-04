@@ -713,7 +713,13 @@ export default function FolioPage() {
                       {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
                     </div>
                     <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 500, color: isPay ? '#15803d' : (ev.negative ? '#15803d' : '#111827') }}>
-                      {(isPay || ev.negative) ? '−' : ''}${(ev.amount/100).toFixed(2)}
+                      {/* A refund is a payment event with a NEGATIVE amount, so the literal '−'
+                          was prepended to an already-negative number and the row read
+                          "−$-36.00". Take the magnitude and let one sign carry the meaning:
+                          '−' reduces the balance (a payment), '+' gives money back (a refund).
+                          The Reports drawer already does this; the guest folio has the same
+                          expression but cannot reach it yet — see A2. */}
+                      {isPay && ev.amount < 0 ? '+' : (isPay || ev.negative) ? '−' : ''}${(Math.abs(ev.amount)/100).toFixed(2)}
                     </div>
                     <div style={{ width: 92, textAlign: 'right' }}>
                       <div style={{ fontSize: 13, fontWeight: 500, color: balColor }}>${(Math.abs(ev.balanceAfter)/100).toFixed(2)}</div>
