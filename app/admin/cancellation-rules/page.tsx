@@ -3,6 +3,9 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast, { Toaster } from 'react-hot-toast'
+import {
+  DEFAULT_REFUND_PERCENT, DEFAULT_DEADLINE_DAYS, DEFAULT_DEPOSIT_REFUNDABLE,
+} from '@/lib/cancellation-policy'
 
 type CancellationRule = {
   id: string
@@ -16,13 +19,18 @@ type CancellationRule = {
   is_active: boolean
 }
 
+// Prefills a NEW rule with the neutral default rather than 90/7. A form that opens already
+// filled in with someone else's cancellation fee is how that fee spreads: the numbers look
+// authoritative, so they get saved unread. Starting at "full refund" means a park that clicks
+// through without thinking has configured nothing surprising. Sourced from the constants so
+// the prefill and the resolver can never drift apart.
 const emptyRule = {
   name: '',
   start_date: '',
   end_date: '',
-  deposit_refundable: true,
-  refund_percent: 90,
-  cancellation_deadline_days: 7,
+  deposit_refundable: DEFAULT_DEPOSIT_REFUNDABLE,
+  refund_percent: DEFAULT_REFUND_PERCENT,
+  cancellation_deadline_days: DEFAULT_DEADLINE_DAYS,
   policy_text: '',
   is_active: true,
 }

@@ -834,7 +834,12 @@ function BookingForm() {
               <div className="rounded-lg p-4 bg-[var(--surface-input)] mb-6">
                 <p className="text-[var(--text-muted)] text-xs leading-relaxed">
                   <span className="text-[var(--text-primary)] font-medium">Cancellation Policy: </span>
-                  {cancellationPolicy ? cancellationPolicy.policy_text : 'Cancellations must be made at least 7 days before arrival. A 10% booking fee is retained on all cancellations.'}
+                  {/* The fallback was one park's policy spelled out — "at least 7 days… a 10%
+                      booking fee is retained" — which told every OTHER park's campers about a
+                      fee that park does not charge. It now says only that the terms are the
+                      park's to state, so a park that has not written one yet cannot
+                      accidentally publish someone else's. */}
+                  {cancellationPolicy ? cancellationPolicy.policy_text : 'Please contact us for cancellation information.'}
                 </p>
                 {cancellationPolicy && !cancellationPolicy.deposit_refundable && (
                   <p className="text-yellow-400 text-xs mt-2 font-medium">⚠ Deposit is non-refundable for these dates.</p>

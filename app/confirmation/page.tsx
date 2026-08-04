@@ -30,6 +30,13 @@ function ConfirmationContent() {
   const [settings, setSettings] = useState<any>(null)
   const [folioPaid, setFolioPaid] = useState(0)
   const [folioCharges, setFolioCharges] = useState(0)
+  // The cancellation terms for THIS booking's arrival date. This block used to be the
+  // hardcoded sentence "Cancellations must be made at least 7 days before arrival" — one
+  // park's standard policy, printed on every confirmation regardless of the rule that
+  // actually applies. A camper arriving on a holiday weekend was told 7 days when their
+  // booking is governed by a 30-day rule, and every park using this template told its campers
+  // terms it had never set.
+  const [policy, setPolicy] = useState<any>(null)
 
   useEffect(() => {
     if (reservationId) fetchReservation()
@@ -49,7 +56,22 @@ function ConfirmationContent() {
       .single()
     setReservation(data)
     await fetchFolioTotals()
+    if (data?.arrival_date) await fetchPolicy(data.arrival_date)
     setLoading(false)
+  }
+
+  // Same endpoint and same resolution the booking page uses, so the terms on the confirmation
+  // are the terms the camper agreed to at checkout. A failure here leaves policy null and the
+  // block below simply renders nothing — a missing paragraph is better than a wrong one about
+  // someone's money.
+  async function fetchPolicy(arrival: string) {
+    try {
+      const res = await fetch(`/api/cancellation-policy?arrival=${arrival}`)
+      const json = await res.json()
+      setPolicy(json?.policy || null)
+    } catch {
+      setPolicy(null)
+    }
   }
 
   // Money for a booking taken by staff — the wizard, an owner booking, a walk-in — is
@@ -214,10 +236,17 @@ function ConfirmationContent() {
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
               <p>All pets must be on a leash at all times.</p>
             </div>
-            <div className="flex gap-3">
-              <span style={{ color: 'var(--accent-color)' }}>✓</span>
-              <p>Cancellations must be made at least <span className="text-[var(--text-primary)] font-medium">7 days before arrival</span> by contacting us directly.</p>
-            </div>
+            {policy?.policy_text && (
+              <div className="flex gap-3">
+                <span style={{ color: 'var(--accent-color)' }}>✓</span>
+                <p>
+                  {policy.policy_text} To cancel, please contact us directly.
+                  {!policy.deposit_refundable && (
+                    <span className="text-[var(--text-primary)] font-medium"> The deposit is non-refundable for these dates.</span>
+                  )}
+                </p>
+              </div>
+            )}
             {balanceRemaining > 0 && (
               <div className="flex gap-3">
                 <span className="text-yellow-400">!</span>
