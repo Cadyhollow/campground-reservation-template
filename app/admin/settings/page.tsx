@@ -78,6 +78,10 @@ export default function SettingsPage() {
   const [latePriceInput, setLatePriceInput] = useState('0.00')
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const [uploadingHero, setUploadingHero] = useState(false)
+  const [heroDragging, setHeroDragging] = useState(false)
+  const [heroError, setHeroError] = useState('')
+  const [logoDragging, setLogoDragging] = useState(false)
+  const [logoError, setLogoError] = useState('')
   useEffect(() => { setEarlyPriceInput((form.early_checkin_price / 100).toFixed(2)) }, [form.early_checkin_price])
   useEffect(() => { setLatePriceInput((form.late_checkout_price / 100).toFixed(2)) }, [form.late_checkout_price])
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -148,11 +152,18 @@ export default function SettingsPage() {
     setLoading(false)
   }
 
-  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    if (!file.type.startsWith('image/')) { toast.error('Please upload an image file.'); return }
-    if (file.size > 2 * 1024 * 1024) { toast.error('Image must be smaller than 2MB.'); return }
+  // Single upload path for the logo; the file picker and the drop zone are both just entry
+  // points into it. Same shape as uploadHeroFile below, at the logo's own 2MB cap.
+  async function uploadLogoFile(file: File) {
+    setLogoError('')
+    if (!file.type.startsWith('image/')) {
+      const message = "That file isn't an image. Please choose a PNG, JPG or SVG."
+      setLogoError(message); toast.error(message); return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      const message = `That image is ${(file.size / 1024 / 1024).toFixed(1)}MB. Please choose one under 2MB.`
+      setLogoError(message); toast.error(message); return
+    }
     setUploadingLogo(true)
     const fileExt = file.name.split('.').pop()
     const fileName = `logo-${Date.now()}.${fileExt}`
@@ -167,14 +178,54 @@ export default function SettingsPage() {
     setUploadingLogo(false)
   }
 
+  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    await uploadLogoFile(file)
+    // Clear the input so re-picking the same file after a rejection still fires onChange.
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  function handleLogoDragOver(e: React.DragEvent<HTMLDivElement>) {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    if (!uploadingLogo) setLogoDragging(true)
+  }
+
+  function handleLogoDragLeave(e: React.DragEvent<HTMLDivElement>) {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+    setLogoDragging(false)
+  }
+
+  async function handleLogoDrop(e: React.DragEvent<HTMLDivElement>) {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    setLogoDragging(false)
+    if (uploadingLogo) return
+    const file = e.dataTransfer.files?.[0]
+    if (!file) return
+    await uploadLogoFile(file)
+  }
+
   // Mirrors handleLogoUpload — same bucket, same immediate write so the hero applies without
   // a separate Save. The cap is 5MB rather than the logo's 2MB: a full-width landscape photo
   // at a usable resolution routinely lands between 2 and 4MB.
-  async function handleHeroUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    if (!file.type.startsWith('image/')) { toast.error('Please upload an image file.'); return }
-    if (file.size > 5 * 1024 * 1024) { toast.error('Image must be smaller than 5MB.'); return }
+  //
+  // Both ways in — the file picker and the drop zone — funnel through this one function, so
+  // there is a single upload path and the two entry points can't drift apart. Rejections set
+  // an inline message next to the drop zone as well as the toast, since a dropped file is
+  // easy to walk away from before a toast is noticed.
+  async function uploadHeroFile(file: File) {
+    setHeroError('')
+    if (!file.type.startsWith('image/')) {
+      const message = "That file isn't an image. Please choose a PNG or JPG."
+      setHeroError(message); toast.error(message); return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      const message = `That image is ${(file.size / 1024 / 1024).toFixed(1)}MB. Please choose one under 5MB.`
+      setHeroError(message); toast.error(message); return
+    }
     setUploadingHero(true)
     const fileExt = file.name.split('.').pop()
     const fileName = `hero-${Date.now()}.${fileExt}`
@@ -187,6 +238,40 @@ export default function SettingsPage() {
     setForm({ ...form, hero_image_url: publicUrl })
     toast.success('Hero image uploaded successfully!')
     setUploadingHero(false)
+  }
+
+  async function handleHeroUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    await uploadHeroFile(file)
+    // Clear the input so re-picking the same file after a rejection still fires onChange.
+    if (heroInputRef.current) heroInputRef.current.value = ''
+  }
+
+  // preventDefault on dragover is what makes the element a valid drop target; without it the
+  // browser falls back to opening the dropped file in the tab.
+  function handleHeroDragOver(e: React.DragEvent<HTMLDivElement>) {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    if (!uploadingHero) setHeroDragging(true)
+  }
+
+  // dragleave also fires when the pointer crosses onto a child node, so only drop the
+  // highlight once the pointer has genuinely left the zone's subtree.
+  function handleHeroDragLeave(e: React.DragEvent<HTMLDivElement>) {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+    setHeroDragging(false)
+  }
+
+  async function handleHeroDrop(e: React.DragEvent<HTMLDivElement>) {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    setHeroDragging(false)
+    if (uploadingHero) return
+    const file = e.dataTransfer.files?.[0]
+    if (!file) return
+    await uploadHeroFile(file)
   }
 
   // Clearing to '' (not null) keeps the column's type simple; the landing page treats an
@@ -303,7 +388,34 @@ export default function SettingsPage() {
             </div>
             <div className="flex-1">
               <input type="file" accept="image/*" ref={fileInputRef} onChange={handleLogoUpload} className="hidden" />
-              <button onClick={() => fileInputRef.current?.click()} disabled={uploadingLogo} className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50">
+              {/* Same drop-target pattern as the hero below — clicking opens the very same picker
+                  the button does, so drag and click share one upload path. */}
+              <div
+                role="button"
+                tabIndex={0}
+                aria-label="Drag an image here, or click to browse"
+                onClick={() => { if (!uploadingLogo) fileInputRef.current?.click() }}
+                onKeyDown={e => {
+                  if (e.key !== 'Enter' && e.key !== ' ') return
+                  e.preventDefault()
+                  if (!uploadingLogo) fileInputRef.current?.click()
+                }}
+                onDragEnter={handleLogoDragOver}
+                onDragOver={handleLogoDragOver}
+                onDragLeave={handleLogoDragLeave}
+                onDrop={handleLogoDrop}
+                className={`rounded-lg border-2 border-dashed px-4 py-4 text-center text-sm transition-colors ${
+                  uploadingLogo
+                    ? 'cursor-wait border-gray-200 bg-gray-50 text-gray-400'
+                    : logoDragging
+                      ? 'cursor-copy border-green-500 bg-green-50 text-green-700'
+                      : 'cursor-pointer border-gray-300 bg-gray-50 text-gray-500 hover:border-green-400 hover:text-green-700'
+                }`}
+              >
+                {uploadingLogo ? 'Uploading…' : logoDragging ? 'Drop to upload' : 'Drag an image here, or click to browse'}
+              </div>
+              {logoError && <p className="text-xs text-red-600 mt-2">{logoError}</p>}
+              <button onClick={() => fileInputRef.current?.click()} disabled={uploadingLogo} className="mt-3 bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50">
                 {uploadingLogo ? 'Uploading...' : 'Upload New Logo'}
               </button>
               <p className="text-xs text-gray-400 mt-2">PNG, JPG or SVG. Max 2MB.</p>
@@ -337,7 +449,34 @@ export default function SettingsPage() {
                 </div>
                 <div className="flex-1">
                   <input type="file" accept="image/*" ref={heroInputRef} onChange={handleHeroUpload} className="hidden" />
-                  <div className="flex items-center gap-2">
+                  {/* Drop target. Clicking it opens the very same picker the button below does,
+                      so drag and click are two ways into one upload path. */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Drag an image here, or click to browse"
+                    onClick={() => { if (!uploadingHero) heroInputRef.current?.click() }}
+                    onKeyDown={e => {
+                      if (e.key !== 'Enter' && e.key !== ' ') return
+                      e.preventDefault()
+                      if (!uploadingHero) heroInputRef.current?.click()
+                    }}
+                    onDragEnter={handleHeroDragOver}
+                    onDragOver={handleHeroDragOver}
+                    onDragLeave={handleHeroDragLeave}
+                    onDrop={handleHeroDrop}
+                    className={`rounded-lg border-2 border-dashed px-4 py-5 text-center text-sm transition-colors ${
+                      uploadingHero
+                        ? 'cursor-wait border-gray-200 bg-gray-50 text-gray-400'
+                        : heroDragging
+                          ? 'cursor-copy border-green-500 bg-green-50 text-green-700'
+                          : 'cursor-pointer border-gray-300 bg-gray-50 text-gray-500 hover:border-green-400 hover:text-green-700'
+                    }`}
+                  >
+                    {uploadingHero ? 'Uploading…' : heroDragging ? 'Drop to upload' : 'Drag an image here, or click to browse'}
+                  </div>
+                  {heroError && <p className="text-xs text-red-600 mt-2">{heroError}</p>}
+                  <div className="flex items-center gap-2 mt-3">
                     <button onClick={() => heroInputRef.current?.click()} disabled={uploadingHero} className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50">
                       {uploadingHero ? 'Uploading...' : form.hero_image_url ? 'Replace Hero Image' : 'Upload Hero Image'}
                     </button>
