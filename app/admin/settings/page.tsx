@@ -4,6 +4,22 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import toast, { Toaster } from 'react-hot-toast'
 import Image from 'next/image'
+import imageCompression from 'browser-image-compression'
+
+// Hero photos come straight off phones, where 8-15MB and 4000px+ on the long edge is normal.
+// Downscaling in the browser before the upload keeps the landing page quick — the whole point
+// of serving the hero server-side in the first place. Only the hero does this: the logo is
+// routinely a transparent PNG, and a canvas round-trip would flatten that transparency.
+const HERO_MAX_EDGE = 2400   // px on the long edge — plenty for a full-bleed hero
+const HERO_TARGET_MB = 1.5   // what compression aims at
+const HERO_MAX_MB = 5        // hard ceiling, now enforced on the *compressed* result
+const HERO_ABSURD_MB = 50    // refuse to even hand this to the decoder
+
+// A canvas round-trip destroys these: SVG rasterizes to a fixed size, GIF loses every frame
+// past the first. They skip compression and upload untouched.
+const HERO_PASSTHROUGH_TYPES = ['image/svg+xml', 'image/gif']
+
+const formatMb = (bytes: number) => (bytes / 1024 / 1024).toFixed(1)
 
 const defaultSettings = {
   park_name: '',
@@ -80,6 +96,10 @@ export default function SettingsPage() {
   const [uploadingHero, setUploadingHero] = useState(false)
   const [heroDragging, setHeroDragging] = useState(false)
   const [heroError, setHeroError] = useState('')
+  // Distinct from uploadingHero only for the label — compression can take a beat on a big
+  // photo, and a silent pause reads as a hang. uploadingHero stays true throughout, so the
+  // disabled states hold for both stages.
+  const [optimizingHero, setOptimizingHero] = useState(false)
   const [logoDragging, setLogoDragging] = useState(false)
   const [logoError, setLogoError] = useState('')
   useEffect(() => { setEarlyPriceInput((form.early_checkin_price / 100).toFixed(2)) }, [form.early_checkin_price])
@@ -222,14 +242,47 @@ export default function SettingsPage() {
       const message = "That file isn't an image. Please choose a PNG or JPG."
       setHeroError(message); toast.error(message); return
     }
-    if (file.size > 5 * 1024 * 1024) {
-      const message = `That image is ${(file.size / 1024 / 1024).toFixed(1)}MB. Please choose one under 5MB.`
+    // Cheap guard before the decoder sees anything: something this large would lock the tab up
+    // for seconds on its way to failing anyway.
+    if (file.size > HERO_ABSURD_MB * 1024 * 1024) {
+      const message = `That image is ${formatMb(file.size)}MB. Please choose one under ${HERO_ABSURD_MB}MB.`
       setHeroError(message); toast.error(message); return
     }
+
     setUploadingHero(true)
-    const fileExt = file.name.split('.').pop()
+    let upload = file
+    // Skip work that can't pay off: formats a canvas would ruin, and files already at target.
+    // maxWidthOrHeight only ever shrinks, so an image under the cap keeps its dimensions.
+    if (!HERO_PASSTHROUGH_TYPES.includes(file.type) && file.size > HERO_TARGET_MB * 1024 * 1024) {
+      setOptimizingHero(true)
+      try {
+        const compressed = await imageCompression(file, {
+          maxWidthOrHeight: HERO_MAX_EDGE,
+          maxSizeMB: HERO_TARGET_MB,
+          initialQuality: 0.85,
+          useWebWorker: true,
+        })
+        // Keep the original name — fileExt below reads from it — and whatever type the
+        // compressor actually emitted.
+        upload = new File([compressed], file.name, { type: compressed.type || file.type })
+      } catch {
+        // Formats the browser can't decode (HEIC in Chrome, say) land here. Carry on with the
+        // original; the ceiling below still protects storage.
+        upload = file
+      }
+      setOptimizingHero(false)
+    }
+
+    // The ceiling runs on the compressed result, so the big phone photo that used to bounce
+    // now sails through. Only something still oversized after optimizing gets refused.
+    if (upload.size > HERO_MAX_MB * 1024 * 1024) {
+      const message = `That image is still ${formatMb(upload.size)}MB after optimizing. Please choose a smaller one.`
+      setHeroError(message); toast.error(message); setUploadingHero(false); return
+    }
+
+    const fileExt = upload.name.split('.').pop()
     const fileName = `hero-${Date.now()}.${fileExt}`
-    const { error: uploadError } = await supabase.storage.from('logos').upload(fileName, file, { upsert: true })
+    const { error: uploadError } = await supabase.storage.from('logos').upload(fileName, upload, { upsert: true })
     if (uploadError) { toast.error('Error uploading hero image.'); setUploadingHero(false); return }
     const { data: urlData } = supabase.storage.from('logos').getPublicUrl(fileName)
     const publicUrl = urlData.publicUrl
@@ -473,12 +526,12 @@ export default function SettingsPage() {
                           : 'cursor-pointer border-gray-300 bg-gray-50 text-gray-500 hover:border-green-400 hover:text-green-700'
                     }`}
                   >
-                    {uploadingHero ? 'Uploading…' : heroDragging ? 'Drop to upload' : 'Drag an image here, or click to browse'}
+                    {optimizingHero ? 'Optimizing…' : uploadingHero ? 'Uploading…' : heroDragging ? 'Drop to upload' : 'Drag an image here, or click to browse'}
                   </div>
                   {heroError && <p className="text-xs text-red-600 mt-2">{heroError}</p>}
                   <div className="flex items-center gap-2 mt-3">
                     <button onClick={() => heroInputRef.current?.click()} disabled={uploadingHero} className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50">
-                      {uploadingHero ? 'Uploading...' : form.hero_image_url ? 'Replace Hero Image' : 'Upload Hero Image'}
+                      {optimizingHero ? 'Optimizing...' : uploadingHero ? 'Uploading...' : form.hero_image_url ? 'Replace Hero Image' : 'Upload Hero Image'}
                     </button>
                     {form.hero_image_url && (
                       <button onClick={handleHeroRemove} disabled={uploadingHero} className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50">
@@ -486,7 +539,7 @@ export default function SettingsPage() {
                       </button>
                     )}
                   </div>
-                  <p className="text-xs text-gray-400 mt-2">PNG or JPG. Max 5MB. A wide landscape photo works best — roughly 2000&times;1200 or larger.</p>
+                  <p className="text-xs text-gray-400 mt-2">PNG or JPG. Big photos straight off a phone are fine — they&rsquo;re resized and compressed automatically. A wide landscape photo works best.</p>
                   {form.hero_image_url && <p className="text-xs text-green-600 mt-1">✓ Hero image set</p>}
                 </div>
               </div>
