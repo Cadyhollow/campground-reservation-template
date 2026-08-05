@@ -21,6 +21,23 @@ const HERO_PASSTHROUGH_TYPES = ['image/svg+xml', 'image/gif']
 
 const formatMb = (bytes: number) => (bytes / 1024 / 1024).toFixed(1)
 
+// HEIC is what iPhones shoot by default. Safari decodes it; Chrome and Firefox don't — and a
+// browser that can't decode a format frequently reports an empty file.type for it, so the
+// filename is the more dependable of the two signals. Check both.
+function isHeic(file: File) {
+  const type = file.type.toLowerCase()
+  return type === 'image/heic' || type === 'image/heif' || /\.hei[cf]$/i.test(file.name)
+}
+
+// Only reached when this browser genuinely failed to decode the file, so "this browser" is
+// accurate and Safari is a real way out.
+const HERO_HEIC_MESSAGE = "This looks like an iPhone HEIC photo, which this browser can't display. Save it as a JPEG — or upload from Safari — and try again."
+
+// The logo is refused regardless of browser (see uploadLogoFile), so this one deliberately
+// doesn't offer Safari as an escape hatch — uploading it there would still leave visitors on
+// other browsers with a broken logo.
+const LOGO_HEIC_MESSAGE = "This looks like an iPhone HEIC photo. Not every visitor's browser can display HEIC, so please save it as a JPEG or PNG and try again."
+
 const defaultSettings = {
   park_name: '',
   park_tagline: '',
@@ -176,6 +193,13 @@ export default function SettingsPage() {
   // points into it. Same shape as uploadHeroFile below, at the logo's own 2MB cap.
   async function uploadLogoFile(file: File) {
     setLogoError('')
+    // Nothing on this path decodes or re-encodes the logo, so a HEIC would land in storage
+    // untouched and break for every visitor whose browser can't read it. A decode probe would
+    // pass in Safari and let exactly that through, so refuse HEIC outright instead. Checked
+    // ahead of the gate below because HEIC frequently arrives with an empty type.
+    if (isHeic(file)) {
+      setLogoError(LOGO_HEIC_MESSAGE); toast.error(LOGO_HEIC_MESSAGE); return
+    }
     if (!file.type.startsWith('image/')) {
       const message = "That file isn't an image. Please choose a PNG, JPG or SVG."
       setLogoError(message); toast.error(message); return
@@ -238,7 +262,10 @@ export default function SettingsPage() {
   // easy to walk away from before a toast is noticed.
   async function uploadHeroFile(file: File) {
     setHeroError('')
-    if (!file.type.startsWith('image/')) {
+    const heic = isHeic(file)
+    // A HEIC often arrives with an empty type, which would trip this gate and report the wrong
+    // problem entirely. Let it through to the decode attempt below, which gives a real answer.
+    if (!file.type.startsWith('image/') && !heic) {
       const message = "That file isn't an image. Please choose a PNG or JPG."
       setHeroError(message); toast.error(message); return
     }
@@ -253,24 +280,43 @@ export default function SettingsPage() {
     let upload = file
     // Skip work that can't pay off: formats a canvas would ruin, and files already at target.
     // maxWidthOrHeight only ever shrinks, so an image under the cap keeps its dimensions.
-    if (!HERO_PASSTHROUGH_TYPES.includes(file.type) && file.size > HERO_TARGET_MB * 1024 * 1024) {
+    //
+    // HEIC is the exception and always goes through, however small. The decode attempt is what
+    // tells us whether this browser can read it at all, and the re-encode is what stops a .heic
+    // reaching storage — where every visitor on a browser that can't decode it sees a broken
+    // hero. Without this, a sub-1.5MB iPhone photo would skip the check and upload broken.
+    const mustCompress = heic ||
+      (!HERO_PASSTHROUGH_TYPES.includes(file.type) && file.size > HERO_TARGET_MB * 1024 * 1024)
+    if (mustCompress) {
       setOptimizingHero(true)
+      let decodeFailed = false
       try {
         const compressed = await imageCompression(file, {
           maxWidthOrHeight: HERO_MAX_EDGE,
           maxSizeMB: HERO_TARGET_MB,
           initialQuality: 0.85,
           useWebWorker: true,
+          // Safari decodes HEIC happily, but the result would round-trip back out as HEIC and
+          // be just as unreadable elsewhere. Pin the output to JPEG so what we store displays
+          // everywhere.
+          ...(heic ? { fileType: 'image/jpeg' } : {}),
         })
         // Keep the original name — fileExt below reads from it — and whatever type the
-        // compressor actually emitted.
-        upload = new File([compressed], file.name, { type: compressed.type || file.type })
+        // compressor actually emitted. A converted HEIC needs the extension to follow suit.
+        const name = heic ? file.name.replace(/\.hei[cf]$/i, '.jpg') : file.name
+        upload = new File([compressed], name, { type: compressed.type || file.type })
       } catch {
-        // Formats the browser can't decode (HEIC in Chrome, say) land here. Carry on with the
-        // original; the ceiling below still protects storage.
-        upload = file
+        decodeFailed = true
       }
       setOptimizingHero(false)
+
+      // A HEIC this browser can't decode is one it can't display either, so say so plainly
+      // rather than falling back and storing something that renders as a broken image.
+      if (decodeFailed && heic) {
+        setHeroError(HERO_HEIC_MESSAGE); toast.error(HERO_HEIC_MESSAGE); setUploadingHero(false); return
+      }
+      // Any other decode oddity keeps the old behaviour: carry on with the original file
+      // (upload is still it) and let the ceiling below decide.
     }
 
     // The ceiling runs on the compressed result, so the big phone photo that used to bounce
