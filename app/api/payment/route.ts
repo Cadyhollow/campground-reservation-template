@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { Resend } from 'resend'
+import { checkBookability } from '@/lib/bookability'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -47,28 +48,38 @@ export async function POST(request: NextRequest) {
       lines = [],
     } = body
 
-    // Double-check availability before charging
-    const { data: existingReservations } = await supabase
-      .from('reservations')
-      .select('id')
-      .eq('site_id', siteId)
-      .neq('status', 'cancelled')
-      .lt('arrival_date', departure)
-      .gt('departure_date', arrival)
-
-    if (existingReservations && existingReservations.length > 0) {
-      return NextResponse.json(
-        { error: 'Sorry, this site was just booked by someone else. Please select a different site.' },
-        { status: 409 }
-      )
-    }
-
-    // Look up site details
+    // Look up site details. Moved above the bookability check so the min-stay rules can be
+    // matched against this site's type without a second lookup.
     const { data: siteData } = await supabase
       .from('sites')
-      .select('site_number, site_type')
+      .select('id, site_number, site_type')
       .eq('id', siteId)
       .single()
+
+    // THE CHOKEPOINT. Everything the availability search would have rejected — out of season,
+    // a blocked date, an overlapping reservation, under the site's minimum stay — is rejected
+    // here too, by the same code, because /book takes its dates from URL params and can be
+    // reached without ever running a search. Previously only the double-booking case was
+    // re-checked, so a hand-edited request could be charged for a date the park has closed.
+    //
+    // This sits BEFORE the Square call below and returns early, so a booking rejected here has
+    // had no payment attempted against it. That ordering is the whole point: the alternative is
+    // a guest charged for a stay the park will not honour.
+    const bookability = await checkBookability(supabase, {
+      arrival,
+      departure,
+      siteId,
+      site: siteData,
+    })
+
+    if (!bookability.bookable) {
+      return NextResponse.json(
+        { error: bookability.message, reason: bookability.reason },
+        // 409 for "someone got there first", which is worth retrying with another site; 400 for
+        // dates that were never bookable in the first place.
+        { status: bookability.reason === 'double-booked' ? 409 : 400 }
+      )
+    }
 
     // Process payment with Square REST API
     const squareResponse = await fetch(

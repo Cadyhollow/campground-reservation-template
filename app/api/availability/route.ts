@@ -1,22 +1,18 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
+import {
+  checkSeason,
+  fetchDateFacts,
+  checkDateFacts,
+  resolveMinNights,
+  ruleAppliesToSite,
+  DEFAULT_CLOSED_MESSAGE,
+} from '@/lib/bookability'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
-
-function monthDayToISO(monthDay: string): string {
-  const months: Record<string, string> = {
-    'January': '01', 'February': '02', 'March': '03', 'April': '04',
-    'May': '05', 'June': '06', 'July': '07', 'August': '08',
-    'September': '09', 'October': '10', 'November': '11', 'December': '12'
-  }
-  const parts = monthDay.trim().split(' ')
-  const month = months[parts[0]] || '01'
-  const day = String(parseInt(parts[1])).padStart(2, '0')
-  return `${month}-${day}`
-}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
@@ -34,21 +30,17 @@ export async function GET(request: NextRequest) {
     .limit(1)
     .single()
 
-  if (settings?.season_start && settings?.season_end) {
-    const arrivalDate = new Date(arrival + 'T12:00:00')
-    const year = arrivalDate.getFullYear()
-    const seasonStart = new Date(`${year}-${monthDayToISO(settings.season_start)}T00:00:00`)
-    const seasonEnd = new Date(`${year}-${monthDayToISO(settings.season_end)}T23:59:59`)
-
-    if (arrivalDate < seasonStart || arrivalDate > seasonEnd) {
-      return NextResponse.json({
-        sites: [],
-        closed: true,
-        closedMessage: settings.closed_season_message || 'We are closed for the season. We look forward to welcoming you back next year!',
-        seasonStart: settings.season_start,
-        seasonEnd: settings.season_end,
-      })
-    }
+  // The season gate now lives in lib/bookability, so /api/payment applies the same one before
+  // charging. The closed payload below is unchanged — search still answers with the park's
+  // message and season dates rather than a bare error.
+  if (!checkSeason(arrival, settings).bookable) {
+    return NextResponse.json({
+      sites: [],
+      closed: true,
+      closedMessage: settings?.closed_season_message || DEFAULT_CLOSED_MESSAGE,
+      seasonStart: settings?.season_start,
+      seasonEnd: settings?.season_end,
+    })
   }
 
   let query = supabase
@@ -67,31 +59,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  const { data: reservations } = await supabase
-    .from('reservations')
-    .select('site_id')
-    .neq('status', 'cancelled')
-    .lt('arrival_date', departure)
-    .gt('departure_date', arrival)
+  // Same two range queries as before, and the same filter — now shared with /api/payment, so a
+  // site the search hides as blocked or already booked is a site create refuses to charge for.
+  const dateFacts = await fetchDateFacts(supabase, arrival, departure)
 
-  const { data: blockedDates } = await supabase
-    .from('blocked_dates')
-    .select('site_id, date')
-    .gte('date', arrival)
-    .lt('date', departure)
-
-  const bookedSiteIds = new Set(reservations?.map(r => r.site_id) || [])
-  const blockedAllSites = blockedDates?.some(b => !b.site_id) || false
-  const blockedSpecificSiteIds = new Set(
-    blockedDates?.filter(b => b.site_id).map(b => b.site_id) || []
-  )
-
-  const availableSites = sites?.filter(site => {
-    if (bookedSiteIds.has(site.id)) return false
-    if (blockedAllSites) return false
-    if (blockedSpecificSiteIds.has(site.id)) return false
-    return true
-  }) || []
+  const availableSites = sites?.filter(site => checkDateFacts(site.id, dateFacts).bookable) || []
 
   const { data: pricingRules } = await supabase
     .from('pricing_rules')
@@ -117,26 +89,13 @@ export async function GET(request: NextRequest) {
     .eq('is_active', true)
 
   const sitesWithPricing = availableSites.map(site => {
-    const applicableRules = pricingRules?.filter(rule => {
-      if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
-      if (rule.site_id) return rule.site_id === site.id
-      if (rule.site_type) return rule.site_type === site.site_type
-      return false
-    }) || []
+    const applicableRules = pricingRules?.filter(rule => ruleAppliesToSite(rule, site)) || []
 
     const bestRule = applicableRules.sort((a, b) => b.priority - a.priority)[0]
     const nightlyRate = bestRule ? bestRule.nightly_rate : site.base_rate
 
-    const applicableMinStay = minStayRules?.filter(rule => {
-      if (rule.site_ids) return rule.site_ids.split(',').includes(site.id)
-      if (rule.site_id) return rule.site_id === site.id
-      if (rule.site_type) return rule.site_type === site.site_type
-      return false
-    }) || []
-
-    const minStay = applicableMinStay.length > 0
-      ? Math.max(...applicableMinStay.map(r => r.min_nights))
-      : 1
+    // The minimum the guest is shown, resolved by the same function /api/payment enforces with.
+    const minStay = resolveMinNights(minStayRules, site)
 
     const basePrice = nightlyRate * nights
 
