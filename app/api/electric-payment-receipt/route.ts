@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
+import { requireAdmin } from '@/lib/require-admin'
 
 function getResend() { return new Resend(process.env.RESEND_API_KEY) }
 const supabase = createClient(
@@ -9,6 +10,9 @@ const supabase = createClient(
 )
 
 export async function POST(request: NextRequest) {
+  const denied = requireAdmin(request)
+  if (denied) return denied
+
   try {
     const body = await request.json()
     const { guestName, guestEmail, siteNumber, paymentAmount, paymentMethod, paymentNote, paidAt, remainingBalance } = body

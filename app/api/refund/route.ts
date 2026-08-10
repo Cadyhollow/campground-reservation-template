@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { processFolioRefund } from '@/lib/folio-refund'
+import { requireAdmin } from '@/lib/require-admin'
 
 // The refund itself now lives in lib/folio-refund.ts, unchanged, so that
 // /api/reservation-cancel can reuse it rather than reimplement the cap, the Square call and the
 // negative row. Same move Part 2 made for the booking leg. This route is the HTTP wrapper it
 // always was: same request body, same responses.
 export async function POST(request: NextRequest) {
+  const denied = requireAdmin(request)
+  if (denied) return denied
+
   try {
     const { paymentId, refundAmount, reason, folioId } = await request.json()
 

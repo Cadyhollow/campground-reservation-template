@@ -1,7 +1,11 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getSquareConnection } from '@/lib/square-oauth'
+import { requireAdmin } from '@/lib/require-admin'
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const denied = requireAdmin(request)
+  if (denied) return denied
+
   try {
     const campgroundId = process.env.CAMPGROUND_ID || 'default'
     const connection = await getSquareConnection(campgroundId)

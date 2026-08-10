@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { notVoided } from '@/lib/ledger'
+import { requireAdmin } from '@/lib/require-admin'
 
 // POST /api/guests/balances  { guest_ids: string[] }
 // → { balances: { [guest_id]: cents } }
@@ -13,20 +14,18 @@ import { notVoided } from '@/lib/ledger'
 // all guests) and done in one batched round-trip — three .in(...) queries total, no
 // N+1 regardless of list size.
 //
-// AUTH: middleware.ts only guards /admin/* PAGES (matcher '/admin/:path*'), not
-// /api/*, so this route enforces the admin session itself — the same 'admin_session'
-// cookie the login sets, covering owner AND staff (owner/staff is a view toggle, not
-// a separate credential). NOT summit-gated: payment mode is for everyone on the plan.
+// AUTH: middleware.ts only guards /admin/* PAGES (matcher '/admin/:path*'), not /api/*, so this
+// route enforces the admin session itself. That check is now lib/require-admin.ts — this route
+// was the original of it, and every other admin route uses the same helper. NOT summit-gated:
+// payment mode is for everyone on the plan.
 const svc = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
 export async function POST(request: NextRequest) {
-  const session = request.cookies.get('admin_session')
-  if (!session || session.value !== 'authenticated') {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const denied = requireAdmin(request)
+  if (denied) return denied
 
   const body = await request.json().catch(() => ({}))
   const ids: string[] = Array.isArray(body.guest_ids)
