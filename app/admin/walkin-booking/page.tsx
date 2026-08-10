@@ -3,6 +3,7 @@ import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useRouter } from 'next/navigation'
 import toast, { Toaster } from 'react-hot-toast'
+import { SQUARE_SDK_URL } from '@/lib/square-env'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -298,12 +299,13 @@ export default function WalkInBookingPage() {
       if (!sq) {
         if (!(window as any).Square) {
           const script = document.createElement('script')
-          script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
-            ? 'https://web.squarecdn.com/v1/square.js'
-            : 'https://sandbox.web.squarecdn.com/v1/square.js'
+          // Resolved centrally: sandbox is opt-in by exact match, everything else is
+        // production. This was an inline ternary that fell through to the SANDBOX SDK
+        // for any value that was not exactly 'production'.
+        script.src = SQUARE_SDK_URL
           await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
         }
-        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, 'L42H3PRBWB5CJ')
+        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!)
         setSquareInstance(sq)
       }
       const card = await sq.card()

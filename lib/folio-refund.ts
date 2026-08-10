@@ -15,6 +15,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { folioRefundRef } from '@/lib/refund-refs'
 import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
+import { SQUARE_API_BASE } from '@/lib/square-env'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -101,7 +102,7 @@ export async function processFolioRefund(input: FolioRefundInput): Promise<Folio
   // still written — the money is genuinely owed and the folio must say so — but an operator
   // has to physically return it.
   if (payment.method === 'card' && payment.square_payment_id) {
-    const squareResponse = await fetch('https://connect.squareup.com/v2/refunds', {
+    const squareResponse = await fetch(`${SQUARE_API_BASE}/v2/refunds`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

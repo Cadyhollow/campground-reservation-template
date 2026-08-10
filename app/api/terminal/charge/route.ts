@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { fetchSquareCheckout, normalizeCheckoutState } from '@/lib/square-terminal'
 import { requireAdmin } from '@/lib/require-admin'
+import { SQUARE_API_BASE } from '@/lib/square-env'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -70,7 +71,7 @@ export async function POST(request: NextRequest) {
     const idempotencyKey = `folio-${folioId}-${Date.now()}`
 
     // Send checkout request to Square Terminal API
-    const squareResponse = await fetch('https://connect.squareup.com/v2/terminals/checkouts', {
+    const squareResponse = await fetch(`${SQUARE_API_BASE}/v2/terminals/checkouts`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

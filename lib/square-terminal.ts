@@ -3,6 +3,8 @@
 // Kept out of the route files because a Next route module may only export route handlers —
 // exporting anything else from route.ts fails the build.
 
+import { SQUARE_API_BASE } from '@/lib/square-env'
+
 export type TerminalState =
   | 'pending'
   | 'in_progress'
@@ -39,7 +41,7 @@ const SQUARE_HEADERS = () => ({
 })
 
 export async function fetchSquareCheckout(checkoutId: string) {
-  const res = await fetch(`https://connect.squareup.com/v2/terminals/checkouts/${checkoutId}`, {
+  const res = await fetch(`${SQUARE_API_BASE}/v2/terminals/checkouts/${checkoutId}`, {
     headers: SQUARE_HEADERS(),
   })
   const data = await res.json()
@@ -47,7 +49,7 @@ export async function fetchSquareCheckout(checkoutId: string) {
 }
 
 export async function cancelSquareCheckout(checkoutId: string) {
-  const res = await fetch(`https://connect.squareup.com/v2/terminals/checkouts/${checkoutId}/cancel`, {
+  const res = await fetch(`${SQUARE_API_BASE}/v2/terminals/checkouts/${checkoutId}/cancel`, {
     method: 'POST',
     headers: SQUARE_HEADERS(),
   })

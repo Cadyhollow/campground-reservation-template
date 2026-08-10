@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { Resend } from 'resend'
 import { checkBookability } from '@/lib/bookability'
 import { sendConfirmationEmails } from '@/lib/confirmation-email'
+import { SQUARE_API_BASE } from '@/lib/square-env'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -84,7 +85,7 @@ export async function POST(request: NextRequest) {
 
     // Process payment with Square REST API
     const squareResponse = await fetch(
-     `https://connect.squareup.com/v2/payments`,
+     `${SQUARE_API_BASE}/v2/payments`,
       {
         method: 'POST',
         headers: {

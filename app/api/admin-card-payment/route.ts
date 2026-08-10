@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { requireAdmin } from '@/lib/require-admin'
+import { SQUARE_API_BASE } from '@/lib/square-env'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -27,7 +28,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Charge the card via Square
-    const squareResponse = await fetch('https://connect.squareup.com/v2/payments', {
+    const squareResponse = await fetch(`${SQUARE_API_BASE}/v2/payments`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
