@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import Image from 'next/image'
 import { supabase } from '@/lib/supabase'
 import PaymentTrustRow from '../components/PaymentTrustRow'
+import { SQUARE_SDK_URL } from '@/lib/square-env'
 
 type Addon = {
   id: string
@@ -265,14 +266,15 @@ function BookingForm() {
   async function loadSquare() {
     if (squareLoaded) return
     const script = document.createElement('script')
-    script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
-      ? 'https://web.squarecdn.com/v1/square.js'
-      : 'https://sandbox.web.squarecdn.com/v1/square.js'
+    // Resolved centrally: sandbox is opt-in by exact match, everything else is
+        // production. This was an inline ternary that fell through to the SANDBOX SDK
+        // for any value that was not exactly 'production'.
+        script.src = SQUARE_SDK_URL
     script.onload = async () => {
       try {
         const payments = (window as any).Square.payments(
           process.env.NEXT_PUBLIC_SQUARE_APP_ID!,
-          'L42H3PRBWB5CJ'
+          process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!
         )
         squareRef.current = payments
         const card = await payments.card()

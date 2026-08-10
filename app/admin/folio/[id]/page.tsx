@@ -7,6 +7,7 @@ import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
 import { folioPaymentRefundable, bookingLegRefundable, prorateSurcharge } from '@/lib/refundable'
 import { computePolicyRefund, normalizePolicy } from '@/lib/cancellation-policy'
+import { SQUARE_SDK_URL } from '@/lib/square-env'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -222,11 +223,12 @@ export default function FolioPage() {
       let sq = squareInstanceRef
       if (!sq) {
         const script = document.createElement('script')
-        script.src = process.env.NEXT_PUBLIC_SQUARE_ENVIRONMENT === 'production'
-          ? 'https://web.squarecdn.com/v1/square.js'
-          : 'https://sandbox.web.squarecdn.com/v1/square.js'
+        // Resolved centrally: sandbox is opt-in by exact match, everything else is
+        // production. This was an inline ternary that fell through to the SANDBOX SDK
+        // for any value that was not exactly 'production'.
+        script.src = SQUARE_SDK_URL
         await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
-        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, 'L42H3PRBWB5CJ')
+        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!)
         setSquareInstanceRef(sq)
       }
       const card = await sq.card()

@@ -11,6 +11,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { BOOKING_REFUND_REF } from '@/lib/refund-refs'
 import { bookingLegRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
+import { SQUARE_API_BASE } from '@/lib/square-env'
 
 // prorateSurcharge now lives in lib/refundable.ts so the admin pages can use it without
 // dragging this module's service-role client into the client bundle. Re-exported here because
@@ -132,7 +133,7 @@ export async function processReservationRefund(
   // Process Square refund if card payment with square_payment_id
   let squareRefundId: string | null = null
   if (squarePaymentId) {
-    const squareResponse = await fetch('https://connect.squareup.com/v2/refunds', {
+    const squareResponse = await fetch(`${SQUARE_API_BASE}/v2/refunds`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

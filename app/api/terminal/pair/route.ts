@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { requireAdmin } from '@/lib/require-admin'
+import { SQUARE_API_BASE } from '@/lib/square-env'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -15,7 +16,7 @@ export async function POST(request: NextRequest) {
     const { deviceName } = await request.json()
 
     // Generate a device code from Square
-    const squareResponse = await fetch('https://connect.squareup.com/v2/devices/codes', {
+    const squareResponse = await fetch(`${SQUARE_API_BASE}/v2/devices/codes`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -72,7 +73,7 @@ export async function GET(request: NextRequest) {
 
     // Check pairing status
     const squareResponse = await fetch(
-      `https://connect.squareup.com/v2/devices/codes/${deviceCodeId}`,
+      `${SQUARE_API_BASE}/v2/devices/codes/${deviceCodeId}`,
       {
         headers: {
           'Authorization': `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
