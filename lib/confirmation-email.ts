@@ -315,7 +315,7 @@ export async function sendConfirmationEmails(payload: ConfirmationEmailPayload):
                   <td style="padding:6px 0;color:#9CA3AF;font-size:13px;text-align:right;">$${(amountPaid / 100).toFixed(2)}</td>
                 </tr>
                 <tr>
-                  <td style="padding:6px 0;color:#9CA3AF;font-size:13px;">Card processing fee</td>
+                  <td style="padding:6px 0;color:#9CA3AF;font-size:13px;">Transaction fee</td>
                   <td style="padding:6px 0;color:#9CA3AF;font-size:13px;text-align:right;">$${(surchargeAmount / 100).toFixed(2)}</td>
                 </tr>` : ''}
                 <tr>

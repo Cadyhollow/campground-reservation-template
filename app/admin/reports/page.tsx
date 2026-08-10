@@ -683,7 +683,7 @@ export default function ReportsPage() {
               {/* Revenue above is gross, so this is a BREAKOUT of money already counted in it —
                   not an extra amount to add on. Worded that way so the figure can be reconciled
                   against the Square processing fees without reading as double-counting. */}
-              <KPICard label="Card Surcharges Collected" value={'$'+totalSurcharge.toFixed(2)} sub="included in revenue above"/>
+              <KPICard label="Transaction Fees Collected" value={'$'+totalSurcharge.toFixed(2)} sub="included in revenue above"/>
               <KPICard label="Avg Booking Lead Time" value={avgLeadTime.toFixed(1)+' days'} sub="booked in advance"/>
             </div>
 

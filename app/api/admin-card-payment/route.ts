@@ -61,7 +61,9 @@ export async function POST(request: NextRequest) {
         amount: amount,
         surcharge_amount: surchargeAmount,
         status: 'completed',
-        note: note + (surchargeAmount > 0 ? ` (incl. card fee: $${(surchargeAmount/100).toFixed(2)})` : '') + ' · Manual entry',
+        // See the staff folio: the fee is rendered from surcharge_amount now, so baking it
+        // into the note printed it twice. Amounts unchanged; ' · Manual entry' kept.
+        note: note + ' · Manual entry',
         square_payment_id: squarePaymentId,
       })
     } else {

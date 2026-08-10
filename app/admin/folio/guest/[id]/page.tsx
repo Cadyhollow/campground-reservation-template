@@ -324,7 +324,9 @@ export default function GuestAccountPage() {
       amount: totalAmount,
       surcharge_amount: surchargeAmount,
       status: 'completed',
-      note: paymentNote + (surchargeAmount > 0 ? ' (incl. ' + cardSurcharge + '% card fee: $' + (surchargeAmount/100).toFixed(2) + ')' : ''),
+      // See the staff folio: the fee is rendered from surcharge_amount now, so baking it
+      // into the note printed it twice. Amounts unchanged; only this note's text is shorter.
+      note: paymentNote,
     })
     setSavingPayment(false)
     setShowPayment(false)
@@ -360,6 +362,11 @@ export default function GuestAccountPage() {
     sub: string
     note?: string | null
     taxAmount?: number
+    // Transaction fee carried by this payment, from the stored surcharge_amount. Same
+    // contract as the staff folio: INFORMATIONAL ONLY. `amount` stays cash-canonical
+    // (amount − surcharge), so the running balance and every total are untouched.
+    // Negative on refund rows, hence the sign check at render.
+    feeAmount?: number
     amount: number
     itemId?: string
     paymentId?: string
@@ -378,7 +385,7 @@ export default function GuestAccountPage() {
     // A refund row is itself a payment event with a negative amount; folioPaymentRefundable
     // returns 0 for it, so refunds of refunds are never offered.
     const { remainingCents } = folioPaymentRefundable(p, payments)
-    ledgerEvents.push({ key: `pay-${p.id}`, kind: 'payment', ts: p.paid_at ? new Date(p.paid_at).getTime() : 0, order: _lOrder++, label: p.method.charAt(0).toUpperCase() + p.method.slice(1), sub: fmtLedgerDate(p.paid_at), note: p.note, amount: p.amount - (p.surcharge_amount || 0), paymentId: p.id, payment: p, refundableCents: remainingCents, balanceAfter: 0 })
+    ledgerEvents.push({ key: `pay-${p.id}`, kind: 'payment', ts: p.paid_at ? new Date(p.paid_at).getTime() : 0, order: _lOrder++, label: p.method.charAt(0).toUpperCase() + p.method.slice(1), sub: fmtLedgerDate(p.paid_at), note: p.note, feeAmount: p.surcharge_amount || 0, amount: p.amount - (p.surcharge_amount || 0), paymentId: p.id, payment: p, refundableCents: remainingCents, balanceAfter: 0 })
   })
   ledgerEvents.sort((a, b) => a.ts - b.ts || a.order - b.order)
   let _lBal = 0
@@ -466,6 +473,11 @@ export default function GuestAccountPage() {
                       <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.sub}{isPay ? ' · payment' : ' · charge'}</div>
                       {ev.note && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 1 }}>{ev.note}</div>}
                       {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
+                      {/* Informational only — already excluded from the amount at right and
+                          from every total. Cash and check carry no fee, so this is blank.
+                          "plus … charged": the fee is added on top of the base, and the amount
+                          at right is the base. See the staff folio for the full reasoning. */}
+                      {ev.feeAmount ? <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.feeAmount < 0 ? `$${(Math.abs(ev.feeAmount)/100).toFixed(2)} transaction fee refunded` : `plus $${(ev.feeAmount/100).toFixed(2)} transaction fee charged`}</div> : null}
                     </div>
                     <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 600, color: isPay ? '#15803d' : '#111827' }}>
                       {/* A refund is a payment event with a NEGATIVE amount, so the literal
@@ -617,7 +629,7 @@ export default function GuestAccountPage() {
             {paymentMethod === 'card' && cardSurcharge > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, padding: '10px 14px', background: waiveFee ? '#f0fdf4' : '#fffbeb', border: '1px solid', borderColor: waiveFee ? '#bbf7d0' : '#fde68a', borderRadius: 8 }}>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Card fee ({cardSurcharge}%)</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Transaction fee ({cardSurcharge}%)</div>
                   <div style={{ fontSize: 12, color: '#6b7280' }}>{waiveFee ? 'Fee waived for this payment' : 'Applied to card payments'}</div>
                 </div>
                 <button
@@ -704,7 +716,7 @@ export default function GuestAccountPage() {
             {paymentMethod === 'card' && cardSurcharge > 0 && paymentAmountCents > 0 && (
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#92400e' }}>{cardSurcharge}% card fee</span>
+                  <span style={{ color: '#92400e' }}>{cardSurcharge}% transaction fee</span>
                   <span style={{ color: '#92400e', fontWeight: 600 }}>+${(surchargePreview/100).toFixed(2)}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontWeight: 700 }}>

@@ -323,7 +323,7 @@ export default function TransactionsPage() {
                             <div className="text-right">
                               <div className="font-bold text-sm text-gray-900">${(p.amount / 100).toFixed(2)}</div>
                               {p.surcharge_amount > 0 && (
-                                <div className="text-xs text-gray-400">incl. ${(p.surcharge_amount / 100).toFixed(2)} fee</div>
+                                <div className="text-xs text-gray-400">incl. ${(p.surcharge_amount / 100).toFixed(2)} transaction fee</div>
                               )}
                             </div>
                             <svg

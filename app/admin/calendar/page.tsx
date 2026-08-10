@@ -988,7 +988,9 @@ export default function CalendarPage() {
           setPaySaving(true); setPayError('')
           const { error } = await supabase.from('folio_payments').insert({
             folio_id: fid, method: payMethod, amount: totalAmount, surcharge_amount: surcharge, status: 'completed',
-            note: (payNote || 'Date extension') + (surcharge > 0 ? ' (incl. ' + cardSurcharge + '% card fee: $' + (surcharge / 100).toFixed(2) + ')' : ''),
+            // See the staff folio: the fee is rendered from surcharge_amount now, so baking
+            // it into the note printed it twice. Amounts unchanged; only the text is shorter.
+            note: payNote || 'Date extension',
           })
           setPaySaving(false)
           if (error) { setPayFailed(error.message || 'The payment could not be recorded.'); return }
@@ -1163,7 +1165,7 @@ export default function CalendarPage() {
                   {payMethod === 'card' && cardSurcharge > 0 && (
                     <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border" style={{ background: waiveFee ? '#f0fdf4' : '#fffbeb', borderColor: waiveFee ? '#bbf7d0' : '#fde68a' }}>
                       <div>
-                        <div className="text-sm font-semibold text-gray-700">Card fee ({cardSurcharge}%)</div>
+                        <div className="text-sm font-semibold text-gray-700">Transaction fee ({cardSurcharge}%)</div>
                         <div className="text-xs text-gray-500">{waiveFee ? 'Fee waived for this payment' : 'Applied to card payments'}</div>
                       </div>
                       <button onClick={() => setWaiveFee(!waiveFee)} className="relative rounded-full shrink-0" style={{ width: 40, height: 22, background: waiveFee ? '#15803d' : '#d1d5db' }}>
@@ -1205,7 +1207,7 @@ export default function CalendarPage() {
 
                   {payMethod === 'card' && cardSurcharge > 0 && payBaseCents > 0 && !waiveFee && (
                     <div className="rounded-lg border px-3 py-2 text-sm" style={{ background: '#fffbeb', borderColor: '#fde68a' }}>
-                      <div className="flex justify-between"><span style={{ color: '#92400e' }}>{cardSurcharge}% card fee</span><span style={{ color: '#92400e', fontWeight: 600 }}>+${(surchargeCents / 100).toFixed(2)}</span></div>
+                      <div className="flex justify-between"><span style={{ color: '#92400e' }}>{cardSurcharge}% transaction fee</span><span style={{ color: '#92400e', fontWeight: 600 }}>+${(surchargeCents / 100).toFixed(2)}</span></div>
                       <div className="flex justify-between font-bold mt-0.5"><span style={{ color: '#92400e' }}>Total charged to card</span><span style={{ color: '#92400e' }}>${(totalWithSurcharge / 100).toFixed(2)}</span></div>
                     </div>
                   )}
