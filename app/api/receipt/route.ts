@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
       if (fee <= 0) return main
       return main + `
       <tr>
-        <td style="padding:2px 0 6px 12px;color:#6B7280;font-size:12px;">· of which card processing fee</td>
+        <td style="padding:2px 0 6px 12px;color:#6B7280;font-size:12px;">· of which transaction fee</td>
         <td style="padding:2px 0 6px;color:#6B7280;font-size:12px;text-align:right;">${money(fee)}</td>
       </tr>`
     }).join('')
@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
     const paymentRowsText = (payments || []).map((p: any) => {
       const fee = p.surcharge_amount || 0
       const line = `${p.method.charAt(0).toUpperCase() + p.method.slice(1)} on ${new Date(p.paid_at).toLocaleDateString()}${p.note ? ' (' + p.note + ')' : ''}: ${money(p.amount)}`
-      return fee > 0 ? `${line}\n    · of which card processing fee: ${money(fee)}` : line
+      return fee > 0 ? `${line}\n    · of which transaction fee: ${money(fee)}` : line
     }).join('\n')
 
     if (isReservationType) {

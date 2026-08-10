@@ -411,7 +411,9 @@ export default function WalkInBookingPage() {
       amount: totalAmount,
       surcharge_amount: surchargeAmount,
       status: 'completed',
-      note: paymentNote + (surchargeAmount > 0 ? ' (incl. ' + cardSurcharge + '% card fee: $' + (surchargeAmount/100).toFixed(2) + ')' : ''),
+      // See the staff folio: the fee is rendered from surcharge_amount now, so baking it
+      // into the note printed it twice on the receipt. Amounts unchanged, text shorter.
+      note: paymentNote,
     })
     // Walk-in money lives in the folio (folio_payments). We intentionally do NOT
     // mirror it into reservations.amount_paid — that would double-count when the
@@ -806,7 +808,7 @@ export default function WalkInBookingPage() {
                 {cardSurcharge > 0 && !waiveFee && paymentAmount && (
                   <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: '#92400e' }}>{cardSurcharge}% card fee</span>
+                      <span style={{ color: '#92400e' }}>{cardSurcharge}% transaction fee</span>
                       <span style={{ color: '#92400e', fontWeight: 600 }}>+${(Math.round(Math.round(parseFloat(paymentAmount) * 100) * cardSurcharge / 100) / 100).toFixed(2)}</span>
                     </div>
                   </div>
@@ -847,7 +849,7 @@ export default function WalkInBookingPage() {
             {paymentMethod === 'card' && cardSurcharge > 0 && paymentAmountCents > 0 && (
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#92400e' }}>{cardSurcharge}% card fee</span>
+                  <span style={{ color: '#92400e' }}>{cardSurcharge}% transaction fee</span>
                   <span style={{ color: '#92400e', fontWeight: 600 }}>+${(surchargePreview/100).toFixed(2)}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontWeight: 700 }}>

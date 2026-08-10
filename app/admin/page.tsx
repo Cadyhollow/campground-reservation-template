@@ -441,7 +441,7 @@ export default function AdminDashboard() {
                 gross, so the surcharge is called out as a component of it — not an addition. */}
             <p className="text-xs mt-1" style={{color:'#16a34a'}}>
               collected this month
-              {stats.surchargeThisMonth > 0 && ` · includes $${(stats.surchargeThisMonth / 100).toFixed(2)} in card surcharges`}
+              {stats.surchargeThisMonth > 0 && ` · includes $${(stats.surchargeThisMonth / 100).toFixed(2)} in transaction fees`}
             </p>
           </div>
         ) : (

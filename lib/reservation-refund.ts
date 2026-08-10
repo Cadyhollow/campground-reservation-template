@@ -217,7 +217,7 @@ export async function processReservationRefund(
   // so revenue is reduced exactly once — by the negative row above — instead of twice.
   // The audit note stays, since it is what an operator reads on the reservation.
   const refundAmount = refundAmountCents / 100
-  const refundNote = `[Refund ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] $${refundAmount.toFixed(2)} refunded${refundSurchargeCents > 0 ? ` (incl. $${(refundSurchargeCents / 100).toFixed(2)} card surcharge)` : ''}${reason ? ` — ${reason}` : ''}${squarePaymentId ? ' (Square)' : ' (cash/check)'}`
+  const refundNote = `[Refund ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}] $${refundAmount.toFixed(2)} refunded${refundSurchargeCents > 0 ? ` (incl. $${(refundSurchargeCents / 100).toFixed(2)} transaction fee)` : ''}${reason ? ` — ${reason}` : ''}${squarePaymentId ? ' (Square)' : ' (cash/check)'}`
   const baseNotes = currentNotes ?? reservation.notes ?? ''
   const updatedNotes = baseNotes ? `${baseNotes}\n${refundNote}` : refundNote
 

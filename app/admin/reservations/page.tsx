@@ -1278,7 +1278,7 @@ function ReservationsPageInner() {
                   as the detail pane and the folio's "Paid" line, so the three agree. */}
               <div className="text-gray-600">
                 Paid: <strong>${(netPaidTotal / 100).toFixed(2)}</strong>
-                {resSurchargeAmt > 0 && <span className="text-gray-500"> (plus ${(resSurchargeAmt / 100).toFixed(2)} card surcharge)</span>}
+                {resSurchargeAmt > 0 && <span className="text-gray-500"> (plus ${(resSurchargeAmt / 100).toFixed(2)} transaction fee)</span>}
               </div>
               {cancelRefundable.totalRemainingCents !== cancelRefundable.originalGrossTotalCents
                 && cancelRefundable.originalGrossTotalCents > 0 && (

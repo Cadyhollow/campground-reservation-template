@@ -457,6 +457,12 @@ function BookingForm() {
   const cashTotal = total - cardOnlyFeesTotal
   const depositSurcharge = cashTotal > 0 ? Math.round(deposit * cardOnlyFeesTotal / cashTotal) : 0
   const depositDisplay = deposit + depositSurcharge
+  // The card fee's share of a Pay in Full charge, for the disclosure line on that button.
+  // handlePayment charges cashTotal + this, which is exactly `total` — the card-only fee is
+  // already inside total, and cashTotal is total minus it. So unlike the deposit, Pay in
+  // Full's AMOUNT was already truthful and is deliberately left alone; only the fee it
+  // contains was never named. Same expression handlePayment uses for paymentType 'full'.
+  const fullSurcharge = cashTotal > 0 ? Math.round(cashTotal * cardOnlyFeesTotal / cashTotal) : 0
 
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
 
@@ -865,6 +871,7 @@ function BookingForm() {
                   >
                     {paymentLoading && selectedPaymentType === 'deposit' ? 'Processing...' : `${depositLabel} — $${(depositDisplay / 100).toFixed(2)}`}
                     {depositSubtext && <span className="block text-xs font-normal mt-0.5 text-[var(--text-muted)]">{depositSubtext}</span>}
+                    {depositSurcharge > 0 && <span className="block text-xs font-normal mt-0.5 text-[var(--text-muted)]">Includes ${(depositSurcharge / 100).toFixed(2)} transaction fee</span>}
                   </button>
                 )}
                 <button
@@ -873,7 +880,12 @@ function BookingForm() {
                   style={{ backgroundColor: 'var(--accent-color)' }}
                   onClick={() => handlePayment('full')}
                 >
-                  {paymentLoading && selectedPaymentType === 'full' ? 'Processing...' : `Pay in Full — $${(total / 100).toFixed(2)}`}
+                  {paymentLoading && selectedPaymentType === 'full' ? 'Processing...' : (
+                    <>
+                      {`Pay in Full — $${(total / 100).toFixed(2)}`}
+                      {fullSurcharge > 0 && <span className="block text-xs font-normal mt-0.5 opacity-80">Includes ${(fullSurcharge / 100).toFixed(2)} transaction fee</span>}
+                    </>
+                  )}
                 </button>
               </div>
             </div>
