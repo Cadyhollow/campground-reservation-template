@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { Resend } from 'resend'
-import { checkBookability } from '@/lib/bookability'
+import { checkBookability, nightsBetween, ruleAppliesToSite } from '@/lib/bookability'
+import { computeBookingQuote, checkDiscount, resolveNightlyRate, cardOnlyFeeShare } from '@/lib/booking-quote'
 import { sendConfirmationEmails } from '@/lib/confirmation-email'
 import { SQUARE_API_BASE } from '@/lib/square-env'
 
@@ -54,7 +55,7 @@ export async function POST(request: NextRequest) {
     // matched against this site's type without a second lookup.
     const { data: siteData } = await supabase
       .from('sites')
-      .select('id, site_number, site_type')
+      .select('id, site_number, site_type, base_rate')
       .eq('id', siteId)
       .single()
 
@@ -83,6 +84,108 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // ── THE PRICING CHOKEPOINT ────────────────────────────────────────────────────────────
+    // The companion to the bookability check above, and it exists for the same reason: /book
+    // builds its quote from URL parameters (`?nightlyRate=…&totalPrice=…`) and can be reached
+    // without ever running a search. Dates were already re-derived here. The PRICE was not —
+    // this route charged `amountToPay` straight from the request body and never so much as
+    // read base_rate, so retyping totalPrice in the address bar set your own price, down to
+    // zero. A forged discount code was the same attack with a smaller ceiling.
+    //
+    // Everything below is read from the database. The request's own figures are untrusted from
+    // here on: they are compared against the server's, never charged.
+    const [{ data: pricingRules }, { data: settingsRow }, { data: activeFees }] = await Promise.all([
+      supabase.from('pricing_rules').select('*').eq('is_active', true)
+        .lte('start_date', departure).gte('end_date', arrival),
+      supabase.from('settings').select('*').limit(1).single(),
+      supabase.from('fees').select('*').eq('is_active', true),
+    ])
+
+    // Add-on prices come from the DB keyed by the requested ids, so a request cannot set the
+    // price of a firewood bundle. An id that is not an active add-on is dropped entirely.
+    let pricedAddons: Array<{ id: string; quantity: number; price: number; name?: string }> = []
+    if (Array.isArray(addonItems) && addonItems.length > 0) {
+      const { data: addonRows } = await supabase
+        .from('addons').select('id, name, price')
+        .in('id', addonItems.map((a: any) => a.id)).eq('is_active', true)
+      pricedAddons = (addonItems as any[]).flatMap((item: any) => {
+        const row = (addonRows || []).find((r: any) => r.id === item.id)
+        const quantity = Math.max(0, parseInt(item.quantity) || 0)
+        if (!row || quantity === 0) return []
+        return [{ id: row.id, quantity, price: row.price, name: row.name }]
+      })
+    }
+
+    // The discount, validated against the server's own row. Previously every one of these
+    // checks ran only in the browser, against a row the browser read for itself.
+    let serverDiscount = null as null | { code: string; discount_type: string; discount_value: number }
+    if (discountCode) {
+      const { data: discountRow } = await supabase
+        .from('discounts').select('*').eq('code', String(discountCode).toUpperCase()).single()
+      const verdict = checkDiscount(discountRow, new Date().toISOString().split('T')[0])
+      if (!verdict.ok) {
+        return NextResponse.json({ error: verdict.reason, reason: 'discount-invalid' }, { status: 400 })
+      }
+      serverDiscount = verdict.discount
+    }
+
+    // Turnover: the same-day conflicts that gate early check-in and late check-out. Read here
+    // so those extras cannot be asserted onto a booking whose neighbours rule them out.
+    const { data: turnoverRows } = await supabase
+      .from('reservations').select('arrival_date, departure_date')
+      .eq('site_id', siteId).neq('status', 'cancelled')
+    const earlyBlocked = (turnoverRows || []).some((r: any) => r.departure_date === arrival)
+    const lateBlocked = (turnoverRows || []).some((r: any) => r.arrival_date === departure)
+
+    const serverNights = nightsBetween(arrival, departure)
+    const serverNightlyRate = resolveNightlyRate(
+      { id: siteId, site_type: siteData?.site_type || '', base_rate: siteData?.base_rate || 0 },
+      pricingRules || [],
+      ruleAppliesToSite,
+    )
+
+    const quote = computeBookingQuote({
+      site: {
+        site_type: siteData?.site_type || '',
+        nightly_rate: serverNightlyRate,
+        total_price: serverNightlyRate * serverNights,
+        nights: serverNights,
+      },
+      adults, children,
+      settings: settingsRow,
+      fees: activeFees || [],
+      addonSelections: pricedAddons,
+      discount: serverDiscount,
+      earlyRequested: !!earlyCheckin,
+      lateRequested: !!lateCheckout,
+      earlyBlocked, lateBlocked,
+    })
+
+    // What this payment collects, by the SERVER's reading of the deposit rules. The fee is
+    // this payment's prorated share of the card-only fees already inside `total` — this
+    // repo's model, NOT Cady's percentage surcharge. See lib/booking-quote.ts.
+    const serverCashToPay = paymentType === 'deposit' ? quote.deposit : quote.cashTotal
+    const serverSurcharge = cardOnlyFeeShare(serverCashToPay, quote.cashTotal, quote.cardOnlyFeesTotal)
+    const serverChargeTotal = serverCashToPay + serverSurcharge
+
+    // A disagreement is REPORTED, not silently charged. Charging a number other than the one
+    // the camper was shown is its own bug — the fee pass fixed exactly that on the Pay in Full
+    // button — so a mismatch means the page is stale (a rate or fee changed mid-session) or the
+    // request was crafted. Either way the honest answer is to ask for a refresh rather than to
+    // quietly bill a different figure.
+    const clientChargeTotal = (Number(amountToPay) || 0) + (Number(surchargeAmount) || 0)
+    if (clientChargeTotal !== serverChargeTotal) {
+      console.warn('[pricing-chokepoint] client/server disagreement', {
+        siteId, arrival, departure, paymentType,
+        clientChargeTotal, serverChargeTotal,
+        clientDiscount: discountAmount, serverDiscount: quote.discountAmount,
+      })
+      return NextResponse.json({
+        error: 'Pricing has changed since this page was loaded. Please refresh and try again.',
+        reason: 'price-mismatch',
+      }, { status: 409 })
+    }
+
     // Process payment with Square REST API
     const squareResponse = await fetch(
      `${SQUARE_API_BASE}/v2/payments`,
@@ -97,7 +200,10 @@ export async function POST(request: NextRequest) {
           source_id: sourceId,
           idempotency_key: `res-${Date.now()}`,
           amount_money: {
-            amount: amountToPay + (surchargeAmount || 0),
+            // The server's figure, not the request's. They are equal by the time we get
+            // here — a mismatch returned 409 above — but this reads from the authoritative
+            // side so that stays true if the guard is ever loosened.
+            amount: serverChargeTotal,
             currency: 'USD',
           },
           location_id: process.env.SQUARE_LOCATION_ID,
@@ -134,18 +240,21 @@ export async function POST(request: NextRequest) {
       camper_type: camperType || '',
       camper_length: camperLength || 0,
       camper_amperage: camperAmperage || '',
-      base_nightly_rate: nightlyRate,
-      extra_guest_fee_total: extraGuestFee,
-      fees_total: feesTotal || 0,
-      surcharge_amount: surchargeAmount || 0,
-      addons_total: addonTotal,
-      early_checkin: earlyCheckin,
-      early_checkin_fee: earlyCheckinFee,
-      late_checkout: lateCheckout,
-      late_checkout_fee: lateCheckoutFee,
-      discount_amount: discountAmount,
-      total_price: totalPrice,
-      amount_paid: amountToPay,
+      // Every money column below is the SERVER's figure. They equal the request's — a
+      // disagreement was rejected at the pricing chokepoint — but the ledger, the folio and
+      // every revenue report read these, so they are written from the authoritative side.
+      base_nightly_rate: serverNightlyRate,
+      extra_guest_fee_total: quote.extraGuestFee,
+      fees_total: quote.feesTotal - quote.cardOnlyFeesTotal,
+      surcharge_amount: serverSurcharge,
+      addons_total: quote.addonTotal,
+      early_checkin: quote.earlyFee > 0,
+      early_checkin_fee: quote.earlyFee,
+      late_checkout: quote.lateFee > 0,
+      late_checkout_fee: quote.lateFee,
+      discount_amount: quote.discountAmount,
+      total_price: quote.cashTotal,
+      amount_paid: serverCashToPay,
       payment_type: paymentType,
       payment_method: 'card', // online bookings are always paid by card
       square_payment_id: squarePaymentId,
@@ -241,11 +350,19 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Update discount usage
-    if (discountCode) {
-      await supabase
-        .from('discounts')
-        .update({ times_used: supabase.rpc('increment_discount_usage', { code: discountCode }) })
+    // Update discount usage.
+    //
+    // This was an UPDATE with no .eq() filter that assigned a query BUILDER as the column
+    // value — so it never incremented anything, and had it run it would have written to every
+    // discount row. max_uses was therefore unenforceable no matter how carefully the browser
+    // checked it. It now calls the RPC properly, and only for a code the server itself
+    // validated above. Failure is logged rather than thrown: the camper has already been
+    // charged by this point and a miscounted redemption must not fail their booking.
+    if (serverDiscount) {
+      const { error: usageError } = await supabase.rpc('increment_discount_usage', {
+        p_code: serverDiscount.code,
+      })
+      if (usageError) console.error('increment_discount_usage failed:', usageError, serverDiscount.code)
     }
 
     // Look up full addon names for emails

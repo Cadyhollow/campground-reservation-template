@@ -6,6 +6,7 @@ import Image from 'next/image'
 import { supabase } from '@/lib/supabase'
 import PaymentTrustRow from '../components/PaymentTrustRow'
 import { SQUARE_SDK_URL } from '@/lib/square-env'
+import { computeBookingQuote } from '@/lib/booking-quote'
 
 type Addon = {
   id: string
@@ -358,105 +359,43 @@ function BookingForm() {
     setCheckingDiscount(false)
   }
 
-  const addonTotal = Object.entries(selectedAddons).reduce((sum, [id, qty]) => {
-    const addon = addons.find(a => a.id === id)
-    return sum + (addon ? addon.price * qty : 0)
-  }, 0)
+  // THE quote — the same function /api/payment recomputes with from the database before it
+  // charges anything. This page's figures are now a PREVIEW of the server's answer rather
+  // than the source of it: the server derives its own and rejects a booking whose totals
+  // disagree, so anything shown here the server would not stand behind fails loudly instead
+  // of being charged. Sharing the function is what keeps the two in step — see
+  // lib/booking-quote.ts, and lib/refundable.ts for the same lesson learned the hard way.
+  const quote = computeBookingQuote({
+    site: {
+      site_type: site.site_type,
+      nightly_rate: site.nightly_rate,
+      total_price: site.total_price,
+      nights: site.nights,
+    },
+    adults, children,
+    settings,
+    fees,
+    addonSelections: Object.entries(selectedAddons)
+      .filter(([, qty]) => qty > 0)
+      .map(([id, qty]) => {
+        const a = addons.find(x => x.id === id)
+        return { id, quantity: qty, price: a?.price || 0, name: a?.name }
+      }),
+    discount: discountResult
+      ? { code: discountResult.code, discount_type: discountResult.discount_type, discount_value: discountResult.discount_value }
+      : null,
+    earlyRequested: earlyChecked,
+    lateRequested: lateChecked,
+    earlyBlocked, lateBlocked,
+  })
 
-  const baseAdults = settings?.base_occupancy_adults ?? 2
-  const baseChildren = settings?.base_occupancy_children ?? 2
-  const extraAdultFee = settings?.extra_adult_fee ?? 0
-  const extraChildFee = settings?.extra_child_fee ?? 0
-  const extraAdults = Math.max(0, adults - baseAdults)
-  const extraChildren = Math.max(0, children - baseChildren)
-  const extraGuestFee = (extraAdults * extraAdultFee + extraChildren * extraChildFee) * site.nights
-
-  function feeAppliesToSite(fee: Fee): boolean {
-    if (fee.applies_to === 'all') return true
-    const targets = fee.applies_to.split(',').map(s => s.trim())
-    return targets.includes(site.site_type)
-  }
-
-  function feeAppliesToAddons(fee: Fee): boolean {
-    if (fee.applies_to === 'all') return true
-    const targets = fee.applies_to.split(',').map(s => s.trim())
-    return targets.includes('addons')
-  }
-
-  function calculateFeeAmount(fee: Fee): number {
-    let base = 0
-    if (feeAppliesToSite(fee)) base += site.total_price + extraGuestFee
-    if (feeAppliesToAddons(fee)) base += addonTotal
-    if (base === 0) return 0
-    if (fee.type === 'percentage') return Math.round(base * fee.amount / 100)
-    return fee.amount * 100
-  }
-
-  const feeBreakdown = fees.map(fee => ({
-    ...fee,
-    calculatedAmount: calculateFeeAmount(fee),
-  })).filter(fee => fee.calculatedAmount > 0)
-
-  const feesTotal = feeBreakdown.reduce((sum, fee) => sum + fee.calculatedAmount, 0)
-  const cardOnlyFeesTotal = feeBreakdown.filter(fee => fee.card_only).reduce((sum, fee) => sum + fee.calculatedAmount, 0)
-
-  const earlyFee = (earlyChecked && !earlyBlocked && settings?.early_checkin_enabled && settings?.early_checkin_show_customers) ? (settings.early_checkin_price || 0) : 0
-  const lateFee = (lateChecked && !lateBlocked && settings?.late_checkout_enabled && settings?.late_checkout_show_customers) ? (settings.late_checkout_price || 0) : 0
-  // Itemized cash lines for the confirmation email — deliberately the same
-  // { label, amount } shape lib/pricing produces for the admin wizard, so /api/email
-  // renders the camper and admin paths identically. Card-only fees are excluded, matching
-  // the cash total they're kept out of.
-  const emailLines: { label: string; amount: number }[] = [
-    ...(site.nights > 0
-      ? [{ label: `${site.nights} night${site.nights !== 1 ? 's' : ''} × $${(site.nightly_rate / 100).toFixed(2)}`, amount: site.total_price }]
-      : []),
-    ...(extraGuestFee > 0 ? [{ label: 'Extra guests', amount: extraGuestFee }] : []),
-    ...feeBreakdown.filter(f => !f.card_only).map(f => ({ label: f.name, amount: f.calculatedAmount })),
-    ...Object.entries(selectedAddons).flatMap(([id, qty]) => {
-      const a = addons.find(x => x.id === id)
-      return a && qty > 0 ? [{ label: `${a.name} ×${qty}`, amount: a.price * qty }] : []
-    }),
-    ...(earlyFee > 0 ? [{ label: 'Early check-in', amount: earlyFee }] : []),
-    ...(lateFee > 0 ? [{ label: 'Late check-out', amount: lateFee }] : []),
-  ]
-
-  const subtotal = site.total_price + extraGuestFee + addonTotal + earlyFee + lateFee
-  const discountAmount = discountResult
-    ? discountResult.discount_type === 'percent'
-      ? Math.round(subtotal * discountResult.discount_value / 100)
-      : discountResult.discount_value
-    : 0
-  const total = Math.max(0, subtotal + feesTotal - discountAmount)
+  const {
+    extraGuestFee, addonTotal, feeBreakdown, feesTotal, cardOnlyFeesTotal,
+    earlyFee, lateFee, discountAmount, total, emailLines,
+    cashTotal, deposit, depositLabel, depositSubtext, showDepositButton,
+  } = quote
   const realCashFees = feesTotal - cardOnlyFeesTotal
-  const proportionalCashFees = site.nights > 0 ? Math.round(realCashFees / site.nights) : 0
-  const firstNightDeposit = site.nightly_rate + proportionalCashFees
-  const depositType = settings?.deposit_type || 'first_night'
-  const depositValue = settings?.deposit_value || 0
-  let deposit: number
-  let depositLabel: string
-  let depositSubtext: string
-  if (depositType === 'percentage') {
-    deposit = Math.min(Math.round(total * depositValue / 100), total)
-    depositLabel = `Pay ${depositValue}% Deposit`
-    depositSubtext = 'Balance due at check-in'
-  } else if (depositType === 'flat') {
-    deposit = Math.min(depositValue, total)
-    depositLabel = 'Pay Deposit'
-    depositSubtext = 'Balance due at check-in'
-  } else if (depositType === 'full') {
-    deposit = total
-    depositLabel = 'Pay in Full'
-    depositSubtext = ''
-  } else {
-    deposit = firstNightDeposit
-    depositLabel = 'Pay Deposit'
-    depositSubtext = 'First night only · Balance due at check-in'
-  }
-  const showDepositButton = depositType !== 'full'
 
-  // Cash-canonical: stay price with the card surcharge removed. We STORE this;
-  // the surcharge is computed per-payment at charge time (see handlePayment).
-  const cashTotal = total - cardOnlyFeesTotal
   const depositSurcharge = cashTotal > 0 ? Math.round(deposit * cardOnlyFeesTotal / cashTotal) : 0
   const depositDisplay = deposit + depositSurcharge
   // The card fee's share of a Pay in Full charge, for the disclosure line on that button.
