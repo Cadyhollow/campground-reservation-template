@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { BOOKING_REFUND_REF } from '@/lib/refund-refs'
 import { processReservationRefund } from '@/lib/reservation-refund'
+import { requireAdmin } from '@/lib/require-admin'
 
 // Marks a negative folio row as a refund of the BOOKING leg (reservations.amount_paid +
 // surcharge_amount) rather than a refund of some payment taken on the folio itself. Both
@@ -18,6 +19,9 @@ export { BOOKING_REFUND_REF }
 // the folio row. This route is the HTTP wrapper it always was: same request body, same
 // responses.
 export async function POST(request: NextRequest) {
+  const denied = requireAdmin(request)
+  if (denied) return denied
+
   try {
     const {
       reservationId, squarePaymentId, refundAmount, reason, currentNotes,

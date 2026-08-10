@@ -1,7 +1,11 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { deleteSquareConnection } from '@/lib/square-oauth'
+import { requireAdmin } from '@/lib/require-admin'
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const denied = requireAdmin(request)
+  if (denied) return denied
+
   try {
     const campgroundId = process.env.CAMPGROUND_ID || 'default'
     await deleteSquareConnection(campgroundId)

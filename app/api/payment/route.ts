@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { Resend } from 'resend'
 import { checkBookability } from '@/lib/bookability'
+import { sendConfirmationEmails } from '@/lib/confirmation-email'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -263,39 +264,45 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Send confirmation emails
+    // Send confirmation emails.
+    //
+    // Direct function call, not an HTTP self-fetch to /api/email. The payload below is the exact
+    // JSON body that fetch used to POST, so the emails are unchanged; only the transport is gone.
+    // This is what lets /api/email sit behind the admin session — a camper's confirmation no
+    // longer depends on a publicly reachable route.
+    //
+    // The try/catch stays deliberately: the card has ALREADY been charged and the reservation
+    // ALREADY written by this point, so a Resend outage must never fail the booking. Swallowing
+    // here means the guest is booked and charged even if the email doesn't go out, which is the
+    // correct trade — the alternative is a paid-but-errored booking.
     try {
-      await fetch(`${request.nextUrl.origin}/api/email`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          guestName,
-          guestEmail,
-          siteNumber: siteData?.site_number || 'N/A',
-          siteType: siteData?.site_type || 'rv_site',
-          arrival,
-          departure,
-          nights,
-          adults,
-          children,
-          camperType: camperType || '',
-          camperLength: camperLength || 0,
-          camperAmperage: camperAmperage || '',
-          earlyCheckin, earlyCheckinFee,
-          lateCheckout, lateCheckoutFee,
-          totalPrice,
-          amountPaid: amountToPay,
-          surchargeAmount: surchargeAmount || 0,
-          paymentType,
-          confirmationNumber: reservation.id.slice(0, 8).toUpperCase(),
-          addonDetails,
-          extraGuestFee,
-          discountAmount,
-          discountCode: discountCode || null,
-          feesTotal: feesTotal || 0,
-          lines,
-          nightlyRate,
-        }),
+      await sendConfirmationEmails({
+        guestName,
+        guestEmail,
+        siteNumber: siteData?.site_number || 'N/A',
+        siteType: siteData?.site_type || 'rv_site',
+        arrival,
+        departure,
+        nights,
+        adults,
+        children,
+        camperType: camperType || '',
+        camperLength: camperLength || 0,
+        camperAmperage: camperAmperage || '',
+        earlyCheckin, earlyCheckinFee,
+        lateCheckout, lateCheckoutFee,
+        totalPrice,
+        amountPaid: amountToPay,
+        surchargeAmount: surchargeAmount || 0,
+        paymentType,
+        confirmationNumber: reservation.id.slice(0, 8).toUpperCase(),
+        addonDetails,
+        extraGuestFee,
+        discountAmount,
+        discountCode: discountCode || null,
+        feesTotal: feesTotal || 0,
+        lines,
+        nightlyRate,
       })
     } catch (e) {
       console.error('Email send failed:', e)
