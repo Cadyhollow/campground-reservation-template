@@ -1,133 +1,58 @@
-'use client'
+// The post-payment confirmation, as a server component.
+//
+// Security PR 3. This page used to be a client component that assembled itself in the browser
+// from five anon-key reads — reservations (select('*')), folios, folio_payments,
+// folio_line_items and settings. Those reads are why the anon key still needs SELECT on the
+// money tables, and PR 6 cannot revoke it while pages like this one depend on it. They now run
+// server-side with the service-role key in lib/confirmation-server.ts, and the camper receives
+// finished HTML — no Supabase client, no database access, in the browser for this route.
+//
+// Nothing about who can see a confirmation changes. reservations.id is a random v4 uuid, so
+// the link has always been the credential: whoever holds it sees the booking, and ids cannot
+// be walked. Relocating the reads preserves that model exactly rather than adding a gate —
+// campers are not logged in and must not be asked to be.
+//
+// It renders directly rather than handing off to a client half because there is nothing
+// interactive here: the useState/useEffect it used to carry existed
+// only to fetch. Rendered on the server, the "Loading your confirmation..." flash is gone too —
+// the summary is in the first paint.
 
-import { useEffect, useState, Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
-import LogoBadge from '@/app/components/LogoBadge'
-import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
+import LogoBadge from '@/app/components/LogoBadge'
+import { getConfirmation } from '@/lib/confirmation-server'
 
-type Reservation = {
-  id: string
-  guest_name: string
-  guest_email: string
-  guest_phone: string
-  arrival_date: string
-  departure_date: string
-  num_adults: number
-  num_children: number
-  total_price: number
-  amount_paid: number
-  payment_type: string
-  status: string
-  sites: { site_number: string; site_type: string } | null
-}
+// Reading searchParams already opts this route out of prerendering; stated explicitly because
+// the reason is local — this page is per-booking and must never be cached as one camper's.
+export const dynamic = 'force-dynamic'
 
-function ConfirmationContent() {
-  const searchParams = useSearchParams()
-  const reservationId = searchParams.get('reservationId')
-  const [reservation, setReservation] = useState<Reservation | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [settings, setSettings] = useState<any>(null)
-  const [folioPaid, setFolioPaid] = useState(0)
-  const [folioCharges, setFolioCharges] = useState(0)
-  // The cancellation terms for THIS booking's arrival date. This block used to be the
-  // hardcoded sentence "Cancellations must be made at least 7 days before arrival" — one
-  // park's standard policy, printed on every confirmation regardless of the rule that
-  // actually applies. A camper arriving on a holiday weekend was told 7 days when their
-  // booking is governed by a 30-day rule, and every park using this template told its campers
-  // terms it had never set.
-  const [policy, setPolicy] = useState<any>(null)
+export default async function ConfirmationPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>
+}) {
+  // Next 16: searchParams is a promise and must be awaited.
+  const params = await searchParams
+  const raw = params.reservationId
+  const reservationId = Array.isArray(raw) ? raw[0] : raw
 
-  useEffect(() => {
-    if (reservationId) fetchReservation()
-    fetchSettings()
-  }, [reservationId])
+  const reservation = await getConfirmation(reservationId ?? null)
 
-  async function fetchSettings() {
-    const { data } = await supabase.from('settings').select('check_in_time, check_out_time, park_name, logo_url, logo_shape, accent_color').limit(1).single()
-    setSettings(data || null)
-  }
-
-  async function fetchReservation() {
-    const { data } = await supabase
-      .from('reservations')
-      .select('*, sites(site_number, site_type)')
-      .eq('id', reservationId)
-      .single()
-    setReservation(data)
-    await fetchFolioTotals()
-    if (data?.arrival_date) await fetchPolicy(data.arrival_date)
-    setLoading(false)
-  }
-
-  // Same endpoint and same resolution the booking page uses, so the terms on the confirmation
-  // are the terms the camper agreed to at checkout. A failure here leaves policy null and the
-  // block below simply renders nothing — a missing paragraph is better than a wrong one about
-  // someone's money.
-  async function fetchPolicy(arrival: string) {
-    try {
-      const res = await fetch(`/api/cancellation-policy?arrival=${arrival}`)
-      const json = await res.json()
-      setPolicy(json?.policy || null)
-    } catch {
-      setPolicy(null)
-    }
-  }
-
-  // Money for a booking taken by staff — the wizard, an owner booking, a walk-in — is
-  // recorded on the reservation's folio, not in reservations.amount_paid. Reading only
-  // amount_paid told those campers they had paid $0.00 and owed the full stay at check-in
-  // when they had in fact already paid.
-  //
-  // Deliberately the same arithmetic as app/api/receipt/route.ts, so this page and the
-  // receipt that lands in the camper's inbox cannot disagree: payments are summed NET of
-  // the card surcharge (the surcharge is a processing pass-through, not money toward the
-  // stay), and folio line items count as charges alongside the stay itself.
-  //
-  // Aggregated across every folio on the reservation rather than a single one — the receipt
-  // route is invoked per folio, but this page only knows the reservation.
-  async function fetchFolioTotals() {
-    const { data: folios } = await supabase.from('folios').select('id').eq('reservation_id', reservationId)
-    const ids = (folios || []).map((f: any) => f.id)
-    if (ids.length === 0) return
-    const [{ data: pmts }, { data: items }] = await Promise.all([
-      // Includes refund rows: a booking refund is now a negative folio row and
-      // reservations.amount_paid no longer shrinks, so excluding them would show the guest as
-      // having paid money that was handed back.
-      supabase.from('folio_payments').select('amount, surcharge_amount').in('status', ['completed', 'refunded', 'partially_refunded']).in('folio_id', ids),
-      supabase.from('folio_line_items').select('line_total, voided').in('folio_id', ids),
-    ])
-    setFolioPaid((pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0))
-    setFolioCharges((items || []).reduce((sum: number, i: any) => sum + (i.voided ? 0 : (i.line_total || 0)), 0))
-  }
-
-  // The receipt route's three figures, by the same formula. With no folio both addends are
-  // zero, so an ordinary online card booking renders exactly as it did before.
-  const totalPaid = (reservation?.amount_paid || 0) + folioPaid
-  const chargesTotal = (reservation?.total_price || 0) + folioCharges
-  const balanceRemaining = chargesTotal - totalPaid
-
-  const siteTypeLabel = (type: string) =>
-    ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
-
-  const nights = reservation
-    ? Math.round(
-        (new Date(reservation.departure_date).getTime() -
-          new Date(reservation.arrival_date).getTime()) /
-          (1000 * 60 * 60 * 24)
-      )
-    : 0
-
-  if (loading) return (
-    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--surface-bg)' }}>
-      <p className="text-[var(--text-muted)]">Loading your confirmation...</p>
-    </div>
-  )
-
+  // Same copy the client version showed for a missing or unknown id.
   if (!reservation) return (
     <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--surface-bg)' }}>
       <p className="text-[var(--text-muted)]">Reservation not found.</p>
     </div>
+  )
+
+  const { chargesTotal, totalPaid, balanceRemaining } = reservation
+
+  const siteTypeLabel = (type: string) =>
+    ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
+
+  const nights = Math.round(
+    (new Date(reservation.departure_date).getTime() -
+      new Date(reservation.arrival_date).getTime()) /
+      (1000 * 60 * 60 * 24)
   )
 
   return (
@@ -135,14 +60,14 @@ function ConfirmationContent() {
       {/* Header */}
       <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: 'var(--surface-card)' }}>
         <LogoBadge
-          logoUrl={settings?.logo_url}
-          parkName={settings?.park_name}
-          shape={settings?.logo_shape}
-          accentColor={settings?.accent_color}
+          logoUrl={reservation.logoUrl || undefined}
+          parkName={reservation.parkName}
+          shape={reservation.logoShape || undefined}
+          accentColor={reservation.accentColor || undefined}
           size={48}
         />
         <div>
-          <h1 className="text-[var(--text-primary)] font-bold">{settings?.park_name || 'Campground'}</h1>
+          <h1 className="text-[var(--text-primary)] font-bold">{reservation.parkName}</h1>
           <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Reservation Confirmed</p>
         </div>
       </div>
@@ -172,18 +97,18 @@ function ConfirmationContent() {
             <div>
               <p className="text-[var(--text-muted)]">Site</p>
               <p className="text-[var(--text-primary)] font-medium">
-                {siteTypeLabel(reservation.sites?.site_type || '')} {reservation.sites?.site_number}
+                {siteTypeLabel(reservation.site_type)} {reservation.site_number}
               </p>
             </div>
             <div>
               <p className="text-[var(--text-muted)]">Arrival</p>
               <p className="text-[var(--text-primary)] font-medium">{reservation.arrival_date}</p>
-              <p className="text-[var(--text-muted)] text-xs">Check-in: {settings?.check_in_time || '2:00 PM'}</p>
+              <p className="text-[var(--text-muted)] text-xs">Check-in: {reservation.checkInTime}</p>
             </div>
             <div>
               <p className="text-[var(--text-muted)]">Departure</p>
               <p className="text-[var(--text-primary)] font-medium">{reservation.departure_date}</p>
-              <p className="text-[var(--text-muted)] text-xs">Check-out: {settings?.check_out_time || '12:00 PM'}</p>
+              <p className="text-[var(--text-muted)] text-xs">Check-out: {reservation.checkOutTime}</p>
             </div>
             <div>
               <p className="text-[var(--text-muted)]">Guests</p>
@@ -226,22 +151,22 @@ function ConfirmationContent() {
           <div className="space-y-3 text-sm text-[var(--text-muted)]">
             <div className="flex gap-3">
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
-              <p>Check-in is at <span className="text-[var(--text-primary)] font-medium">{settings?.check_in_time || '2:00 PM'}</span>. Please check in at the office upon arrival.</p>
+              <p>Check-in is at <span className="text-[var(--text-primary)] font-medium">{reservation.checkInTime}</span>. Please check in at the office upon arrival.</p>
             </div>
             <div className="flex gap-3">
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
-              <p>Check-out is at <span className="text-[var(--text-primary)] font-medium">{settings?.check_out_time || '12:00 PM'}</span>.</p>
+              <p>Check-out is at <span className="text-[var(--text-primary)] font-medium">{reservation.checkOutTime}</span>.</p>
             </div>
             <div className="flex gap-3">
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
               <p>All pets must be on a leash at all times.</p>
             </div>
-            {policy?.policy_text && (
+            {reservation.policyText && (
               <div className="flex gap-3">
                 <span style={{ color: 'var(--accent-color)' }}>✓</span>
                 <p>
-                  {policy.policy_text} To cancel, please contact us directly.
-                  {!policy.deposit_refundable && (
+                  {reservation.policyText} To cancel, please contact us directly.
+                  {!reservation.depositRefundable && (
                     <span className="text-[var(--text-primary)] font-medium"> The deposit is non-refundable for these dates.</span>
                   )}
                 </p>
@@ -274,17 +199,5 @@ function ConfirmationContent() {
         </div>
       </div>
     </main>
-  )
-}
-
-export default function ConfirmationPage() {
-  return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--surface-bg)' }}>
-        <p className="text-[var(--text-muted)]">Loading...</p>
-      </div>
-    }>
-      <ConfirmationContent />
-    </Suspense>
   )
 }
