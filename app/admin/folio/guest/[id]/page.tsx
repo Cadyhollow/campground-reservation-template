@@ -474,8 +474,10 @@ export default function GuestAccountPage() {
                       {ev.note && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 1 }}>{ev.note}</div>}
                       {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
                       {/* Informational only — already excluded from the amount at right and
-                          from every total. Cash and check carry no fee, so this is blank. */}
-                      {ev.feeAmount ? <div style={{ fontSize: 11, color: '#9ca3af' }}>includes ${(Math.abs(ev.feeAmount)/100).toFixed(2)} transaction fee{ev.feeAmount < 0 ? ' returned' : ''}</div> : null}
+                          from every total. Cash and check carry no fee, so this is blank.
+                          "plus … charged": the fee is added on top of the base, and the amount
+                          at right is the base. See the staff folio for the full reasoning. */}
+                      {ev.feeAmount ? <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.feeAmount < 0 ? `$${(Math.abs(ev.feeAmount)/100).toFixed(2)} transaction fee refunded` : `plus $${(ev.feeAmount/100).toFixed(2)} transaction fee charged`}</div> : null}
                     </div>
                     <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 600, color: isPay ? '#15803d' : '#111827' }}>
                       {/* A refund is a payment event with a NEGATIVE amount, so the literal

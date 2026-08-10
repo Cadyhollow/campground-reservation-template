@@ -77,22 +77,36 @@ export async function POST(request: NextRequest) {
       ? `Reservation stay — ${resNights} night${resNights !== 1 ? 's' : ''} @ ${money(resNightlyRate)}`
       : 'Reservation stay'
 
-    // A card payment is stored gross (stay + surcharge). Showing only the gross leaves an
-    // unexplained number on the receipt, so each payment that carries a surcharge is split
-    // into what went to the stay and what the processing fee was. Totals are unaffected —
-    // paymentsTotal already nets the surcharge out.
+    // A card payment is stored GROSS (stay + surcharge) and that gross is what this row
+    // renders — unlike the folio ledger, which renders the base. So the fee here really is
+    // contained in the number beside it, and the row is broken out into its two labelled
+    // parts rather than annotated: base applied to the stay, fee, then the gross actually
+    // charged. That also resolves what used to look like an error — a "Card $227.70" line
+    // sitting under a "Total $220.00" with a zero balance. Totals are unaffected:
+    // paymentsTotal nets the surcharge out and is computed from the data, not from this.
     const paymentRowsHtml = (payments || []).map((p: any) => {
       const fee = p.surcharge_amount || 0
-      const main = `
+      const label = `${p.method} — ${new Date(p.paid_at).toLocaleDateString()}${p.note ? ' · ' + p.note : ''}`
+      // No fee (cash, check, a waived card fee): one row, exactly as before.
+      if (fee === 0) return `
       <tr>
-        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;text-transform:capitalize;">${p.method} — ${new Date(p.paid_at).toLocaleDateString()}${p.note ? ' · ' + p.note : ''}</td>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;text-transform:capitalize;">${label}</td>
         <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">${money(p.amount)}</td>
       </tr>`
-      if (fee <= 0) return main
-      return main + `
+      // Refund rows carry a negative fee; "charged"/"Total charged" would read backwards.
+      const totalLabel = p.amount < 0 ? 'Total refunded' : 'Total charged'
+      return `
       <tr>
-        <td style="padding:2px 0 6px 12px;color:#6B7280;font-size:12px;">· of which transaction fee</td>
-        <td style="padding:2px 0 6px;color:#6B7280;font-size:12px;text-align:right;">${money(fee)}</td>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;text-transform:capitalize;">${label}</td>
+        <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">${money(p.amount - fee)}</td>
+      </tr>
+      <tr>
+        <td style="padding:2px 0;color:#6B7280;font-size:12px;padding-left:12px;">Transaction fee</td>
+        <td style="padding:2px 0;color:#6B7280;font-size:12px;text-align:right;">${money(fee)}</td>
+      </tr>
+      <tr>
+        <td style="padding:2px 0 6px 12px;color:#9CA3AF;font-size:12px;">${totalLabel}</td>
+        <td style="padding:2px 0 6px;color:#9CA3AF;font-size:12px;text-align:right;">${money(p.amount)}</td>
       </tr>`
     }).join('')
 
@@ -100,8 +114,10 @@ export async function POST(request: NextRequest) {
     // formats can't drift — a card payment is stored gross in both.
     const paymentRowsText = (payments || []).map((p: any) => {
       const fee = p.surcharge_amount || 0
-      const line = `${p.method.charAt(0).toUpperCase() + p.method.slice(1)} on ${new Date(p.paid_at).toLocaleDateString()}${p.note ? ' (' + p.note + ')' : ''}: ${money(p.amount)}`
-      return fee > 0 ? `${line}\n    · of which transaction fee: ${money(fee)}` : line
+      const head = `${p.method.charAt(0).toUpperCase() + p.method.slice(1)} on ${new Date(p.paid_at).toLocaleDateString()}${p.note ? ' (' + p.note + ')' : ''}`
+      if (fee === 0) return `${head}: ${money(p.amount)}`
+      const totalLabel = p.amount < 0 ? 'Total refunded' : 'Total charged'
+      return `${head}: ${money(p.amount - fee)}\n    Transaction fee: ${money(fee)}\n    ${totalLabel}: ${money(p.amount)}`
     }).join('\n')
 
     if (isReservationType) {
