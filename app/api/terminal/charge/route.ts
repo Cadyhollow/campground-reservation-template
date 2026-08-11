@@ -20,7 +20,7 @@ const supabase = createClient(
 // COMPLETED but the webhook never arrived, except a GET that writes money would race the
 // webhook and could record the same payment twice. Recording stays with the webhook.
 export async function GET(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   const checkoutId = request.nextUrl.searchParams.get('checkoutId')
@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {

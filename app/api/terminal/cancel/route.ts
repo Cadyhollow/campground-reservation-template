@@ -21,7 +21,7 @@ const supabase = createClient(
 // find some way to make the reservation look settled, which is how a payment that never
 // happened ends up recorded by hand.
 export async function POST(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {
