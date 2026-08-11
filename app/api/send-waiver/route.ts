@@ -17,7 +17,7 @@ function getResend() { return new Resend(process.env.RESEND_API_KEY) }
 // - Returns { success, token, signUrl, emailed } so the caller can either
 //   show "sent" or open the sign page directly (in-person).
 export async function POST(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {

@@ -19,7 +19,7 @@ export { BOOKING_REFUND_REF }
 // the folio row. This route is the HTTP wrapper it always was: same request body, same
 // responses.
 export async function POST(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {

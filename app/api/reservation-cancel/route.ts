@@ -27,7 +27,7 @@ const supabase = createClient(
 // booking in cancelled-but-unrefunded, which is the state that needs a human and a phone call
 // to get out of.
 export async function POST(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {

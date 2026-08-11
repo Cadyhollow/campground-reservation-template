@@ -53,9 +53,30 @@ const skip = configured ? false : 'no configured Supabase project in .env.local'
 const PORT = 4874
 const BASE = `http://127.0.0.1:${PORT}`
 
-// The value /api/admin-auth sets on a successful login. Hardcoded rather than derived so the
-// test breaks loudly if the session format changes.
-const ADMIN_COOKIE = 'admin_session=authenticated'
+// A real admin session, obtained by logging in through /api/admin-auth with the configured
+// password and keeping the Set-Cookie. It used to be the hardcoded string
+// 'admin_session=authenticated' — which was accurate, and was the bug: the session value was a
+// constant with no secret in it, so anyone could send it (PR 5a-0, see lib/admin-session.ts).
+//
+// Logging in for real is now the only way to get a valid cookie, and that is the point: this
+// exercises mint-then-verify across the actual HTTP boundary rather than re-implementing the
+// signing here, where a mistake would agree with itself and prove nothing.
+const canLogIn = configured && !placeholder(env.ADMIN_PASSWORD)
+const skipLogin = canLogIn ? false : 'no ADMIN_PASSWORD in .env.local'
+let ADMIN_COOKIE = ''
+
+async function logIn(): Promise<string> {
+  const res = await fetch(`${BASE}/api/admin-auth`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: env.ADMIN_PASSWORD }),
+  })
+  assert.equal(res.status, 200, 'login with the configured ADMIN_PASSWORD should succeed')
+  const setCookie = res.headers.get('set-cookie') || ''
+  const value = /admin_session=([^;]+)/.exec(setCookie)?.[1]
+  assert.ok(value, 'login response carried no admin_session cookie')
+  return `admin_session=${value}`
+}
 
 let server: ChildProcess | null = null
 
@@ -72,12 +93,14 @@ before(async () => {
   for (;;) {
     try {
       await fetch(`${BASE}/api/availability?arrival=2026-08-18&departure=2026-08-20`)
-      return
+      break
     } catch {
       if (Date.now() > deadline) throw new Error('next dev did not come up in time')
       await new Promise(r => setTimeout(r, 500))
     }
   }
+
+  if (canLogIn) ADMIN_COOKIE = await logIn()
 }, { timeout: 130_000 })
 
 after(() => { server?.kill('SIGTERM') })
@@ -162,7 +185,7 @@ test('GET /api/availability serves data to an anonymous visitor', { skip }, asyn
 // cookie check would pass every test above while locking staff out entirely.
 //
 // Read-only routes ONLY. This test never sends the admin cookie to a money route.
-test('a valid admin session is accepted (read-only routes)', { skip }, async () => {
+test('a valid admin session is accepted (read-only routes)', { skip: skipLogin }, async () => {
   for (const path of ['/api/square/status']) {
     const res = await fetch(`${BASE}${path}`, { headers: { cookie: ADMIN_COOKIE } })
     assert.notEqual(res.status, 401, `${path} should accept a valid admin_session cookie`)
@@ -197,4 +220,72 @@ test('a forged admin_session value is refused', { skip }, async () => {
     headers: { cookie: 'admin_session=not-authenticated' },
   })
   assert.equal(res.status, 401)
+})
+
+// ---------------------------------------------------------------------------
+// PR 5a-0 — the vulnerability these exist to keep closed.
+//
+// The guards used to accept `admin_session=authenticated`: a constant, published in this public
+// repository, that any caller could send. Knowing ADMIN_PASSWORD was not required. Every client
+// provisioned from this template shipped with it. These tests fail if anything ever restores a
+// value-equality check.
+// ---------------------------------------------------------------------------
+
+test('the old constant session value is refused on API routes', { skip }, async () => {
+  const res = await fetch(`${BASE}/api/square/status`, {
+    headers: { cookie: 'admin_session=authenticated' },
+  })
+  assert.equal(
+    res.status, 401,
+    "accepted the literal 'authenticated' cookie — the session is forgeable again"
+  )
+})
+
+// The same forgery reached admin PAGES through middleware.ts, which had its own copy of the
+// check. Asserting only the API half would leave that one free to regress.
+test('the old constant session value is refused on admin pages', { skip }, async () => {
+  const res = await fetch(`${BASE}/admin/reservations`, {
+    headers: { cookie: 'admin_session=authenticated' },
+    redirect: 'manual',
+  })
+  assert.ok(
+    [302, 303, 307, 308].includes(res.status),
+    `expected a redirect to the login page, got ${res.status} — middleware accepted a forged cookie`
+  )
+  assert.match(res.headers.get('location') || '', /\/admin\/login/)
+})
+
+// A signature that does not match its payload must fail. Flipping one character of a REAL
+// cookie's signature is the closest an attacker gets: correct format, correct expiry, wrong MAC.
+test('a tampered signature is refused', { skip: skipLogin }, async () => {
+  const [version, expiry, signature] = ADMIN_COOKIE.replace('admin_session=', '').split('.')
+  const flipped = (signature[0] === 'A' ? 'B' : 'A') + signature.slice(1)
+  const res = await fetch(`${BASE}/api/square/status`, {
+    headers: { cookie: `admin_session=${version}.${expiry}.${flipped}` },
+  })
+  assert.equal(res.status, 401)
+})
+
+// An expired cookie must fail even though its signature is genuine — otherwise the 24h lifetime
+// is enforced only by the browser, which the caller controls.
+test('an expired session is refused', { skip: skipLogin }, async () => {
+  const [version, , signature] = ADMIN_COOKIE.replace('admin_session=', '').split('.')
+  const past = Math.floor(Date.now() / 1000) - 60
+  const res = await fetch(`${BASE}/api/square/status`, {
+    headers: { cookie: `admin_session=${version}.${past}.${signature}` },
+  })
+  assert.equal(res.status, 401)
+})
+
+// A blank password must never authenticate. On a deployment where ADMIN_PASSWORD was unset, the
+// old handler compared undefined to undefined and let `{}` straight through.
+test('an empty or missing password is refused by the login route', { skip }, async () => {
+  for (const body of ['{}', JSON.stringify({ password: '' })]) {
+    const res = await fetch(`${BASE}/api/admin-auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+    assert.equal(res.status, 401, `login accepted ${body}`)
+  }
 })

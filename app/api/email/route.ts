@@ -11,7 +11,7 @@ import { sendConfirmationEmails } from '@/lib/confirmation-email'
 // require an admin session without touching the booking flow. Before that change, gating this
 // route would have silently killed every confirmation email a camper receives.
 export async function POST(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {

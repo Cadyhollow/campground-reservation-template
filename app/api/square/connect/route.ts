@@ -3,7 +3,7 @@ import { getSquareAuthUrl } from '@/lib/square-oauth'
 import { requireAdmin } from '@/lib/require-admin'
 
 export async function GET(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {

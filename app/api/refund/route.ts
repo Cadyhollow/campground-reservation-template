@@ -7,7 +7,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // negative row. Same move Part 2 made for the booking leg. This route is the HTTP wrapper it
 // always was: same request body, same responses.
 export async function POST(request: NextRequest) {
-  const denied = requireAdmin(request)
+  const denied = await requireAdmin(request)
   if (denied) return denied
 
   try {
