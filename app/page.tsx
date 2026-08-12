@@ -15,6 +15,7 @@
 // first paint, so there is nothing left to shift.
 
 import { getSettings } from '@/lib/settings-server'
+import { getHomeData } from '@/lib/home-server'
 import HomeClient from './HomeClient'
 
 // The layout already forces dynamic rendering for this tree, so this is belt-and-braces —
@@ -25,6 +26,12 @@ export const dynamic = 'force-dynamic'
 export default async function Page() {
   // Shares the layout's cache()'d read, so the theme, the page title and the hero come from
   // ONE settings query per request rather than one each.
-  const settings = await getSettings()
-  return <HomeClient initialSettings={settings} />
+  //
+  // Security PR 7-1 adds the second call: the site types and categories HomeClient used to read
+  // from the browser with the publishable key. Under the locked-down schema the `anon` role
+  // cannot read either table, so a camper's browser query would return nothing at all — these
+  // have to be read here, with the service key, or the feature cards and the category accordion
+  // silently render empty.
+  const [settings, home] = await Promise.all([getSettings(), getHomeData()])
+  return <HomeClient initialSettings={settings} initialHome={home} />
 }

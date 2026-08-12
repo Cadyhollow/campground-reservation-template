@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { fetchSquareCheckout, normalizeCheckoutState } from '@/lib/square-terminal'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 import { SQUARE_API_BASE } from '@/lib/square-env'
 
 const supabase = createClient(
@@ -20,7 +20,7 @@ const supabase = createClient(
 // COMPLETED but the webhook never arrived, except a GET that writes money would race the
 // webhook and could record the same payment twice. Recording stays with the webhook.
 export async function GET(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'staff')
   if (denied) return denied
 
   const checkoutId = request.nextUrl.searchParams.get('checkoutId')
@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'staff')
   if (denied) return denied
 
   try {

@@ -12,6 +12,7 @@
     "@headlessui/react": "^2.2.10",
     "@heroicons/react": "^2.2.0",
     "@square/web-sdk": "^2.1.0",
+    "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.102.1",
     "browser-image-compression": "^2.0.2",
     "next": "16.2.3",

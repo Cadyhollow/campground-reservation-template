@@ -1,7 +1,14 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { createBrowserSupabase } from '@/lib/supabase-browser'
+
+// Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
+// Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
+// as `authenticated` and the role-gated RLS policies apply. Safe at module scope:
+// createBrowserClient returns a singleton in the browser and a no-op cookie store during
+// prerender.
+const supabase = createBrowserSupabase()
 import toast, { Toaster } from 'react-hot-toast'
 
 type MinStayRule = {

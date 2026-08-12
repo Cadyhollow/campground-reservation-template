@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
 import { buildLedger, buildStatement } from '@/lib/ledger'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 
 // Lazy so `next build` (which has no RESEND_API_KEY) doesn't construct — and
 // throw — at import time. The client is built at request time instead.
@@ -13,7 +13,7 @@ const supabase = createClient(
 )
 
 export async function POST(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'staff')
   if (denied) return denied
 
   try {

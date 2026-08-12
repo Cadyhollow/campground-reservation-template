@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { notVoided } from '@/lib/ledger'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 
 // POST /api/guests/balances  { guest_ids: string[] }
 // → { balances: { [guest_id]: cents } }
@@ -15,7 +15,7 @@ import { requireAdmin } from '@/lib/require-admin'
 // N+1 regardless of list size.
 //
 // AUTH: middleware.ts only guards /admin/* PAGES (matcher '/admin/:path*'), not /api/*, so this
-// route enforces the admin session itself. That check is now lib/require-admin.ts — this route
+// route enforces the admin session itself. That check is now lib/require-role.ts — this route
 // was the original of it, and every other admin route uses the same helper. NOT summit-gated:
 // payment mode is for everyone on the plan.
 const svc = createClient(
@@ -24,7 +24,7 @@ const svc = createClient(
 )
 
 export async function POST(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'staff')
   if (denied) return denied
 
   const body = await request.json().catch(() => ({}))
