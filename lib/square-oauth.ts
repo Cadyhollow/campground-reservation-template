@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { signSquareState } from '@/lib/square-state'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -11,13 +12,22 @@ const SQUARE_BASE_URL =
     : 'https://connect.squareupsandbox.com'
 
 export function getSquareAuthUrl(campgroundId: string): string {
-  // Build state as base64-encoded JSON containing client ID + return URL.
-  // The central callback at admin.myresonation.com uses this to route back.
-  const statePayload = {
+  // The state carries which park this handshake belongs to, and the URL to come back to, through
+  // the merchant's browser to the ONE shared callback at admin.myresonation.com (a Square app has
+  // a single configured redirect URL, so the callback cannot be per-client).
+  //
+  // Security PR 7-4a: it is now SIGNED with this tenant's own secret. It used to be plain base64
+  // JSON, which meant anyone could name someone else's campground_id and have the callback file
+  // their Square tokens under that park — see lib/square-state.ts for the full attack and for why
+  // the secret is per-tenant rather than platform-wide.
+  //
+  // signSquareState throws if SQUARE_STATE_SECRET is unset. That is deliberate: a connection this
+  // server cannot sign is one the callback must refuse, and failing here — visibly, before the
+  // owner leaves for Square — is far better than starting a handshake that dies on the way back.
+  const state = signSquareState(process.env.SQUARE_STATE_SECRET || '', {
     campground_id: campgroundId,
     return_to: process.env.NEXT_PUBLIC_BASE_URL || '',
-  }
-  const state = Buffer.from(JSON.stringify(statePayload)).toString('base64')
+  })
 
   const params = new URLSearchParams({
     client_id: process.env.SQUARE_APPLICATION_ID!,
@@ -29,21 +39,15 @@ export function getSquareAuthUrl(campgroundId: string): string {
   return `${SQUARE_BASE_URL}/oauth2/authorize?${params.toString()}`
 }
 
-export async function exchangeCodeForTokens(code: string) {
-  const response = await fetch(`${SQUARE_BASE_URL}/oauth2/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      client_id: process.env.SQUARE_APPLICATION_ID,
-      client_secret: process.env.SQUARE_APPLICATION_SECRET,
-      code,
-      grant_type: 'authorization_code',
-      redirect_uri: `${process.env.NEXT_PUBLIC_BASE_URL}/api/square/callback`,
-    }),
-  })
-
-  return response.json()
-}
+// exchangeCodeForTokens() USED TO LIVE HERE AND HAS BEEN DELETED. It was never called by
+// anything, and its redirect_uri pointed at `${NEXT_PUBLIC_BASE_URL}/api/square/callback` — a
+// per-client route that does not exist and is not how this works. The code exchange happens in
+// the shared callback (resonation-admin app/api/square/callback), against the redirect URL the
+// Square application is actually configured with.
+//
+// It is called out rather than silently removed because the wrong URL in it was read as evidence
+// that the template was missing a callback route, which sent a previous review down the wrong
+// path entirely. Do not reintroduce a per-client token exchange.
 
 // Now accepts optional locationId parameter
 export async function saveSquareConnection(
