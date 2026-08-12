@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 import {
   fetchSquareCheckout,
   cancelSquareCheckout,
@@ -21,7 +21,7 @@ const supabase = createClient(
 // find some way to make the reservation look settled, which is how a payment that never
 // happened ends up recorded by hand.
 export async function POST(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'staff')
   if (denied) return denied
 
   try {

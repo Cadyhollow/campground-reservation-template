@@ -1,104 +1,32 @@
-'use client'
+// The admin login screen — a SERVER component.
+//
+// Security PR 7-1. It used to be 'use client' and fetched its own branding:
+//
+//     supabase.from('settings').select('park_name, logo_url, logo_shape, accent_color')...
+//
+// with the publishable key, from the browser, on a page that by definition has no session yet.
+// That was the last browser read left on an admin path, and the one the locked-down schema cannot
+// be worked around: every other admin page can switch to an authenticated session, but the login
+// page runs BEFORE anyone is authenticated, so there is no session for it to use. Left alone,
+// revoking anon leaves the login screen with no park name and a broken logo — the one page you
+// cannot afford to break, because it is how you get in to fix anything else.
+//
+// It now reads through lib/settings-server.ts (service-role, server-side, request-cached and
+// shared with the layout), and hands the form what it needs as props. The browser makes no
+// Supabase data call to render this page at all.
+//
+// The interactive half lives in LoginForm.tsx.
 
-import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
-import LogoBadge from '@/app/components/LogoBadge'
-import { supabase } from '@/lib/supabase'
+import { getSettings } from '@/lib/settings-server'
+import LoginForm from './LoginForm'
 
-export default function AdminLoginPage() {
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [settings, setSettings] = useState<any>(null)
-  const router = useRouter()
-
-  useEffect(() => {
-    supabase.from('settings').select('park_name, logo_url, logo_shape, accent_color').limit(1).single().then(({ data }) => {
-      if (data) setSettings(data)
-    })
-  }, [])
-
-  async function handleLogin() {
-    if (!password) { setError('Please enter the password.'); return }
-    setLoading(true)
-    setError('')
-
-    const res = await fetch('/api/admin-auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
-    })
-
-    const data = await res.json()
-
-    if (data.success) {
-      window.location.href = '/admin'
-    } else {
-      setError('Incorrect password. Please try again.')
-      setLoading(false)
-    }
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter') handleLogin()
-  }
+export default async function AdminLoginPage() {
+  const settings = await getSettings()
 
   return (
-    <main className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#1C1C1C' }}>
-      <div className="w-full max-w-sm px-4">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <LogoBadge
-            logoUrl={settings?.logo_url}
-            parkName={settings?.park_name}
-            shape={settings?.logo_shape}
-            accentColor={settings?.accent_color}
-            size={100}
-            className="mx-auto mb-4"
-          />
-          <h1 className="text-white font-bold text-xl">{settings?.park_name || 'Campground'}</h1>
-          <p className="text-sm mt-1" style={{ color: 'var(--accent-color)' }}>Admin Dashboard</p>
-        </div>
-
-        {/* Login Card */}
-        <div className="rounded-2xl p-6" style={{ backgroundColor: '#2B2B2B' }}>
-          <h2 className="text-white font-bold text-lg mb-6 text-center">Staff Login</h2>
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Password</label>
-              <input
-                type="password"
-                className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
-                placeholder="Enter staff password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                onKeyDown={handleKeyDown}
-                autoFocus
-              />
-            </div>
-
-            {error && (
-              <p className="text-red-400 text-sm">{error}</p>
-            )}
-
-            <button
-              onClick={handleLogin}
-              disabled={loading}
-              className="w-full py-3 rounded-xl text-white font-semibold transition-colors disabled:opacity-50"
-              style={{ backgroundColor: 'var(--accent-color)' }}
-              onMouseOver={e => (e.currentTarget.style.backgroundColor = '#2DADC4')}
-              onMouseOut={e => (e.currentTarget.style.backgroundColor = 'var(--accent-color)')}
-            >
-              {loading ? 'Logging in...' : 'Log In'}
-            </button>
-          </div>
-        </div>
-
-        <p className="text-center text-gray-600 text-xs mt-6">
-          © 2026 {settings?.park_name || 'Campground'}
-        </p>
-      </div>
-    </main>
+    <LoginForm
+      parkName={settings?.park_name ?? null}
+      logoUrl={settings?.logo_url ?? null}
+    />
   )
 }

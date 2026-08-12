@@ -7,6 +7,12 @@
 //
 // Importing this from a client component would drag a Supabase client into the browser bundle;
 // it is only ever called from server components.
+//
+// Security PR 7-1 switched the key from the publishable one to service-role. The query never ran
+// in a browser, but it ran with the browser's credential — so it was a read that depended on
+// `anon` being able to see `settings`, and the locked-down schema revokes exactly that. Nothing
+// about the result changes; without the swap this returns null on every request and the whole
+// site renders with default branding.
 
 import { cache } from 'react'
 import { createClient } from '@supabase/supabase-js'
@@ -18,7 +24,7 @@ import { createClient } from '@supabase/supabase-js'
 export const getSettings = cache(async () => {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
   const { data } = await supabase.from('settings').select('*').limit(1).single()
   return data

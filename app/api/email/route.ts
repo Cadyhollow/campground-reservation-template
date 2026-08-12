@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 import { sendConfirmationEmails } from '@/lib/confirmation-email'
 
 // Thin wrapper. The email bodies moved VERBATIM to lib/confirmation-email.ts — see that file for
@@ -11,7 +11,7 @@ import { sendConfirmationEmails } from '@/lib/confirmation-email'
 // require an admin session without touching the booking flow. Before that change, gating this
 // route would have silently killed every confirmation email a camper receives.
 export async function POST(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'staff')
   if (denied) return denied
 
   try {

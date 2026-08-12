@@ -3,9 +3,18 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { createBrowserSupabase } from '@/lib/supabase-browser'
+
+// Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
+// Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
+// as `authenticated` and the role-gated RLS policies apply. Safe at module scope:
+// createBrowserClient returns a singleton in the browser and a no-op cookie store during
+// prerender.
+const supabase = createBrowserSupabase()
 import Image from 'next/image'
 import { planAtLeast, normalizePlan } from '@/lib/plan'
+import { atLeast, type Role } from '@/lib/roles'
+import { roleForPath } from '@/lib/admin-pages'
 
 type NavItem = {
   name: string
@@ -80,6 +89,9 @@ const navGroups: NavGroup[] = [
     icon: '🔧',
     items: [
       { name: 'Settings', href: '/admin/settings', icon: '⚙️' },
+      // Owner-only, and hidden below Owner by the roleForPath() filter further down rather than
+      // by anything special here — lib/admin-pages.ts maps /admin/users to 'owner'.
+      { name: 'Staff Accounts', href: '/admin/users', icon: '👤' },
     ],
   },
 ]
@@ -91,6 +103,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [settings, setSettings] = useState<any>(null)
   const [posEnabled, setPosEnabled] = useState(false)
   const [settingsLoaded, setSettingsLoaded] = useState(false) // gate plan-dependent nav until first fetch resolves
+  const [role, setRole] = useState<Role | null>(null)
+  const [roleLoaded, setRoleLoaded] = useState(false)
+  const [deniedPath, setDeniedPath] = useState<string | null>(null)
+
+  // The login page runs before anyone is authenticated, so the /api/me fetch below must not run
+  // there — it would 401 on every visit to the one page that is supposed to be reachable.
+  const isLoginPage = pathname.startsWith('/admin/login')
 
   // Find which group contains the active page and open only that one
   const getActiveGroup = () => {
@@ -146,12 +165,45 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       })
   }, [])
 
+  // The signed-in user's role, for hiding nav items they cannot use. Asked of the server rather
+  // than worked out here: the role lives in `profiles`, whose RLS policy scopes SELECT to the
+  // caller's own row, and reading it needs the session the server sees at guard time.
+  //
+  // Fails closed to Staff: a failed fetch hides the privileged items rather than showing links
+  // that would only redirect. `roleLoaded` gates the nav the same way `settingsLoaded` does, so
+  // Owner-only groups never flash into view during the first paint and then vanish.
+  useEffect(() => {
+    if (isLoginPage) return
+    fetch('/api/me')
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (data?.role) setRole(data.role as Role)
+      })
+      .catch(() => {})
+      .finally(() => setRoleLoaded(true))
+  }, [isLoginPage])
+
+  // proxy.ts appends ?denied=<path> when it turns a user away from a page above their role.
+  // Without this they are simply bounced to /admin with no explanation, which reads as a bug.
+  useEffect(() => {
+    const denied = new URLSearchParams(window.location.search).get('denied')
+    setDeniedPath(denied)
+    if (denied) {
+      // Drop the marker so a refresh, or a later back-navigation, does not re-announce it.
+      const url = new URL(window.location.href)
+      url.searchParams.delete('denied')
+      window.history.replaceState({}, '', url.toString())
+    }
+  }, [pathname])
+
   useEffect(() => {
     setOpenGroup(getActiveGroup())
   }, [pathname])
 
   async function handleLogout() {
-    await fetch('/api/admin-auth', { method: 'DELETE' })
+    // Ends the Supabase session and clears its cookies, which is what every server guard reads.
+    // There is no logout ENDPOINT any more because there is no server-minted cookie to clear.
+    await createBrowserSupabase().auth.signOut()
     window.location.href = '/admin/login'
   }
 
@@ -165,6 +217,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     .map(g => ({
       ...g,
       items: g.items.filter(item => {
+        // Role gate. roleForPath() is the SAME table proxy.ts enforces with, so a link can never
+        // appear for a page that would then redirect. This is UX only — hiding a link authorises
+        // nothing, and proxy.ts refuses the URL whether or not it was ever shown.
+        if (!atLeast(role, roleForPath(item.href))) return false
         // minPlan is always enforced; POS (an add-on) governs only posOnly groups, never plan gates
         return !item.minPlan || planAtLeast(plan, item.minPlan)
       })
@@ -210,9 +266,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           Dashboard
         </Link>
 
-        {/* Plan-dependent nav is held behind a skeleton until settings resolve, so gated
-            items can never flash before the plan is known. */}
-        {!settingsLoaded ? (
+        {/* Plan- and role-dependent nav is held behind a skeleton until BOTH resolve, so gated
+            items can never flash before the plan and the role are known. Role fails closed to
+            Staff, so rendering early would show an Owner the Staff menu and then correct it. */}
+        {!settingsLoaded || !roleLoaded ? (
           <div className="space-y-1.5 px-1 pt-1" aria-hidden>
             {[0, 1, 2, 3, 4].map(i => (
               <div key={i} style={{ height: 44, borderRadius: 12, background: 'rgba(255,255,255,0.06)' }} />
@@ -316,6 +373,21 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="min-h-screen bg-gray-50">
+
+      {/* proxy.ts turned this user away from a page above their role and said so in the URL.
+          Without this they land on /admin with no explanation, which reads as a broken link
+          rather than a permission boundary. */}
+      {deniedPath && (
+        <div role="alert" className="px-4 py-3 text-sm"
+          style={{ background: '#fef3c7', color: '#92400e', borderBottom: '1px solid #fde68a' }}>
+          <strong>Not available to your account.</strong>{' '}
+          <span style={{ opacity: 0.9 }}>
+            {deniedPath} needs a higher permission level. Ask an owner if you need access.
+          </span>
+          <button onClick={() => setDeniedPath(null)} aria-label="Dismiss"
+            className="ml-3 underline" style={{ opacity: 0.75 }}>Dismiss</button>
+        </div>
+      )}
 
       {/* Mobile top bar */}
       <div className="lg:hidden text-white px-4 py-3 flex items-center justify-between"

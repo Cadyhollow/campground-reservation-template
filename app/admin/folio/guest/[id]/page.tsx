@@ -1,16 +1,20 @@
 'use client'
 import { allPaymentMethods, methodLabel } from '@/lib/transactions'
 import { useEffect, useState } from 'react'
-import { createClient } from '@supabase/supabase-js'
 import { useParams, useRouter } from 'next/navigation'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
 import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
+import { createBrowserSupabase } from '@/lib/supabase-browser'
+import { useRole } from '@/lib/use-role'
+import { atLeast } from '@/lib/roles'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+// Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
+// Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
+// as `authenticated` and the role-gated RLS policies apply. Safe at module scope:
+// createBrowserClient returns a singleton in the browser and a no-op cookie store during
+// prerender.
+const supabase = createBrowserSupabase()
 
 const FALLBACK_CATEGORIES = ['Camping Supplies', 'Food & Drink', 'Rentals', 'Fees', 'General']
 
@@ -76,6 +80,14 @@ export default function GuestAccountPage() {
   const params = useParams()
   const router = useRouter()
   const guestId = params.id as string
+
+  const { role, roleLoaded } = useRole()
+
+  // Manager+ for anything that moves money — refunds and voids. PRESENTATION ONLY: /api/refund
+  // and /api/reservation-refund call requireRole(request, 'manager') and the RLS policy on
+  // folio_payments UPDATE is manager+ too, so a Staff caller is refused twice over whether or
+  // not the button was drawn. `roleLoaded` keeps it hidden until the answer arrives.
+  const canMoveMoney = roleLoaded && atLeast(role, 'manager')
 
   const [guest, setGuest] = useState<Guest | null>(null)
   const [folio, setFolio] = useState<Folio | null>(null)
@@ -499,10 +511,10 @@ export default function GuestAccountPage() {
                       {/* Gated on what is still refundable, like every other surface — not on
                           the row's status, which flips to 'partially_refunded' after the first
                           partial and used to retire the button for good. */}
-                      {ev.payment && (ev.refundableCents || 0) > 0 && (
+                      {ev.payment && (ev.refundableCents || 0) > 0 && canMoveMoney && (
                         <button onClick={() => openRefund(ev.payment)} style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 5, color: '#6b7280', cursor: 'pointer', fontSize: 11, padding: '2px 7px', fontWeight: 600, marginRight: 6 }}>Refund</button>
                       )}
-                      {ev.paymentId && ev.payment?.status === 'completed' && (
+                      {ev.paymentId && ev.payment?.status === 'completed' && canMoveMoney && (
                         <button onClick={() => voidPayment(ev.paymentId!)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 18, padding: '0 2px', lineHeight: '1' }}>×</button>
                       )}
                     </div>

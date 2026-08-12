@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from 'react'
 import Image from 'next/image'
 import CampgroundMap from './components/CampgroundMap'
-import { supabase } from '@/lib/supabase'
+import type { HomeData } from '@/lib/home-server'
 
 type Site = {
   id: string
@@ -30,7 +30,13 @@ type Category = {
 // The booking page's interactive half. Split out of app/page.tsx, which is now a server
 // component that reads the park settings and hands them in below — see the comment on
 // `initialSettings` for why.
-export default function HomeClient({ initialSettings }: { initialSettings: any }) {
+export default function HomeClient({
+  initialSettings,
+  initialHome,
+}: {
+  initialSettings: any
+  initialHome: HomeData
+}) {
   const [step, setStep] = useState(1)
   const [arrival, setArrival] = useState('')
   const [departure, setDeparture] = useState('')
@@ -50,9 +56,9 @@ export default function HomeClient({ initialSettings }: { initialSettings: any }
   // no-hero variant and then jumped, because the settings arrived in a useEffect after mount.
   // The theme has been resolved server-side for exactly this reason; the hero now is too.
   const [settings, setSettings] = useState<any>(initialSettings ?? null)
-  const [siteTypes, setSiteTypes] = useState<string[]>([])
+  const [siteTypes] = useState<string[]>(initialHome.siteTypes)
   const [sameDayBlock, setSameDayBlock] = useState<string | null>(null)
-  const [categories, setCategories] = useState<Category[]>([])
+  const [categories] = useState<Category[]>(initialHome.categories)
   const [siteCategories, setSiteCategories] = useState<Record<string, number[]>>({})
   const [openCategories, setOpenCategories] = useState<Set<number | 'uncategorized'>>(new Set())
   const [expandedPhotoSiteId, setExpandedPhotoSiteId] = useState<string | null>(null)
@@ -60,20 +66,10 @@ export default function HomeClient({ initialSettings }: { initialSettings: any }
 
   const today = new Date().toISOString().split('T')[0]
 
-  useEffect(() => {
-    // The settings fetch that used to live here is gone: the server component already read
-    // them and passed them in, and re-fetching would only spend a round trip to arrive at the
-    // same row. The other two reads stay — they are not needed for the first paint.
-    supabase.from('sites').select('site_type').then(({ data }) => {
-      if (data) {
-        const types = [...new Set(data.map((s) => s.site_type))]
-        setSiteTypes(types)
-      }
-    })
-    supabase.from('categories').select('*').order('name').then(({ data }) => {
-      setCategories(data || [])
-    })
-  }, [])
+  // Security PR 7-1: the site types and categories that used to be fetched here on mount are
+  // now props. They were two anon-key reads from the browser, they are settled before the
+  // camper touches anything, and under the locked-down schema anon can no longer read either
+  // table — so they are read on the server by lib/home-server.ts and handed in.
 
   useEffect(() => {
     if (selectedSite && selectedSiteRef.current) {
@@ -119,21 +115,12 @@ export default function HomeClient({ initialSettings }: { initialSettings: any }
     setSeasonStart(data.seasonStart || '')
     setSeasonEnd(data.seasonEnd || '')
 
-    // Fetch site_categories for these sites
-    if (fetchedSites.length > 0) {
-      const siteIds = fetchedSites.map(s => s.id)
-      const { data: sc } = await supabase
-        .from('site_categories')
-        .select('*')
-        .in('site_id', siteIds)
-      if (sc) {
-        const map: Record<string, number[]> = {}
-        sc.forEach((row) => {
-          if (!map[row.site_id]) map[row.site_id] = []
-          map[row.site_id].push(row.category_id)
-        })
-        setSiteCategories(map)
-      }
+    // site_categories used to be a second round trip from the browser — an anon-key read of
+    // every category assignment for the sites just returned. It depends on the search, so it
+    // could not become a page prop; instead /api/availability, which already produced these
+    // sites server-side, now returns the mapping with them.
+    if (fetchedSites.length > 0 && data.siteCategories) {
+      setSiteCategories(data.siteCategories)
     }
 
     setLoading(false)

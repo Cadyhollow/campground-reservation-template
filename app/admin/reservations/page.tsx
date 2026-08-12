@@ -2,7 +2,16 @@
 
 import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { createBrowserSupabase } from '@/lib/supabase-browser'
+import { useRole } from '@/lib/use-role'
+import { atLeast } from '@/lib/roles'
+
+// Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
+// Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
+// as `authenticated` and the role-gated RLS policies apply. Safe at module scope:
+// createBrowserClient returns a singleton in the browser and a no-op cookie store during
+// prerender.
+const supabase = createBrowserSupabase()
 import {
   bookingLegRefundable, prorateSurcharge, REFUNDABLE_STATUSES,
   reservationRefundable, allocateRefund, type RefundLedgerRow,
@@ -87,6 +96,15 @@ function ReservationsPageInner() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  const { role, roleLoaded } = useRole()
+
+  // Manager+ for anything that moves money. This is PRESENTATION ONLY — /api/reservation-cancel
+  // and /api/reservation-refund each call requireRole(request, 'manager') and refuse a Staff
+  // caller with a 403 whether or not the button was ever drawn. Hiding it stops a Staff member
+  // clicking something that was only going to fail; it is not what stops them doing it.
+  // `roleLoaded` keeps the buttons hidden until the answer arrives rather than flashing them.
+  const canMoveMoney = roleLoaded && atLeast(role, 'manager')
+
   const [selected, setSelected] = useState<Reservation | null>(null)
   const [selectedAddons, setSelectedAddons] = useState<Addon[]>([])
   const [notes, setNotes] = useState('')
@@ -954,12 +972,14 @@ function ReservationsPageInner() {
                     >
                       Open Folio
                     </button>
+                    {canMoveMoney && (
                     <button
                       onClick={() => handleCancel(selected)}
                       className="flex-1 bg-red-50 text-red-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-100"
                     >
                       Cancel
                     </button>
+                    )}
                   </div>
                   <div className="pt-2">
                     <button
@@ -1040,7 +1060,7 @@ function ReservationsPageInner() {
                     cancel-and-refund flow was built to avoid creating going forward but could
                     not undo for bookings already in it. What remains is the honest test: is
                     there anything left to refund? */}
-                {grossPaidHere > 0 && (
+                {grossPaidHere > 0 && canMoveMoney && (
                   <div className="pt-2">
                     <button
                       onClick={() => openBookingRefund(selected)}

@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { resolveCancellationPolicy, computePolicyRefund } from '@/lib/cancellation-policy'
 import { processReservationRefund, prorateSurcharge } from '@/lib/reservation-refund'
 import { processFolioRefund } from '@/lib/folio-refund'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 import {
   reservationRefundable, allocateRefund, REFUNDABLE_STATUSES,
   type RefundAllocation,
@@ -27,7 +27,7 @@ const supabase = createClient(
 // booking in cancelled-but-unrefunded, which is the state that needs a human and a phone call
 // to get out of.
 export async function POST(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'manager')
   if (denied) return denied
 
   try {

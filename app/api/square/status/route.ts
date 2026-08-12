@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSquareConnection } from '@/lib/square-oauth'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireRole } from '@/lib/require-role'
 
 export async function GET(request: NextRequest) {
-  const denied = await requireAdmin(request)
+  const denied = await requireRole(request, 'owner')
   if (denied) return denied
 
   try {

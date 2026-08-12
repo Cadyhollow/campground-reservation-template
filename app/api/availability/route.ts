@@ -126,5 +126,25 @@ export async function GET(request: NextRequest) {
     }
   })
 
-  return NextResponse.json({ sites: sitesWithPricing, closed: false })
+
+  // Which categories each available site belongs to, for the results accordion.
+  //
+  // Security PR 7-1. The home page used to read `site_categories` itself with the publishable
+  // key, right after this route answered — a second round trip, from the browser, keyed by the
+  // ids this route had just handed it. It is the same read either way, so it belongs here, where
+  // the sites came from, and under the locked-down schema the browser can no longer do it at all.
+  // Named columns, and scoped to the sites actually being returned.
+  const siteCategories: Record<string, number[]> = {}
+  if (sitesWithPricing.length > 0) {
+    const { data: links } = await supabase
+      .from('site_categories')
+      .select('site_id, category_id')
+      .in('site_id', sitesWithPricing.map(s => s.id))
+    for (const row of links || []) {
+      if (!siteCategories[row.site_id]) siteCategories[row.site_id] = []
+      siteCategories[row.site_id].push(row.category_id)
+    }
+  }
+
+  return NextResponse.json({ sites: sitesWithPricing, closed: false, siteCategories })
 }
