@@ -25,13 +25,23 @@ export async function POST(request: NextRequest) {
     const sigKey = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY || ''
     const url = request.url
 
-    // Verify webhook signature in production
-    if (sigKey && sigKey !== 'your_webhook_secret_here') {
-      const valid = verifySquareWebhook(body, signature, sigKey, url)
-      if (!valid) {
-        console.error('Invalid Square webhook signature')
-        return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
-      }
+    // FAIL CLOSED. This used to verify the signature only when a key happened to be configured —
+    // `if (sigKey && sigKey !== 'your_webhook_secret_here')` — which removed the guarantee on
+    // exactly the deployments that needed it most. Provisioned tenants are never given a
+    // SQUARE_WEBHOOK_SIGNATURE_KEY, so the check was skipped entirely and this route accepted
+    // unsigned POSTs from anyone. A forged terminal.checkout.updated inserts a folio_payments row
+    // and marks a folio paid with no money behind it.
+    //
+    // No key means this endpoint cannot tell Square from a stranger, and the only safe reading of
+    // that is refusal. An unconfigured webhook answering 503 is a visible setup gap; one that
+    // quietly accepts forgeries is a way to be robbed.
+    if (!sigKey || sigKey === 'your_webhook_secret_here') {
+      console.error('Square webhook rejected: SQUARE_WEBHOOK_SIGNATURE_KEY is not configured')
+      return NextResponse.json({ error: 'Webhooks are not configured' }, { status: 503 })
+    }
+    if (!verifySquareWebhook(body, signature, sigKey, url)) {
+      console.error('Invalid Square webhook signature')
+      return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
     }
 
     const event = JSON.parse(body)

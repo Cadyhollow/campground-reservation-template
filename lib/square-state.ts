@@ -45,6 +45,8 @@ const VERSION = 'v1'
  *  captured state is not a durable capability. */
 export const STATE_TTL_SECONDS = 15 * 60
 
+export type SquareEnvironment = 'sandbox' | 'production'
+
 export type SquareStatePayload = {
   campground_id: string
   return_to: string
@@ -53,6 +55,17 @@ export type SquareStatePayload = {
   nonce: string
   /** Unix seconds. Checked against STATE_TTL_SECONDS on the way back. */
   issued_at: number
+  /**
+   * Which Square environment this handshake is against — and therefore which of the platform's
+   * two applications the shared callback must complete it with. This tenant knows the answer (it
+   * is the environment it charges in); the callback does not, so it travels in the state.
+   *
+   * It rides INSIDE the signed payload, so a captured sandbox state cannot be edited into a
+   * production one — the signature covers whatever is here. Omitted, it reads as production on
+   * the callback side; see the matching comment in resonation-admin lib/square-state.ts for why
+   * silence has to mean production rather than sandbox.
+   */
+  environment?: SquareEnvironment
 }
 
 const b64url = (b: Buffer) => b.toString('base64url')

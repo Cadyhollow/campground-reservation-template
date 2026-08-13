@@ -18,6 +18,8 @@
 // enumerate their colleagues' addresses. The server reads it over service-role instead.
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import toast, { Toaster } from 'react-hot-toast'
 import { ROLE_OPTIONS, type Role } from '@/lib/roles'
 
@@ -33,6 +35,7 @@ type AdminUser = {
 const emptyForm = { email: '', full_name: '', password: '', role: 'staff' as Role }
 
 export default function StaffAccountsPage() {
+  const router = useRouter()
   const [users, setUsers] = useState<AdminUser[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -57,7 +60,16 @@ export default function StaffAccountsPage() {
     const res = await fetch('/api/admin-users')
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
-      toast.error(data.error || 'Could not load accounts.')
+      // A 401 here is not "something went wrong loading accounts" — it means this browser's
+      // session is no longer valid, and the only cure is signing in again. Saying "Unauthorized"
+      // sends the reader looking for a permission problem that does not exist. requireRole answers
+      // 401 for a dead session and 403 for a live one whose role is too low, so the two cases are
+      // distinguishable here and are worth wording differently.
+      if (res.status === 401) {
+        toast.error('Your session has ended. Sign in again to continue.', { duration: 8000 })
+      } else {
+        toast.error(data.error || 'Could not load accounts.')
+      }
     } else {
       setUsers(data.users || [])
     }
@@ -111,8 +123,26 @@ export default function StaffAccountsPage() {
     return true
   }
 
+  // Resetting your OWN password from here is the one case this screen cannot finish cleanly.
+  // The route changes the password with auth.admin.updateUserById(), and GoTrue revokes the
+  // target's sessions when it does — so when the target is you, your own session dies the instant
+  // the write lands. The PATCH itself returns 200; the reload immediately after it comes back 401,
+  // which is why this used to end in a false "Unauthorized" over a change that had in fact
+  // succeeded. The session cannot be refreshed either: the refresh token is revoked with the rest.
+  //
+  // So it is steered to /admin/account instead, which uses supabase.auth.updateUser() — that acts
+  // on the caller's own session and re-issues its tokens, leaving the person signed in.
+  function isSelf(user: AdminUser) {
+    return !!meId && meId === user.id
+  }
+
   async function handleResetPassword() {
     if (!resetFor) return
+    if (isSelf(resetFor)) {
+      toast.error('Change your own password from My Account, so you stay signed in.', { duration: 8000 })
+      router.push('/admin/account')
+      return
+    }
     if (resetPassword.length < 12) { toast.error('Password must be at least 12 characters.'); return }
 
     const ok = await patch(
@@ -305,13 +335,24 @@ export default function StaffAccountsPage() {
                         ))}
                       </select>
 
-                      <button
-                        onClick={() => { setResetFor(user); setResetPassword('') }}
-                        disabled={busy}
-                        className="bg-gray-100 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
-                      >
-                        Reset Password
-                      </button>
+                      {/* Your own row gets the self-service page, not the admin reset — see
+                          handleResetPassword() for why the admin path cannot finish on yourself. */}
+                      {isMe ? (
+                        <Link
+                          href="/admin/account"
+                          className="bg-gray-100 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-gray-200"
+                        >
+                          Change My Password
+                        </Link>
+                      ) : (
+                        <button
+                          onClick={() => { setResetFor(user); setResetPassword('') }}
+                          disabled={busy}
+                          className="bg-gray-100 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+                        >
+                          Reset Password
+                        </button>
+                      )}
 
                       {user.active ? (
                         <button

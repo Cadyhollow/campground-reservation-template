@@ -1,15 +1,24 @@
 import { createClient } from '@supabase/supabase-js'
-import { signSquareState } from '@/lib/square-state'
+import { signSquareState, type SquareEnvironment } from '@/lib/square-state'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+// Sandbox is opt-in by EXACT match and everything else is production — the same fail-to-
+// production rule lib/square-env.ts applies to charging, for the same reason: a deployment
+// wrongly on sandbox still "succeeds" while no money moves, and that is the failure that hides.
+//
+// This used to read `=== 'production' ? production : sandbox`, which sent every unset or
+// misspelled value to SANDBOX.
+export const SQUARE_OAUTH_ENVIRONMENT: SquareEnvironment =
+  (process.env.SQUARE_ENVIRONMENT ?? '').trim().toLowerCase() === 'sandbox' ? 'sandbox' : 'production'
+
 const SQUARE_BASE_URL =
-  process.env.SQUARE_ENVIRONMENT === 'production'
-    ? 'https://connect.squareup.com'
-    : 'https://connect.squareupsandbox.com'
+  SQUARE_OAUTH_ENVIRONMENT === 'sandbox'
+    ? 'https://connect.squareupsandbox.com'
+    : 'https://connect.squareup.com'
 
 export function getSquareAuthUrl(campgroundId: string): string {
   // The state carries which park this handshake belongs to, and the URL to come back to, through
@@ -27,6 +36,11 @@ export function getSquareAuthUrl(campgroundId: string): string {
   const state = signSquareState(process.env.SQUARE_STATE_SECRET || '', {
     campground_id: campgroundId,
     return_to: process.env.NEXT_PUBLIC_BASE_URL || '',
+    // Which Square world this handshake is in. The shared callback cannot know it — it serves
+    // every tenant — and it has to know, because sandbox and production are different Square
+    // applications with different secrets and different hosts. Sending it inside the SIGNED
+    // payload means a captured sandbox state cannot be edited into a production one.
+    environment: SQUARE_OAUTH_ENVIRONMENT,
   })
 
   const params = new URLSearchParams({
@@ -84,11 +98,57 @@ export async function getSquareConnection(campgroundId: string) {
   return data
 }
 
+/**
+ * Ask the platform to revoke this park's authorization at Square.
+ *
+ * Deleting the row is not disconnecting. Until Square is told, the access token stays live: the
+ * park believes it has disconnected while this platform remains authorised to charge their
+ * customers, and any copy of that token — a database backup, a log line — is still a working
+ * payment credential.
+ *
+ * It goes through resonation-admin because RevokeToken authenticates with the PLATFORM
+ * application secret, which deliberately does not exist on this deployment. Proof of identity is
+ * a state signed with this tenant's own SQUARE_STATE_SECRET — the same seal as the connect
+ * handshake, so there is no second credential to manage and no second thing to get wrong.
+ *
+ * Never throws. A revoke that fails must not prevent the local disconnect: leaving a park unable
+ * to disconnect because the platform is unreachable is the worse outcome, and a lingering
+ * authorization is at least visible to the merchant in their own Square dashboard.
+ */
+async function revokeAtSquare(campgroundId: string): Promise<boolean> {
+  try {
+    const state = signSquareState(process.env.SQUARE_STATE_SECRET || '', {
+      campground_id: campgroundId,
+      return_to: process.env.NEXT_PUBLIC_BASE_URL || '',
+      environment: SQUARE_OAUTH_ENVIRONMENT,
+    })
+    const res = await fetch('https://admin.myresonation.com/api/square/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data?.revoked) {
+      console.error('Square revoke did not complete:', res.status, data)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error('Square revoke request failed:', e)
+    return false
+  }
+}
+
 export async function deleteSquareConnection(campgroundId: string) {
+  // Revoke FIRST, while the row still holds the token the platform needs to look up. Deleting
+  // first would leave nothing to revoke and strand a live authorization at Square permanently.
+  const revoked = await revokeAtSquare(campgroundId)
+
   const { error } = await supabase
     .from('square_connections')
     .delete()
     .eq('campground_id', campgroundId)
 
   if (error) throw error
+  return { revoked }
 }

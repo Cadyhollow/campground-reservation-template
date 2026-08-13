@@ -4,7 +4,7 @@ import { Resend } from 'resend'
 import { checkBookability, nightsBetween, ruleAppliesToSite } from '@/lib/bookability'
 import { computeBookingQuote, checkDiscount, resolveNightlyRate, cardOnlyFeeShare } from '@/lib/booking-quote'
 import { sendConfirmationEmails } from '@/lib/confirmation-email'
-import { SQUARE_API_BASE } from '@/lib/square-env'
+import { getSquareCredentials, SquareCredentialsError } from '@/lib/square-credentials'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -186,14 +186,39 @@ export async function POST(request: NextRequest) {
       }, { status: 409 })
     }
 
+    // WHICH SQUARE ACCOUNT THIS CHARGE LANDS ON.
+    //
+    // Resolved from the park's connected Square account (square_connections), falling back to
+    // this deployment's environment variables only when no connection exists. Token, location and
+    // API host all come from the SAME source — see lib/square-credentials.ts for why mixing them
+    // is the one failure mode worth engineering against.
+    //
+    // BEFORE THE CHARGE, deliberately. If credentials cannot be resolved, nothing has been
+    // charged and there is no reservation to reconcile — the guest simply sees that payments are
+    // not available. Resolving after taking money would turn a configuration problem into an
+    // orphaned charge.
+    let square
+    try {
+      square = await getSquareCredentials()
+    } catch (e) {
+      const problem = e instanceof SquareCredentialsError ? e.problem : 'not_connected'
+      console.error('Square credentials unavailable for a booking payment:', problem, e)
+      return NextResponse.json({
+        error: problem === 'location_pending'
+          ? 'Online payments are not finished being set up for this campground. Please call to book.'
+          : 'Online payments are not available for this campground right now. Please call to book.',
+        reason: 'square-unavailable',
+      }, { status: 503 })
+    }
+
     // Process payment with Square REST API
     const squareResponse = await fetch(
-     `${SQUARE_API_BASE}/v2/payments`,
+     `${square.apiBase}/v2/payments`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
+          'Authorization': `Bearer ${square.accessToken}`,
           'Square-Version': '2024-01-18',
         },
         body: JSON.stringify({
@@ -206,7 +231,7 @@ export async function POST(request: NextRequest) {
             amount: serverChargeTotal,
             currency: 'USD',
           },
-          location_id: process.env.SQUARE_LOCATION_ID,
+          location_id: square.locationId,
           buyer_email_address: guestEmail,
           note: `${guestName} | Site ${siteData?.site_number || siteId} | ${arrival} to ${departure}`,
           reference_id: `${guestName.replace(/\s+/g, '-').toUpperCase()}-${arrival}`,
