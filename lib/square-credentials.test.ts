@@ -38,7 +38,9 @@ import {
 
 // ── helpers ───────────────────────────────────────────────────────────────────────────────────
 
-function connectionRow(over: Record<string, unknown> = {}) {
+type Row = Parameters<typeof credentialsFromConnection>[0]
+
+function connectionRow(over: Record<string, unknown> = {}): Row {
   return {
     access_token: 'CONNECTION_TOKEN',
     location_id: 'CONNECTION_LOCATION',
@@ -47,7 +49,7 @@ function connectionRow(over: Record<string, unknown> = {}) {
     status: 'connected',
     token_expires_at: null,
     ...over,
-  } as any
+  } as Row
 }
 
 const ENV_KEYS = [
@@ -238,6 +240,7 @@ test('publicConfig exposes exactly three keys, and the token is not among them',
 
   // And belt-and-braces: the token must not appear anywhere in the serialised output.
   assert.ok(!JSON.stringify(pub).includes('SUPER_SECRET_TOKEN'))
-  assert.equal((pub as any).accessToken, undefined)
-  assert.equal((pub as any).apiBase, undefined)
+  const asRecord = pub as unknown as Record<string, unknown>
+  assert.equal(asRecord.accessToken, undefined)
+  assert.equal(asRecord.apiBase, undefined)
 })
