@@ -5,7 +5,6 @@ import { useSearchParams } from 'next/navigation'
 import Image from 'next/image'
 import type { BookAddon, BookFee } from '@/lib/book-server'
 import PaymentTrustRow from '../components/PaymentTrustRow'
-import { SQUARE_SDK_URL } from '@/lib/square-env'
 import { computeBookingQuote } from '@/lib/booking-quote'
 
 const CAMPER_TYPES = [
@@ -159,6 +158,9 @@ export default function BookingForm({
   const [paymentLoading, setPaymentLoading] = useState(false)
   const [paymentError, setPaymentError] = useState('')
   const [squareLoaded, setSquareLoaded] = useState(false)
+  // Why the card form is not there, when it is not there. Without this the guest stares at an
+  // empty box and a "Loading payment form..." line that never resolves.
+  const [squareError, setSquareError] = useState<string | null>(null)
   const [selectedPaymentType, setSelectedPaymentType] = useState<'deposit' | 'full' | null>(null)
   const [cancellationPolicy, setCancellationPolicy] = useState<any>(null)
   const [waiverSigned, setWaiverSigned] = useState(false)
@@ -232,24 +234,51 @@ export default function BookingForm({
 
   async function loadSquare() {
     if (squareLoaded) return
+
+    // The card form is initialised from the park's CONNECTED Square account, fetched at request
+    // time, not from NEXT_PUBLIC_* variables baked in at build time. An application id and
+    // location id only exist once an owner has connected Square — after this bundle was built,
+    // through a different service — so build-time variables could never carry them.
+    //
+    // It is the same resolver the charge uses, so the form and the payment cannot end up
+    // initialised against different Square accounts. Three public fields come back; the access
+    // token stays on the server.
+    let config: { applicationId: string; locationId: string; environment: string }
+    try {
+      const res = await fetch('/api/square/config')
+      if (!res.ok) {
+        // 503 means this campground has no usable Square account yet. Say so, rather than leaving
+        // the empty box the SDK renders when it cannot initialise.
+        setSquareError('Online payments are not set up for this campground yet. Please call to book.')
+        return
+      }
+      config = await res.json()
+    } catch {
+      setSquareError('Could not reach the payment service. Please refresh and try again.')
+      return
+    }
+
     const script = document.createElement('script')
-    // Resolved centrally: sandbox is opt-in by exact match, everything else is
-        // production. This was an inline ternary that fell through to the SANDBOX SDK
-        // for any value that was not exactly 'production'.
-        script.src = SQUARE_SDK_URL
+    // The SDK build must match the environment the token belongs to, so it follows the connection
+    // rather than a deploy-wide variable. Sandbox is opt-in by exact match; anything else is
+    // production — the same rule the server applies.
+    script.src = config.environment === 'sandbox'
+      ? 'https://sandbox.web.squarecdn.com/v1/square.js'
+      : 'https://web.squarecdn.com/v1/square.js'
     script.onload = async () => {
       try {
-        const payments = (window as any).Square.payments(
-          process.env.NEXT_PUBLIC_SQUARE_APP_ID!,
-          process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!
-        )
+        const payments = (window as any).Square.payments(config.applicationId, config.locationId)
         squareRef.current = payments
         const card = await payments.card()
         await card.attach('#square-card-container')
         cardRef.current = card
         setSquareLoaded(true)
-      } catch (e) { console.error('Square load error:', e) }
+      } catch (e) {
+        console.error('Square load error:', e)
+        setSquareError('The card form could not be loaded. Please refresh and try again.')
+      }
     }
+    script.onerror = () => setSquareError('The card form could not be loaded. Please refresh and try again.')
     document.head.appendChild(script)
   }
 
@@ -767,7 +796,9 @@ export default function BookingForm({
               <div className="mb-6">
                 <h3 className="text-[var(--text-primary)] font-medium mb-3">Card Details</h3>
                 <div id="square-card-container" className="rounded-lg overflow-hidden" style={{ minHeight: '89px' }} />
-                {!squareLoaded && <p className="text-[var(--text-muted)] text-sm mt-2">Loading payment form...</p>}
+                {squareError
+                  ? <p role="alert" className="text-sm mt-2" style={{ color: '#b91c1c' }}>{squareError}</p>
+                  : !squareLoaded && <p className="text-[var(--text-muted)] text-sm mt-2">Loading payment form...</p>}
                 {/* Sits inside the Card Details block, so it appears with the card fields and
                     nowhere else — this page has no cash path to guard against. */}
                 <PaymentTrustRow />
