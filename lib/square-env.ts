@@ -1,3 +1,18 @@
+// ⚠️ SUPERSEDED — DO NOT IMPORT FROM THIS MODULE FOR ANYTHING THAT TOUCHES MONEY.
+//
+// Every charge, refund, terminal call and card form now resolves its Square environment through
+// lib/square-credentials.ts (server) and /api/square/config (browser), which answer from the
+// park's own connected Square account rather than from a deployment-wide variable. As of steps 7
+// and 8 nothing imports SQUARE_API_BASE or SQUARE_SDK_URL any more.
+//
+// Importing from here again would reintroduce exactly the failure this migration removed: a
+// deployment-wide environment paired with a per-park token — a real charge sent to a sandbox
+// host, or the reverse. The file is left in place only because deleting it belongs with the rest
+// of the step-7/8 cleanup; the notes below are kept because the fail-safe DIRECTION they describe
+// is the rule lib/square-credentials.ts now applies.
+//
+// ── Original notes ─────────────────────────────────────────────────────────────────────────
+//
 // Which Square environment this deployment talks to.
 //
 // Exists so Preview can charge Square SANDBOX (fake) cards while Production keeps charging

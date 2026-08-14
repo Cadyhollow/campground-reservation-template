@@ -6,7 +6,7 @@ import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
 import { folioPaymentRefundable, bookingLegRefundable, prorateSurcharge } from '@/lib/refundable'
 import { computePolicyRefund, normalizePolicy } from '@/lib/cancellation-policy'
-import { SQUARE_SDK_URL } from '@/lib/square-env'
+import { loadSquarePayments } from '@/lib/square-card-client'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useRole } from '@/lib/use-role'
 import { atLeast } from '@/lib/roles'
@@ -151,6 +151,7 @@ export default function FolioPage() {
   const [squareCardLoaded, setSquareCardLoaded] = useState(false)
   const [squareCardRef, setSquareCardRef] = useState<any>(null)
   const [squareInstanceRef, setSquareInstanceRef] = useState<any>(null)
+  const [squareError, setSquareError] = useState('')
   const [chargingCard, setChargingCard] = useState(false)
   // One target, one modal. The seven pieces of refund state this replaces were a private copy
   // of the same thing the reports drawer and the reservations panel each also kept.
@@ -231,23 +232,29 @@ export default function FolioPage() {
     if (squareCardLoaded) return
     const existing = document.getElementById('admin-square-card-container')
     if (!existing) return
+    setSquareError('')
     try {
       let sq = squareInstanceRef
       if (!sq) {
-        const script = document.createElement('script')
-        // Resolved centrally: sandbox is opt-in by exact match, everything else is
-        // production. This was an inline ternary that fell through to the SANDBOX SDK
-        // for any value that was not exactly 'production'.
-        script.src = SQUARE_SDK_URL
-        await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
-        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!)
+        // The card form is initialised from the park's CONNECTED Square account, resolved at
+        // request time — see lib/square-card-client.ts for why build-time NEXT_PUBLIC_ values
+        // could never have carried an application id that only exists after an owner connects.
+        const loaded = await loadSquarePayments()
+        if (!loaded.ok) {
+          setSquareError(loaded.error)
+          return
+        }
+        sq = loaded.payments
         setSquareInstanceRef(sq)
       }
       const card = await sq.card()
       await card.attach('#admin-square-card-container')
       setSquareCardRef(card)
       setSquareCardLoaded(true)
-    } catch (e) { console.error('Square card load error:', e) }
+    } catch (e) {
+      console.error('Square card load error:', e)
+      setSquareError('The card form could not be loaded. Refresh and try again, or take this payment another way.')
+    }
   }
 
   async function chargeManualCard() {
@@ -1179,7 +1186,11 @@ export default function FolioPage() {
               <div style={{ marginBottom: 16 }}>
                 <label style={ml}>Card Details</label>
                 <div id='admin-square-card-container' style={{ minHeight: 89, border: '1px solid #d1d5db', borderRadius: 8, padding: 4 }} />
-                {!squareCardLoaded && <p style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>Loading card form...</p>}
+                {/* Say why the box is empty. Silence here left staff staring at a blank
+                    bordered rectangle with a guest at the desk. */}
+                {squareError
+                  ? <p style={{ fontSize: 12, color: '#dc2626', marginTop: 4 }}>{squareError}</p>
+                  : !squareCardLoaded && <p style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>Loading card form...</p>}
                 {cardSurcharge > 0 && !waiveFee && (
                   <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginTop: 8, fontSize: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>

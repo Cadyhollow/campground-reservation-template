@@ -1,12 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { requireRole } from '@/lib/require-role'
-import { SQUARE_API_BASE } from '@/lib/square-env'
+import { getSquareCredentials, SquareCredentialsError } from '@/lib/square-credentials'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
+
+// A device is paired to a Square LOCATION, and that location belongs to a Square ACCOUNT. Both
+// handlers therefore resolve credentials the same way every charging path does, so the terminal
+// a park pairs is a terminal that park's own account can charge on. Pairing against one account
+// and charging on another would hand back a device code that never completes.
+function credentialsDenied(e: unknown) {
+  const problem = e instanceof SquareCredentialsError ? e.problem : 'not_connected'
+  console.error('Square credentials unavailable for Terminal pairing:', problem, e)
+  return NextResponse.json({
+    error: problem === 'location_pending'
+      ? 'Square is connected but no location has been chosen yet. Choose one in Settings before pairing a Terminal.'
+      : 'Square is not connected. Connect a Square account in Settings before pairing a Terminal.',
+  }, { status: 503 })
+}
 
 export async function POST(request: NextRequest) {
   const denied = await requireRole(request, 'owner')
@@ -15,12 +29,19 @@ export async function POST(request: NextRequest) {
   try {
     const { deviceName } = await request.json()
 
+    let square
+    try {
+      square = await getSquareCredentials()
+    } catch (e) {
+      return credentialsDenied(e)
+    }
+
     // Generate a device code from Square
-    const squareResponse = await fetch(`${SQUARE_API_BASE}/v2/devices/codes`, {
+    const squareResponse = await fetch(`${square.apiBase}/v2/devices/codes`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
+        'Authorization': `Bearer ${square.accessToken}`,
         'Square-Version': '2024-01-18',
       },
       body: JSON.stringify({
@@ -28,7 +49,7 @@ export async function POST(request: NextRequest) {
         device_code: {
           name: deviceName || 'ResoNation Terminal',
           product_type: 'TERMINAL_API',
-          location_id: process.env.SQUARE_LOCATION_ID,
+          location_id: square.locationId,
         },
       }),
     })
@@ -71,12 +92,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Missing deviceCodeId' }, { status: 400 })
     }
 
+    let square
+    try {
+      square = await getSquareCredentials()
+    } catch (e) {
+      return credentialsDenied(e)
+    }
+
     // Check pairing status
     const squareResponse = await fetch(
-      `${SQUARE_API_BASE}/v2/devices/codes/${deviceCodeId}`,
+      `${square.apiBase}/v2/devices/codes/${deviceCodeId}`,
       {
         headers: {
-          'Authorization': `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
+          'Authorization': `Bearer ${square.accessToken}`,
           'Square-Version': '2024-01-18',
         },
       }
