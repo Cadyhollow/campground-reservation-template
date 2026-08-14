@@ -11,7 +11,8 @@
 import { createClient } from '@supabase/supabase-js'
 import { BOOKING_REFUND_REF } from '@/lib/refund-refs'
 import { bookingLegRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
-import { SQUARE_API_BASE } from '@/lib/square-env'
+import { getSquareCredentials, SquareCredentialsError } from '@/lib/square-credentials'
+import { verifyPaymentOnAccount } from '@/lib/square-refund-account'
 
 // prorateSurcharge now lives in lib/refundable.ts so the admin pages can use it without
 // dragging this module's service-role client into the client bundle. Re-exported here because
@@ -133,11 +134,37 @@ export async function processReservationRefund(
   // Process Square refund if card payment with square_payment_id
   let squareRefundId: string | null = null
   if (squarePaymentId) {
-    const squareResponse = await fetch(`${SQUARE_API_BASE}/v2/refunds`, {
+    // WHICH SQUARE ACCOUNT THIS REFUND COMES OUT OF.
+    //
+    // The park's connected account, with host and token resolved together — the same resolver,
+    // and so the same account, the charge used. Money leaving is the direction where getting
+    // the account wrong is least recoverable, so it is resolved BEFORE anything is written and
+    // checked against the payment below.
+    let square
+    try {
+      square = await getSquareCredentials()
+    } catch (e) {
+      const problem = e instanceof SquareCredentialsError ? e.problem : 'not_connected'
+      console.error('Square credentials unavailable for a booking refund:', problem, e)
+      return {
+        ok: false, status: 503,
+        error: 'Square is not connected, so this card refund cannot be sent. Reconnect Square in Settings and try again.',
+      }
+    }
+
+    // The corner case the resolver alone cannot cover: a park that switched Square accounts
+    // between this charge and this refund. See lib/square-refund-account.ts for what is checked,
+    // what is deliberately not, and why a stamped account reference is the better long-term fix.
+    const account = await verifyPaymentOnAccount(square, squarePaymentId)
+    if (!account.ok) {
+      return { ok: false, status: 409, error: account.error }
+    }
+
+    const squareResponse = await fetch(`${square.apiBase}/v2/refunds`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
+        'Authorization': `Bearer ${square.accessToken}`,
         'Square-Version': '2024-01-18',
       },
       body: JSON.stringify({

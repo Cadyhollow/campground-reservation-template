@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { fetchSquareCheckout, normalizeCheckoutState } from '@/lib/square-terminal'
 import { requireRole } from '@/lib/require-role'
-import { SQUARE_API_BASE } from '@/lib/square-env'
+import { getSquareCredentials, SquareCredentialsError } from '@/lib/square-credentials'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -68,14 +68,35 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No Terminal device configured. Please pair your Terminal in Settings first.' }, { status: 400 })
     }
 
+    // WHICH SQUARE ACCOUNT THIS CHARGE LANDS ON — the park's connected account, host and token
+    // resolved together from lib/square-credentials.ts. Resolved before the device is asked to
+    // do anything, so a credentials problem never leaves a terminal waiting for a tap.
+    //
+    // The terminal takes no location_id: Square derives the location from the paired DEVICE.
+    // That is worth stating, because it means the device and the token must belong to the same
+    // merchant — pairing is done through this same resolver in /api/terminal/pair, so a device
+    // paired after a reconnect belongs to the account the checkout is sent on.
+    let square
+    try {
+      square = await getSquareCredentials()
+    } catch (e) {
+      const problem = e instanceof SquareCredentialsError ? e.problem : 'not_connected'
+      console.error('Square credentials unavailable for a Terminal charge:', problem, e)
+      return NextResponse.json({
+        error: problem === 'location_pending'
+          ? 'Square is connected but no location has been chosen to take payments on. Finish setup in Settings.'
+          : 'Terminal charges are not available right now — Square is not connected.',
+      }, { status: 503 })
+    }
+
     const idempotencyKey = `folio-${folioId}-${Date.now()}`
 
     // Send checkout request to Square Terminal API
-    const squareResponse = await fetch(`${SQUARE_API_BASE}/v2/terminals/checkouts`, {
+    const squareResponse = await fetch(`${square.apiBase}/v2/terminals/checkouts`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
+        'Authorization': `Bearer ${square.accessToken}`,
         'Square-Version': '2024-01-18',
       },
       body: JSON.stringify({

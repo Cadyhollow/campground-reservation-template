@@ -11,7 +11,7 @@ import { createBrowserSupabase } from '@/lib/supabase-browser'
 // prerender.
 const supabase = createBrowserSupabase()
 import toast, { Toaster } from 'react-hot-toast'
-import { SQUARE_SDK_URL } from '@/lib/square-env'
+import { loadSquarePayments } from '@/lib/square-card-client'
 
 type Site = {
   id: string
@@ -55,6 +55,7 @@ function ManualBookingInner() {
   const [squareCardRef, setSquareCardRef] = useState<any>(null)
   const [squareCardLoaded, setSquareCardLoaded] = useState(false)
   const [squareInstance, setSquareInstance] = useState<any>(null)
+  const [squareError, setSquareError] = useState('')
   const cardLoadingRef = useRef(false)
   const [form, setForm] = useState({
     site_id: '',
@@ -129,25 +130,31 @@ function ManualBookingInner() {
     if (!container) return
     cardLoadingRef.current = true
     container.innerHTML = ''
+    setSquareError('')
     try {
       let sq = squareInstance
       if (!sq) {
-        if (!(window as any).Square) {
-          const script = document.createElement('script')
-          // Resolved centrally: sandbox is opt-in by exact match, everything else is
-        // production. This was an inline ternary that fell through to the SANDBOX SDK
-        // for any value that was not exactly 'production'.
-        script.src = SQUARE_SDK_URL
-          await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
+        // The card form is initialised from the park's CONNECTED Square account, resolved at
+        // request time — see lib/square-card-client.ts for why build-time NEXT_PUBLIC_ values
+        // could never have carried an application id that only exists after an owner connects.
+        const loaded = await loadSquarePayments()
+        if (!loaded.ok) {
+          setSquareError(loaded.error)
+          cardLoadingRef.current = false
+          return
         }
-        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!)
+        sq = loaded.payments
         setSquareInstance(sq)
       }
       const card = await sq.card()
       await card.attach('#manual-booking-card')
       setSquareCardRef(card)
       setSquareCardLoaded(true)
-    } catch (e) { console.error('Square card load error:', e); cardLoadingRef.current = false }
+    } catch (e) {
+      console.error('Square card load error:', e)
+      setSquareError('The card form could not be loaded. Refresh and try again, or take this payment another way.')
+      cardLoadingRef.current = false
+    }
   }
 
   async function fetchFees() {
@@ -656,7 +663,11 @@ function ManualBookingInner() {
                   <div id="manual-booking-card" className="border border-gray-200 rounded-lg p-2 min-h-[89px]"
                     ref={el => { if (el && !squareCardLoaded) setTimeout(loadSquareCard, 100) }}
                   />
-                  {!squareCardLoaded && <p className="text-xs text-gray-400 mt-1">Loading card form...</p>}
+                  {/* Say why the box is empty. Silence here left staff staring at a blank
+                      bordered rectangle with a guest at the desk. */}
+                  {squareError
+                    ? <p className="text-xs text-red-600 mt-1">{squareError}</p>
+                    : !squareCardLoaded && <p className="text-xs text-gray-400 mt-1">Loading card form...</p>}
                 </div>
               )}
               <div>

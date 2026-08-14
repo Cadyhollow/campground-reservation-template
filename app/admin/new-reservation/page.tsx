@@ -13,7 +13,7 @@ const supabase = createBrowserSupabase()
 import { computePricing, siteFitsCamper } from '@/lib/pricing'
 import type { PricingSite, PricingSettings, PricingFee, PricingRule } from '@/lib/pricing'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
-import { SQUARE_SDK_URL } from '@/lib/square-env'
+import { loadSquarePayments } from '@/lib/square-card-client'
 
 type Step = 1 | 2 | 3 | 4
 
@@ -59,6 +59,7 @@ function NewReservationWizardInner() {
   const [terminalCharge, setTerminalCharge] = useState<{ folioId: string; amount: number; surchargeAmount: number; note: string } | null>(null)
   const [squareCardRef, setSquareCardRef] = useState<any>(null)
   const [squareInstance, setSquareInstance] = useState<any>(null)
+  const [squareError, setSquareError] = useState('')
   const cardLoadingRef = useRef(false)
 
   const [sites, setSites] = useState<any[]>([])
@@ -174,18 +175,20 @@ function NewReservationWizardInner() {
     if (!container) return
     cardLoadingRef.current = true
     container.innerHTML = ''
+    setSquareError('')
     try {
       let sq = squareInstance
       if (!sq) {
-        if (!(window as any).Square) {
-          const script = document.createElement('script')
-          // Resolved centrally: sandbox is opt-in by exact match, everything else is
-        // production. This was an inline ternary that fell through to the SANDBOX SDK
-        // for any value that was not exactly 'production'.
-        script.src = SQUARE_SDK_URL
-          await new Promise((resolve) => { script.onload = resolve; document.head.appendChild(script) })
+        // The card form is initialised from the park's CONNECTED Square account, resolved at
+        // request time — see lib/square-card-client.ts for why build-time NEXT_PUBLIC_ values
+        // could never have carried an application id that only exists after an owner connects.
+        const loaded = await loadSquarePayments()
+        if (!loaded.ok) {
+          setSquareError(loaded.error)
+          cardLoadingRef.current = false
+          return
         }
-        sq = (window as any).Square.payments(process.env.NEXT_PUBLIC_SQUARE_APP_ID!, process.env.NEXT_PUBLIC_SQUARE_LOCATION_ID!)
+        sq = loaded.payments
         setSquareInstance(sq)
       }
       const card = await sq.card()
@@ -193,6 +196,7 @@ function NewReservationWizardInner() {
       setSquareCardRef(card)
     } catch (e) {
       console.error('Square card load error:', e)
+      setSquareError('The card form could not be loaded. Refresh and try again, or take this payment another way.')
       cardLoadingRef.current = false
     }
   }
@@ -668,7 +672,7 @@ function NewReservationWizardInner() {
               <StepAddons form={form} set={set} addons={addons} settings={settings} />
             )}
             {step === 4 && (
-              <StepReview form={form} set={set} pricing={pricing} settings={settings} effectiveTotal={effectiveTotal} grandTotal={grandTotal} products={products} productCategories={productCategories} posCart={posCart} setPosCart={setPosCart} showPOS={showPOS} setShowPOS={setShowPOS} />
+              <StepReview form={form} set={set} pricing={pricing} settings={settings} effectiveTotal={effectiveTotal} grandTotal={grandTotal} products={products} productCategories={productCategories} posCart={posCart} setPosCart={setPosCart} showPOS={showPOS} setShowPOS={setShowPOS} squareError={squareError} />
             )}
           </div>
 
@@ -1151,7 +1155,7 @@ function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
   )
 }
 
-function StepReview({ form, set, pricing, settings, effectiveTotal, grandTotal, products, productCategories, posCart, setPosCart, showPOS, setShowPOS }: any) {
+function StepReview({ form, set, pricing, settings, effectiveTotal, grandTotal, products, productCategories, posCart, setPosCart, showPOS, setShowPOS, squareError }: any) {
   const paidCents = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0
   const setPaid = (cents: number) => set({ amount_paid: (cents / 100).toFixed(2) })
   const [activeCat, setActiveCat] = useState('')
@@ -1256,6 +1260,9 @@ function StepReview({ form, set, pricing, settings, effectiveTotal, grandTotal, 
       {form.payment_method === 'card' && (
         <div className="mb-3">
           <div id="wizard-card" className="border border-gray-200 rounded-lg p-3 min-h-[44px]"></div>
+          {/* Say why the box is empty. Silence here left staff staring at a blank bordered
+              rectangle with a guest at the desk. */}
+          {squareError && <p className="text-xs text-red-600 mt-1">{squareError}</p>}
           {paidCents > 0 && (
             <div className="text-xs text-gray-500 mt-2">
               Card charge: {money(paidCents)} + {pricing.cardSurchargePercent}% ({money(pricing.cardSurcharge(paidCents))}) = <span className="font-medium text-gray-900">{money(paidCents + pricing.cardSurcharge(paidCents))}</span>
