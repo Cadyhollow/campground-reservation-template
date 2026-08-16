@@ -1,5 +1,9 @@
 import { createClient } from '@supabase/supabase-js'
 import { signSquareState, type SquareEnvironment } from '@/lib/square-state'
+// One source for where the platform lives. Step 9 added a second cross-service call (refresh)
+// alongside this one, and two hardcoded copies of the admin URL is exactly how a preview
+// deployment ends up half-pointed at production.
+import { RESONATION_ADMIN_URL } from '@/lib/square-refresh-request'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -46,9 +50,28 @@ export function getSquareAuthUrl(campgroundId: string): string {
   const params = new URLSearchParams({
     client_id: process.env.SQUARE_APPLICATION_ID!,
     scope: 'PAYMENTS_WRITE PAYMENTS_READ ORDERS_WRITE MERCHANT_PROFILE_READ',
-    session: 'false',
     state,
   })
+
+  // session=false asks Square to ignore any existing seller session and force a fresh login. That
+  // is what we want in PRODUCTION — a park owner connecting from an admin screen should prove who
+  // they are rather than silently authorise whichever Square account a browser happens to be
+  // signed into.
+  //
+  // SQUARE'S SANDBOX DOES NOT SUPPORT IT. Only session=true (the default) is accepted there, and
+  // the way it fails is not an error message: the authorize page loads its JS and CSS and then
+  // renders an EMPTY #root — a blank white screen with nothing to click. That symptom has been
+  // read as "the sandbox authorize page is broken by design", and it is not; sandbox OAuth works,
+  // but only against a seller session established by opening a Sandbox test account's Square
+  // Dashboard first, and only without this parameter.
+  //
+  // So it is sent in production and omitted in sandbox. This is the difference between a sandbox
+  // OAuth grant being possible and being impossible, which matters beyond testing convenience:
+  // a real grant is the only way to obtain a refresh token, and therefore the only way to exercise
+  // token renewal (step 9) before a production client does it for real.
+  if (SQUARE_OAUTH_ENVIRONMENT !== 'sandbox') {
+    params.set('session', 'false')
+  }
 
   return `${SQUARE_BASE_URL}/oauth2/authorize?${params.toString()}`
 }
@@ -122,7 +145,7 @@ async function revokeAtSquare(campgroundId: string): Promise<boolean> {
       return_to: process.env.NEXT_PUBLIC_BASE_URL || '',
       environment: SQUARE_OAUTH_ENVIRONMENT,
     })
-    const res = await fetch('https://admin.myresonation.com/api/square/revoke', {
+    const res = await fetch(`${RESONATION_ADMIN_URL}/api/square/revoke`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ state }),

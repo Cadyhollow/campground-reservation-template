@@ -29,10 +29,13 @@ import {
   credentialsFromConnection,
   credentialsFromEnv,
   needsRefresh,
+  isBackingOff,
+  shouldRequestRefresh,
   publicConfig,
   apiBaseFor,
   SquareCredentialsError,
   REFRESH_WINDOW_MS,
+  REFRESH_BACKOFF_MS,
   type SquareCreds,
 } from './square-credentials.ts'
 
@@ -48,6 +51,7 @@ function connectionRow(over: Record<string, unknown> = {}): Row {
     environment: 'sandbox',
     status: 'connected',
     token_expires_at: null,
+    refresh_failed_at: null,
     ...over,
   } as Row
 }
@@ -214,10 +218,83 @@ test('an already-expired token needs refreshing', () => {
 })
 
 test('a missing or unparseable expiry does not claim a refresh is needed', () => {
-  // Square always sends expires_at, so absence means an older row rather than an expired token.
-  // Reporting "needs refresh" on every charge would be noise, not safety.
+  // THE REGRESSION THIS PINS (step 9). A connection can legitimately carry no expiry: a token
+  // pasted in from a Square dashboard has neither an expiry nor a refresh token, and the seeded
+  // sandbox connection that steps 1-8 were proven on is exactly one. Reading absence as "past due"
+  // would make EVERY charge on such a connection ask the platform for a refresh that can never
+  // succeed — a permanent stream of failures, and a red "reconnect required" banner, on a park
+  // whose payments are working perfectly.
   assert.equal(needsRefresh(null), false)
   assert.equal(needsRefresh('not a date'), false)
+})
+
+// ── THE ON-DEMAND GUARD (step 9) ──────────────────────────────────────────────────────────────
+//
+// The charge path asks the platform to renew a near-expiry token before charging. Both ways of
+// getting this wrong are invisible in normal operation: never asking means every park silently
+// stops taking payments thirty days after connecting, and always asking means a cross-service
+// round trip bolted onto every checkout forever.
+
+test('the guard fires inside the window and stays quiet outside it', () => {
+  const now = Date.parse('2026-08-14T00:00:00Z')
+  const inside = new Date(now + REFRESH_WINDOW_MS - 60_000).toISOString()
+  const outside = new Date(now + REFRESH_WINDOW_MS + 60_000).toISOString()
+
+  assert.equal(shouldRequestRefresh({ token_expires_at: inside, refresh_failed_at: null }, now), true)
+  assert.equal(shouldRequestRefresh({ token_expires_at: outside, refresh_failed_at: null }, now), false)
+})
+
+test('the guard NEVER fires for a connection with no expiry', () => {
+  // The same property as needsRefresh(null), asserted at the level that actually decides whether a
+  // network call happens on the charge path.
+  const now = Date.parse('2026-08-14T00:00:00Z')
+  assert.equal(shouldRequestRefresh({ token_expires_at: null, refresh_failed_at: null }, now), false)
+  // ...not even if a previous failure is on record.
+  assert.equal(
+    shouldRequestRefresh({ token_expires_at: null, refresh_failed_at: new Date(now - 1000).toISOString() }, now),
+    false,
+  )
+})
+
+test('a recent failure backs the guard off, so a broken connection does not slow every checkout', () => {
+  const now = Date.parse('2026-08-14T00:00:00Z')
+  const nearExpiry = new Date(now + 60 * 60 * 1000).toISOString()
+
+  const justFailed = new Date(now - 60_000).toISOString()
+  assert.equal(shouldRequestRefresh({ token_expires_at: nearExpiry, refresh_failed_at: justFailed }, now), false)
+
+  // ...and the backoff expires, so the charge path resumes trying on its own rather than giving up
+  // permanently on the strength of one bad minute.
+  const longAgo = new Date(now - REFRESH_BACKOFF_MS - 60_000).toISOString()
+  assert.equal(shouldRequestRefresh({ token_expires_at: nearExpiry, refresh_failed_at: longAgo }, now), true)
+})
+
+test('isBackingOff treats a missing or unparseable stamp as "not backing off"', () => {
+  const now = Date.parse('2026-08-14T00:00:00Z')
+  assert.equal(isBackingOff(null, now), false)
+  assert.equal(isBackingOff('not a date', now), false)
+  assert.equal(isBackingOff(new Date(now - REFRESH_BACKOFF_MS + 1000).toISOString(), now), true)
+  assert.equal(isBackingOff(new Date(now - REFRESH_BACKOFF_MS - 1000).toISOString(), now), false)
+})
+
+test('the guard window is NARROWER than the platform sweep window', () => {
+  // The sweep (resonation-admin, every 3 days) renews at 14 days out; this guard at 7. The gap is
+  // the design: by the time a charge looks, the sweep should have renewed a week ago, so the guard
+  // firing at all means the sweep is not running. Collapsing them would quietly promote the charge
+  // path from safety net to primary mechanism.
+  const SWEEP_WINDOW_MS = 14 * 24 * 60 * 60 * 1000
+  assert.ok(REFRESH_WINDOW_MS < SWEEP_WINDOW_MS)
+  assert.equal(REFRESH_WINDOW_MS, 7 * 24 * 60 * 60 * 1000)
+})
+
+test('a reconnect_required connection still resolves — a failed refresh is not an outage', () => {
+  // Deliberate. A refresh failing does not mean the token has stopped working; it usually has days
+  // left, and a ten-minute Square outage is a common cause. Refusing here would take a park's
+  // payments down EARLY rather than late, on the strength of a warning. The settings screen is
+  // where this becomes visible; the charge path keeps working while the token does.
+  const creds = credentialsFromConnection(connectionRow({ status: 'reconnect_required' }))!
+  assert.equal(creds.accessToken, 'CONNECTION_TOKEN')
+  assert.equal(creds.source, 'connection')
 })
 
 // ── THE LEAK TEST ─────────────────────────────────────────────────────────────────────────────
