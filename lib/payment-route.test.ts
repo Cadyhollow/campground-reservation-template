@@ -36,7 +36,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { createClient } from '@supabase/supabase-js'
-import { fetchDateFacts, checkDateFacts, checkSeason } from './bookability.ts'
+import { fetchDateFacts, checkDateFacts, checkSeason, addDays } from './bookability.ts'
 
 const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
 const ENV_PATH = resolvePath(REPO_ROOT, '.env.local')
@@ -45,7 +45,14 @@ const env: Record<string, string> = {}
 if (existsSync(ENV_PATH)) {
   for (const line of readFileSync(ENV_PATH, 'utf8').split('\n')) {
     if (!line.includes('=') || line.trim().startsWith('#')) continue
-    env[line.slice(0, line.indexOf('=')).trim()] = line.slice(line.indexOf('=') + 1).trim()
+    // Surrounding quotes are stripped, because .env files legitimately carry them and Next.js
+    // strips them when it loads the same file — so a quoted value works in the app. Without this
+    // the value here keeps its quotes, the anchored URL check below fails, and EVERY test in this
+    // file reports SKIP against a perfectly good project. A safety suite that quietly opts itself
+    // out on a formatting detail is worse than one that fails: the run is green either way.
+    const rawValue = line.slice(line.indexOf('=') + 1).trim()
+    const value = /^(["']).*\1$/.test(rawValue) ? rawValue.slice(1, -1) : rawValue
+    env[line.slice(0, line.indexOf('=')).trim()] = value
   }
 }
 
@@ -144,27 +151,46 @@ test('payment: an overlapping booking is refused, and never reaches Square', { s
   // missing fixture, not a broken gate. Visible in the output either way.
   if (!existing) return t.skip('no non-cancelled reservation on an unblocked site to test against')
 
-  const r = await post({
-    siteId: existing.site_id,
-    arrival: existing.arrival_date,
-    departure: existing.departure_date,
-  })
+  // Horizon pinned off: an existing reservation can sit any distance in the future, so a tenant
+  // with a booking window would refuse this for the wrong reason.
+  await withHorizon(null, async () => {
+    const r = await post({
+      siteId: existing.site_id,
+      arrival: existing.arrival_date,
+      departure: existing.departure_date,
+    })
 
-  assert.ok(r.gated, `double-booking reached Square instead of being refused: ${JSON.stringify(r.json)}`)
-  assert.equal(r.json.reason, 'double-booked')
-  assert.equal(r.status, 409, 'a double-booking is a 409 — someone got there first')
+    assert.ok(r.gated, `double-booking reached Square instead of being refused: ${JSON.stringify(r.json)}`)
+    assert.equal(r.json.reason, 'double-booked')
+    assert.equal(r.status, 409, 'a double-booking is a 409 — someone got there first')
+  })
 })
 
 test('payment: an out-of-season booking is refused, and never reaches Square', { skip }, async (t) => {
   const { data: settings } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
   if (!settings?.season_start || !settings?.season_end) return t.skip('no season configured')
 
-  const { data: site } = await supabase.from('sites').select('id').eq('is_available', true).limit(1).single()
-  const r = await post({ siteId: site.id, arrival: '2026-12-20', departure: '2026-12-23' })
+  // The sample date has to be one the CONFIGURED season actually excludes. This used to hardcode
+  // a December date and assume every park runs a summer season; a tenant configured January 1 to
+  // December 31 is open year-round, so that date was in season, the gate correctly let it by, and
+  // the assertion failed against working code. Find a genuinely excluded date instead, and skip
+  // honestly when the park never closes.
+  const excluded = ['2026-12-20', '2026-01-15', '2026-03-05', '2026-07-04', '2026-10-28']
+    .find(d => !checkSeason(d, settings).bookable)
+  if (!excluded) return t.skip('this park is open year-round — no out-of-season date to test with')
 
-  assert.ok(r.gated, `out-of-season booking reached Square: ${JSON.stringify(r.json)}`)
-  assert.equal(r.json.reason, 'out-of-season')
-  assert.equal(r.status, 400)
+  const { data: site } = await supabase.from('sites').select('id').eq('is_available', true).limit(1).single()
+  const departure = addDays(excluded, 3)
+
+  // Horizon pinned off: an out-of-season date is usually months away, so a live booking window
+  // rejects it as `beyond-horizon` before the season is ever consulted.
+  await withHorizon(null, async () => {
+    const r = await post({ siteId: site.id, arrival: excluded, departure })
+
+    assert.ok(r.gated, `out-of-season booking reached Square: ${JSON.stringify(r.json)}`)
+    assert.equal(r.json.reason, 'out-of-season')
+    assert.equal(r.status, 400)
+  })
 })
 
 test('payment: a blocked date is refused, and never reaches Square', { skip }, async (t) => {
@@ -175,11 +201,15 @@ test('payment: a blocked date is refused, and never reaches Square', { skip }, a
 
   const b = blocks[0]
   const departure = new Date(Date.parse(`${b.date}T12:00:00Z`) + 86400000).toISOString().slice(0, 10)
-  const r = await post({ siteId: b.site_id, arrival: b.date, departure, nights: 1 })
 
-  assert.ok(r.gated, `blocked date reached Square: ${JSON.stringify(r.json)}`)
-  assert.equal(r.json.reason, 'blocked')
-  assert.equal(r.status, 400)
+  // Horizon pinned off, same reason: a blocked date can be any distance out.
+  await withHorizon(null, async () => {
+    const r = await post({ siteId: b.site_id, arrival: b.date, departure, nights: 1 })
+
+    assert.ok(r.gated, `blocked date reached Square: ${JSON.stringify(r.json)}`)
+    assert.equal(r.json.reason, 'blocked')
+    assert.equal(r.status, 400)
+  })
 })
 
 test('payment: a malformed range is refused, and never reaches Square', { skip }, async () => {
@@ -210,8 +240,177 @@ test('payment: a legitimate booking is NOT refused — it reaches the charge', {
     return t.skip('sample week falls outside the configured season')
   }
 
-  const r = await post({ siteId: free.id, arrival, departure, nights: 2 })
+  // THE QUOTE COMES FROM THE SERVER, exactly as the booking page's does.
+  //
+  // This used to post the `post()` helper's hardcoded nightlyRate/totalPrice. That was fine when
+  // the file was written, and stopped being fine when security PR 4a made the server authoritative
+  // on price: the route now recomputes the quote and refuses anything that disagrees, so the
+  // made-up figures were rejected with `price-mismatch` before Square was ever reached. The test
+  // had been reporting SKIP since long before that landed, so the rot was invisible.
+  //
+  // Asking /api/availability for the price is what the real flow does, and it keeps this test
+  // honest about what it is proving: that the DATE gates do not refuse a legitimate booking.
+  const quoteRes = await fetch(`${BASE}/api/availability?arrival=${arrival}&departure=${departure}`)
+  const quote: any = await quoteRes.json()
+  const priced = (quote.sites || []).find((s: any) => s.id === free.id)
+  if (!priced) return t.skip('the search did not offer the free site — nothing to price against')
 
-  assert.equal(r.gated, false, `a legitimate booking was wrongly refused: ${JSON.stringify(r.json)}`)
-  assert.match(String(r.json.error), /authoriz/i, 'expected to die at the deliberately invalid Square token')
+  // Horizon pinned off here too. This test asserts that NO gate refused a legitimate booking, so
+  // a tenant with a short window would fail it for a reason that has nothing to do with what it
+  // is checking.
+  const r = await withHorizonValue(null, () => post({
+    siteId: free.id,
+    arrival,
+    departure,
+    nights: priced.nights,
+    nightlyRate: priced.nightly_rate,
+    totalPrice: priced.total_price,
+    amountToPay: priced.total_price,
+  }))
+
+  // WHAT THIS PROVES, precisely: no gate above the payment step refused a legitimate booking.
+  //
+  // It used to assert `gated === false` and then match Square's own "could not be authorized"
+  // error. Both have rotted, and neither rot was visible while this file was skipping:
+  //
+  //   * `gated` is "the response carries a `reason`", which was a sound proxy for "one of our
+  //     gates stopped it" only while the gates were the only things emitting one. Square steps
+  //     7-8 added `square-unavailable` from the credential resolver, which also carries a reason.
+  //   * the Square error itself only appeared while the access token came from the environment.
+  //     The resolver now reads per-tenant credentials, so in an environment with no SQUARE_*
+  //     variables it fails before Square is contacted and the authorization error never happens.
+  //
+  // So assert the thing that actually matters and does not depend on either: the refusal, if any,
+  // is NOT one of the gates. A false rejection by the date gates or the pricing guard fails this;
+  // an unreachable payment provider does not, because that is downstream of everything this file
+  // is about, and the invalid token means no card could be charged either way.
+  const GATE_REASONS = [
+    'missing-dates', 'invalid-range', 'beyond-horizon', 'out-of-season',
+    'blocked', 'double-booked', 'min-stay', 'price-mismatch', 'discount-invalid',
+  ]
+  assert.ok(
+    !GATE_REASONS.includes(r.json.reason),
+    `a legitimate booking was wrongly refused by a gate: ${JSON.stringify(r.json)}`
+  )
+  // And it did get as far as trying to pay, rather than quietly succeeding without a charge.
+  assert.ok(
+    /authoriz/i.test(String(r.json.error)) || r.json.reason === 'square-unavailable',
+    `expected to reach the payment step, got: ${JSON.stringify(r.json)}`
+  )
+})
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// THE BOOKING HORIZON
+//
+// The horizon is a setting, so unlike the season and the blocked dates there is nothing to find
+// in the tenant's data to test against — these tests SET one, exercise the route, and put the
+// row back. Restored in a finally, so a failing assertion cannot leave the test tenant with a
+// booking window nobody configured.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+// Also used by the tests ABOVE that assert a non-horizon gate. The horizon is checked before the
+// season and before the date facts, so a tenant that happens to have a booking window configured
+// makes those tests fail with `beyond-horizon` instead of the gate they are about — which is
+// exactly what happened the first time this suite met a tenant with a live window. Pinning the
+// window to null is what makes each of them a test of one gate rather than of the tenant's config.
+// Value-returning sibling, for the tests that need the response back out of the wrapper.
+async function withHorizonValue<T>(days: number | null, fn: () => Promise<T>): Promise<T> {
+  let out!: T
+  await withHorizon(days, async () => { out = await fn() })
+  return out
+}
+
+async function withHorizon(days: number | null, fn: () => Promise<void>) {
+  const { data: before } = await supabase.from('settings').select('id, max_advance_days').limit(1).single()
+  if (!before) throw new Error('no settings row on this tenant')
+  await supabase.from('settings').update({ max_advance_days: days }).eq('id', before.id)
+  try {
+    await fn()
+  } finally {
+    await supabase.from('settings').update({ max_advance_days: before.max_advance_days }).eq('id', before.id)
+  }
+}
+
+const isoPlus = (days: number) =>
+  new Date(Date.now() + days * 86400000).toISOString().slice(0, 10)
+
+async function aFreeSite(arrival: string, departure: string) {
+  const { data: sites } = await supabase.from('sites').select('id').eq('is_available', true)
+  const facts = await fetchDateFacts(supabase, arrival, departure)
+  return (sites || []).find((s: any) => checkDateFacts(s.id, facts).bookable) || null
+}
+
+// THE CRAFTED REQUEST. The whole reason the horizon cannot live in the browser.
+//
+// This skips the search and the date picker completely and posts the booking straight at the
+// route, exactly as a hand-edited request or a doctored /book URL would. Greying out days in a
+// calendar stops none of this; only the server does.
+test('payment: a booking far beyond the horizon is refused, and never reaches Square', { skip }, async (t) => {
+  await withHorizon(30, async () => {
+    const arrival = isoPlus(400), departure = isoPlus(403)
+    const site = await aFreeSite(arrival, departure)
+    if (!site) return t.skip('no free site 400 days out')
+
+    const r = await post({ siteId: site.id, arrival, departure, nights: 3 })
+
+    assert.ok(r.gated, `a booking 400 days out reached Square with a 30-day horizon: ${JSON.stringify(r.json)}`)
+    assert.equal(r.json.reason, 'beyond-horizon')
+    assert.equal(r.status, 400, 'never bookable in the first place, so 400 rather than 409')
+  })
+})
+
+// The boundary, through the real route. The off-by-one most likely to ship: the calendar offers
+// today+N and the server must honour it.
+test('payment: the last day inside the horizon is NOT refused', { skip }, async (t) => {
+  await withHorizon(30, async () => {
+    const arrival = isoPlus(30), departure = isoPlus(32)
+    const site = await aFreeSite(arrival, departure)
+    if (!site) return t.skip('no free site on the horizon boundary')
+    const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
+    if (st?.season_start && st?.season_end && !checkSeason(arrival, st).bookable) {
+      return t.skip('the boundary date falls outside the configured season')
+    }
+
+    const r = await post({ siteId: site.id, arrival, departure, nights: 2 })
+
+    assert.notEqual(r.json.reason, 'beyond-horizon', `the boundary day was wrongly refused: ${JSON.stringify(r.json)}`)
+  })
+})
+
+// The property that makes the whole feature safe to roll out: with no window configured — the
+// provisioned state of every tenant — the route behaves exactly as it did before the column
+// existed.
+test('payment: with no horizon configured, a far-future booking is not refused for it', { skip }, async (t) => {
+  await withHorizon(null, async () => {
+    const arrival = isoPlus(400), departure = isoPlus(403)
+    const site = await aFreeSite(arrival, departure)
+    if (!site) return t.skip('no free site 400 days out')
+    const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
+    if (st?.season_start && st?.season_end && !checkSeason(arrival, st).bookable) {
+      return t.skip('the sample date falls outside the configured season')
+    }
+
+    const r = await post({ siteId: site.id, arrival, departure, nights: 3 })
+
+    assert.notEqual(r.json.reason, 'beyond-horizon', `NULL horizon refused a booking: ${JSON.stringify(r.json)}`)
+  })
+})
+
+// The search path must agree with the create path. If search were STRICTER, a guest could find
+// nothing available on a date the route would happily charge for; if it were looser, they would
+// pick a site and be refused at the end.
+test('availability: the search reports the horizon on the same dates the route refuses', { skip }, async () => {
+  await withHorizon(30, async () => {
+    const beyond = isoPlus(400)
+    const res = await fetch(`${BASE}/api/availability?arrival=${beyond}&departure=${isoPlus(403)}`)
+    const json: any = await res.json()
+    assert.equal(json.outOfWindow, true, `search did not report the window: ${JSON.stringify(json)}`)
+    assert.equal(json.closed, false, 'out-of-window is not the same fact as closed-for-season')
+    assert.ok(Array.isArray(json.sites) && json.sites.length === 0, 'no sites are offered beyond the window')
+
+    const inside = isoPlus(10)
+    const res2 = await fetch(`${BASE}/api/availability?arrival=${inside}&departure=${isoPlus(12)}`)
+    const json2: any = await res2.json()
+    assert.notEqual(json2.outOfWindow, true, `search wrongly reported the window inside it: ${JSON.stringify(json2)}`)
+  })
 })

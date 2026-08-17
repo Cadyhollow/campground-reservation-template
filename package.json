@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --conditions=react-server --test lib/*.test.ts"
+    "_comment_test": "--test-concurrency=1 is REQUIRED, not a tuning knob: api-auth.test.ts and payment-route.test.ts each spawn `next dev` in this same directory, and two dev servers sharing one .next build directory collide. Both files skip themselves without a configured .env.local, so this was invisible until a real project was pointed at them. Serial is also ~8x faster here, because the parallel runs were thrashing. --test-timeout covers the server startup those two wait on.",
+    "test": "node --conditions=react-server --test --test-concurrency=1 --test-timeout=180000 lib/*.test.ts"
   },
   "dependencies": {
     "@headlessui/react": "^2.2.10",

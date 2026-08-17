@@ -2,10 +2,14 @@ import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 import {
   checkSeason,
+  checkHorizon,
+  resolveMaxAdvanceDays,
+  horizonLastArrival,
   fetchDateFacts,
   checkDateFacts,
   resolveMinNights,
   ruleAppliesToSite,
+  HORIZON_SERVER_SLACK_DAYS,
   DEFAULT_CLOSED_MESSAGE,
 } from '@/lib/bookability'
 
@@ -26,9 +30,36 @@ export async function GET(request: NextRequest) {
 
   const { data: settings } = await supabase
     .from('settings')
-    .select('season_start, season_end, closed_season_message')
+    .select('season_start, season_end, closed_season_message, max_advance_days')
     .limit(1)
     .single()
+
+  // The booking horizon, checked before the season for the same reason checkBookability does it
+  // in that order: a guest searching 2031 needs to hear about the park's booking window, not
+  // about next February's closure.
+  //
+  // Slack matches the create path exactly (HORIZON_SERVER_SLACK_DAYS). Search must never be
+  // STRICTER than create — a date /api/payment would honour has to be findable, or the site
+  // shows nothing available and then charges for it if the guest reaches /book by URL.
+  const today = new Date().toISOString().split('T')[0]
+  const horizon = checkHorizon(arrival, settings, today, HORIZON_SERVER_SLACK_DAYS)
+  if (!horizon.bookable) {
+    const maxDays = resolveMaxAdvanceDays(settings?.max_advance_days)
+    return NextResponse.json({
+      sites: [],
+      closed: false,
+      // A distinct flag, deliberately not reusing `closed`. "We are closed for the season" and
+      // "that is further ahead than we take bookings" are different facts, and a guest told the
+      // wrong one will either wait for a season that is already open or give up on a park that
+      // would happily take them for a nearer date.
+      outOfWindow: true,
+      horizonMessage: horizon.message,
+      // The TRUE last bookable date, not the slack-extended one — this is what the date picker
+      // shows and what the guest is told.
+      horizonMaxDate: maxDays === null ? null : horizonLastArrival(maxDays, today),
+      horizonMaxDays: maxDays,
+    })
+  }
 
   // The season gate now lives in lib/bookability, so /api/payment applies the same one before
   // charging. The closed payload below is unchanged — search still answers with the park's

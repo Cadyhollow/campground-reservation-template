@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
+import { useHorizonOverride, HorizonOverrideNotice } from '@/app/components/HorizonOverride'
 
 // Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
 // Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
@@ -120,7 +121,7 @@ function ManualBookingInner() {
     setAddons(data || [])
   }
   async function fetchSettings() {
-    const { data } = await supabase.from('settings').select('early_checkin_enabled, early_checkin_price, early_checkin_time, late_checkout_enabled, late_checkout_price, late_checkout_time').limit(1).single()
+    const { data } = await supabase.from('settings').select('early_checkin_enabled, early_checkin_price, early_checkin_time, late_checkout_enabled, late_checkout_price, late_checkout_time, max_advance_days').limit(1).single()
     setSettings(data || null)
   }
 
@@ -228,6 +229,10 @@ function ManualBookingInner() {
   const proportionalFees = nights > 0 ? Math.round(feesTotal / nights) : 0
   const depositAmount = firstNightBase + proportionalFees
 
+  // The park's booking window, and the operator's explicit waiver of it. Advisory here, unlike the
+  // guest picker — see the note at the top of HorizonOverride.tsx for why these inputs get no `max`.
+  const horizon = useHorizonOverride(settings, form.arrival_date)
+
   const siteTypeLabel = (type: string) => ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site', yurt: 'Yurt', tiny_home: 'Tiny Home', lodge: 'Lodge Room', glamping: 'Glamping', treehouse: 'Treehouse' }[type] || type)
   const hookupLabel = (h: string) => ({ full: 'Full Hookup', water_electric: 'Water & Electric', none: 'None' }[h] || h)
   const ampLabel = (a: string) => ({ '30amp': '30 Amp', '30_50amp': '30/50 Amp', none: '' }[a] || '')
@@ -239,6 +244,13 @@ function ManualBookingInner() {
     }
     if (nights <= 0) {
       toast.error('Departure date must be after arrival date.')
+      return
+    }
+    // Stopped here rather than letting the route reject it, so the operator is pointed at the tick
+    // box that is already on screen instead of at an error they cannot act on. /api/manual-booking
+    // enforces this regardless — this is the prompt, not the gate.
+    if (!horizon.cleared) {
+      toast.error(`This arrival is beyond your ${horizon.maxDays}-day booking window. Tick "Book beyond the booking window" to continue.`)
       return
     }
 
@@ -297,6 +309,9 @@ function ManualBookingInner() {
         payment_type: amountPaid > 0 ? 'deposit' : 'unpaid',
         payment_method: form.payment_method,
         notes: form.notes,
+        // Only ever true when the operator ticked the box next to the warning; the hook clears it
+        // if they then move the date back inside the window.
+        override_horizon: horizon.override,
         addonItems,
       }),
     })
@@ -419,6 +434,9 @@ function ManualBookingInner() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Site & Dates</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Renders nothing unless the arrival is past the park's window. Sits above the date
+                  fields so the warning is next to the input that caused it. */}
+              <HorizonOverrideNotice state={horizon} />
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Arrival Date *</label>
                 <input type="date" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.arrival_date} onChange={e => {

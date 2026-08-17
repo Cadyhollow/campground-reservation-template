@@ -12,6 +12,9 @@ const supabase = createBrowserSupabase()
 import toast, { Toaster } from 'react-hot-toast'
 import Image from 'next/image'
 import imageCompression from 'browser-image-compression'
+// The same arithmetic the guest-facing date picker and the server-side gate use, so the date this
+// page previews to the owner is exactly the last date a guest will be able to choose.
+import { resolveMaxAdvanceDays, horizonLastArrival } from '@/lib/bookability'
 
 // Hero photos come straight off phones, where 8-15MB and 4000px+ on the long edge is normal.
 // Downscaling in the browser before the upload keeps the landing page quick — the whole point
@@ -60,6 +63,10 @@ const defaultSettings = {
   check_out_time: '12:00 PM',
   same_day_cutoff_time: '11:00 AM',
   same_day_cutoff_message: 'Same-day reservations are not available online. Please call us to book.',
+  // Held as a STRING, not a number, so that '' can mean "no booking window" distinctly from 0.
+  // Empty is the default and the provisioned state: an owner who has never opened this field has
+  // no horizon, exactly as before the column existed.
+  max_advance_days: '',
   extra_adult_fee: '',
   extra_child_fee: '',
   base_occupancy_adults: 2,
@@ -154,6 +161,13 @@ export default function SettingsPage() {
         check_out_time: data.check_out_time || '12:00 PM',
         same_day_cutoff_time: data.same_day_cutoff_time || '11:00 AM',
         same_day_cutoff_message: data.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us to book.',
+        // An explicit null check, not the `|| ''` this file uses everywhere else. `||` is falsy-
+        // based, so it would render a stored 0 as blank — and blank means "no window" here, so an
+        // owner would be shown a park with no horizon while the row actually held a value that
+        // lib/bookability.ts treats as garbage. Whatever is in the row is what appears in the field.
+        max_advance_days: data.max_advance_days === null || data.max_advance_days === undefined
+          ? ''
+          : String(data.max_advance_days),
         extra_adult_fee: (data.extra_adult_fee / 100).toString(),
         extra_child_fee: (data.extra_child_fee / 100).toString(),
         base_occupancy_adults: data.base_occupancy_adults || 2,
@@ -388,7 +402,29 @@ export default function SettingsPage() {
     toast.success('Hero image removed.')
   }
 
+  // Bounds for the booking window. 1095 days is three years — past that an owner is almost
+  // certainly typing a year rather than a day count, and a horizon that long is indistinguishable
+  // from none. 0 is refused outright: lib/bookability.ts reads it as "no window" (a cleared field
+  // is far likelier than a park meaning same-day-only), so letting it be SAVED here would store a
+  // value whose meaning does not match what the owner just typed.
+  const HORIZON_MIN_DAYS = 1
+  const HORIZON_MAX_DAYS = 1095
+
   async function handleSave() {
+    // Validated before anything is sent, and it BLOCKS the save rather than silently coercing.
+    // This whole page writes one payload containing every column, so a quietly-corrected value
+    // would be saved alongside the owner's real edits with nothing to show it had been changed.
+    const rawHorizon = String(form.max_advance_days ?? '').trim()
+    let horizonDays: number | null = null
+    if (rawHorizon !== '') {
+      const n = Number(rawHorizon)
+      if (!Number.isInteger(n) || n < HORIZON_MIN_DAYS || n > HORIZON_MAX_DAYS) {
+        toast.error(`Booking window must be a whole number of days between ${HORIZON_MIN_DAYS} and ${HORIZON_MAX_DAYS}, or blank for no limit.`)
+        return
+      }
+      horizonDays = n
+    }
+
     setSaving(true)
     const payload = {
       park_name: form.park_name,
@@ -403,6 +439,9 @@ export default function SettingsPage() {
       check_out_time: form.check_out_time,
       same_day_cutoff_time: form.same_day_cutoff_time,
       same_day_cutoff_message: form.same_day_cutoff_message,
+      // NULL, not 0 and not '', when the field is blank — NULL is what lib/bookability.ts and the
+      // canonical schema both treat as "no window".
+      max_advance_days: horizonDays,
       extra_adult_fee: Math.round(parseFloat(form.extra_adult_fee) * 100),
       extra_child_fee: Math.round(parseFloat(form.extra_child_fee) * 100),
       base_occupancy_adults: form.base_occupancy_adults,
@@ -456,6 +495,14 @@ export default function SettingsPage() {
     setSaving(false)
     fetchSettings()
   }
+
+  // What the owner's number actually means today, in dates. A park owner thinks in "next
+  // September", not in "412 days", so the field shows both. Recomputed on every render rather than
+  // memoized — it is one date addition, and it must not go stale as they type.
+  const horizonPreviewDays = resolveMaxAdvanceDays(form.max_advance_days)
+  const horizonPreviewDate = horizonPreviewDays === null
+    ? null
+    : horizonLastArrival(horizonPreviewDays, new Date().toISOString().split('T')[0])
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="text-gray-500">Loading settings...</div></div>
 
@@ -685,6 +732,25 @@ export default function SettingsPage() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Same-Day Cutoff Message</label>
               <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Please call for same-day reservations." value={form.same_day_cutoff_message} onChange={e => setForm({ ...form, same_day_cutoff_message: e.target.value })} />
               <p className="text-xs text-gray-400 mt-1">Shown to guests when same-day booking is blocked.</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Booking Window (days ahead)</label>
+              <input
+                type="number"
+                min={HORIZON_MIN_DAYS}
+                max={HORIZON_MAX_DAYS}
+                step="1"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                placeholder="e.g. 365 (leave blank for no limit)"
+                value={form.max_advance_days}
+                onChange={e => setForm({ ...form, max_advance_days: e.target.value })}
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                {form.max_advance_days === ''
+                  ? 'No limit — guests can book any future date.'
+                  : `Guests can book arrivals up to ${form.max_advance_days} day${form.max_advance_days === '1' ? '' : 's'} ahead${horizonPreviewDate ? ` (through ${horizonPreviewDate})` : ''}.`}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">Applies to the arrival date. A stay that starts inside the window may end outside it. Staff can still book beyond it from the booking pages.</p>
             </div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Base Occupancy — Adults</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.base_occupancy_adults} onChange={e => setForm({ ...form, base_occupancy_adults: parseInt(e.target.value) })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Base Occupancy — Children</label><input type="number" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.base_occupancy_children} onChange={e => setForm({ ...form, base_occupancy_children: parseInt(e.target.value) })} /></div>
