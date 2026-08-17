@@ -34,7 +34,14 @@ const env: Record<string, string> = {}
 if (existsSync(ENV_PATH)) {
   for (const line of readFileSync(ENV_PATH, 'utf8').split('\n')) {
     if (!line.includes('=') || line.trim().startsWith('#')) continue
-    env[line.slice(0, line.indexOf('=')).trim()] = line.slice(line.indexOf('=') + 1).trim()
+    // Surrounding quotes are stripped, because .env files legitimately carry them and Next.js
+    // strips them when it loads the same file — so a quoted value works in the app. Without this
+    // the value here keeps its quotes, the anchored URL check below fails, and EVERY test in this
+    // file reports SKIP against a perfectly good project. A safety suite that quietly opts itself
+    // out on a formatting detail is worse than one that fails: the run is green either way.
+    const rawValue = line.slice(line.indexOf('=') + 1).trim()
+    const value = /^(["']).*\1$/.test(rawValue) ? rawValue.slice(1, -1) : rawValue
+    env[line.slice(0, line.indexOf('=')).trim()] = value
   }
 }
 

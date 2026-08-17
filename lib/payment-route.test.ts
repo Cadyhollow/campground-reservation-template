@@ -36,7 +36,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { createClient } from '@supabase/supabase-js'
-import { fetchDateFacts, checkDateFacts, checkSeason } from './bookability.ts'
+import { fetchDateFacts, checkDateFacts, checkSeason, addDays } from './bookability.ts'
 
 const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
 const ENV_PATH = resolvePath(REPO_ROOT, '.env.local')
@@ -45,7 +45,14 @@ const env: Record<string, string> = {}
 if (existsSync(ENV_PATH)) {
   for (const line of readFileSync(ENV_PATH, 'utf8').split('\n')) {
     if (!line.includes('=') || line.trim().startsWith('#')) continue
-    env[line.slice(0, line.indexOf('=')).trim()] = line.slice(line.indexOf('=') + 1).trim()
+    // Surrounding quotes are stripped, because .env files legitimately carry them and Next.js
+    // strips them when it loads the same file — so a quoted value works in the app. Without this
+    // the value here keeps its quotes, the anchored URL check below fails, and EVERY test in this
+    // file reports SKIP against a perfectly good project. A safety suite that quietly opts itself
+    // out on a formatting detail is worse than one that fails: the run is green either way.
+    const rawValue = line.slice(line.indexOf('=') + 1).trim()
+    const value = /^(["']).*\1$/.test(rawValue) ? rawValue.slice(1, -1) : rawValue
+    env[line.slice(0, line.indexOf('=')).trim()] = value
   }
 }
 
@@ -159,8 +166,18 @@ test('payment: an out-of-season booking is refused, and never reaches Square', {
   const { data: settings } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
   if (!settings?.season_start || !settings?.season_end) return t.skip('no season configured')
 
+  // The sample date has to be one the CONFIGURED season actually excludes. This used to hardcode
+  // a December date and assume every park runs a summer season; a tenant configured January 1 to
+  // December 31 is open year-round, so that date was in season, the gate correctly let it by, and
+  // the assertion failed against working code. Find a genuinely excluded date instead, and skip
+  // honestly when the park never closes.
+  const excluded = ['2026-12-20', '2026-01-15', '2026-03-05', '2026-07-04', '2026-10-28']
+    .find(d => !checkSeason(d, settings).bookable)
+  if (!excluded) return t.skip('this park is open year-round — no out-of-season date to test with')
+
   const { data: site } = await supabase.from('sites').select('id').eq('is_available', true).limit(1).single()
-  const r = await post({ siteId: site.id, arrival: '2026-12-20', departure: '2026-12-23' })
+  const departure = addDays(excluded, 3)
+  const r = await post({ siteId: site.id, arrival: excluded, departure })
 
   assert.ok(r.gated, `out-of-season booking reached Square: ${JSON.stringify(r.json)}`)
   assert.equal(r.json.reason, 'out-of-season')
@@ -210,10 +227,60 @@ test('payment: a legitimate booking is NOT refused — it reaches the charge', {
     return t.skip('sample week falls outside the configured season')
   }
 
-  const r = await post({ siteId: free.id, arrival, departure, nights: 2 })
+  // THE QUOTE COMES FROM THE SERVER, exactly as the booking page's does.
+  //
+  // This used to post the `post()` helper's hardcoded nightlyRate/totalPrice. That was fine when
+  // the file was written, and stopped being fine when security PR 4a made the server authoritative
+  // on price: the route now recomputes the quote and refuses anything that disagrees, so the
+  // made-up figures were rejected with `price-mismatch` before Square was ever reached. The test
+  // had been reporting SKIP since long before that landed, so the rot was invisible.
+  //
+  // Asking /api/availability for the price is what the real flow does, and it keeps this test
+  // honest about what it is proving: that the DATE gates do not refuse a legitimate booking.
+  const quoteRes = await fetch(`${BASE}/api/availability?arrival=${arrival}&departure=${departure}`)
+  const quote: any = await quoteRes.json()
+  const priced = (quote.sites || []).find((s: any) => s.id === free.id)
+  if (!priced) return t.skip('the search did not offer the free site — nothing to price against')
 
-  assert.equal(r.gated, false, `a legitimate booking was wrongly refused: ${JSON.stringify(r.json)}`)
-  assert.match(String(r.json.error), /authoriz/i, 'expected to die at the deliberately invalid Square token')
+  const r = await post({
+    siteId: free.id,
+    arrival,
+    departure,
+    nights: priced.nights,
+    nightlyRate: priced.nightly_rate,
+    totalPrice: priced.total_price,
+    amountToPay: priced.total_price,
+  })
+
+  // WHAT THIS PROVES, precisely: no gate above the payment step refused a legitimate booking.
+  //
+  // It used to assert `gated === false` and then match Square's own "could not be authorized"
+  // error. Both have rotted, and neither rot was visible while this file was skipping:
+  //
+  //   * `gated` is "the response carries a `reason`", which was a sound proxy for "one of our
+  //     gates stopped it" only while the gates were the only things emitting one. Square steps
+  //     7-8 added `square-unavailable` from the credential resolver, which also carries a reason.
+  //   * the Square error itself only appeared while the access token came from the environment.
+  //     The resolver now reads per-tenant credentials, so in an environment with no SQUARE_*
+  //     variables it fails before Square is contacted and the authorization error never happens.
+  //
+  // So assert the thing that actually matters and does not depend on either: the refusal, if any,
+  // is NOT one of the gates. A false rejection by the date gates or the pricing guard fails this;
+  // an unreachable payment provider does not, because that is downstream of everything this file
+  // is about, and the invalid token means no card could be charged either way.
+  const GATE_REASONS = [
+    'missing-dates', 'invalid-range', 'beyond-horizon', 'out-of-season',
+    'blocked', 'double-booked', 'min-stay', 'price-mismatch', 'discount-invalid',
+  ]
+  assert.ok(
+    !GATE_REASONS.includes(r.json.reason),
+    `a legitimate booking was wrongly refused by a gate: ${JSON.stringify(r.json)}`
+  )
+  // And it did get as far as trying to pay, rather than quietly succeeding without a charge.
+  assert.ok(
+    /authoriz/i.test(String(r.json.error)) || r.json.reason === 'square-unavailable',
+    `expected to reach the payment step, got: ${JSON.stringify(r.json)}`
+  )
 })
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
