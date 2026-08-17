@@ -6,6 +6,7 @@ import Image from 'next/image'
 import type { BookAddon, BookFee } from '@/lib/book-server'
 import PaymentTrustRow from '../components/PaymentTrustRow'
 import { computeBookingQuote } from '@/lib/booking-quote'
+import { resolveMaxAdvanceDays, horizonLastArrival } from '@/lib/bookability'
 
 const CAMPER_TYPES = [
   {
@@ -168,6 +169,7 @@ export default function BookingForm({
   const [hasSignature, setHasSignature] = useState(false)
   const [sameDayBlocked, setSameDayBlocked] = useState(false)
   const [sameDayMessage, setSameDayMessage] = useState('')
+  const [horizonMessage, setHorizonMessage] = useState('')
 
   const site = {
     id: searchParams.get('siteId') || '',
@@ -192,6 +194,12 @@ export default function BookingForm({
   // would price the stay at zero. The same-day cutoff check still runs here, against the
   // settings that were handed in.
   useEffect(() => { checkSameDayCutoff(settings, arrival) }, [])
+  // The booking horizon, re-checked here because this page's dates come from URL parameters and
+  // the search that would have caught them is skippable. NOT the enforcement — /api/payment is,
+  // and a guest who gets past this is refused there with no charge attempted. This exists so that
+  // someone who arrives on a crafted or stale link is told why up front, instead of filling in
+  // their card details and being rejected at the end.
+  useEffect(() => { checkHorizonWindow(settings, arrival) }, [])
   useEffect(() => { if (step >= 3 && !squareLoaded) loadSquare() }, [step])
   useEffect(() => { if (arrival) fetchCancellationPolicy() }, [arrival])
 
@@ -223,6 +231,21 @@ export default function BookingForm({
     if (currentTotalMinutes >= cutoffTotalMinutes) {
       setSameDayBlocked(true)
       setSameDayMessage(settingsData.same_day_cutoff_message || 'Same-day reservations are not available online. Please call us.')
+    }
+  }
+
+  // No slack, matching the date picker on the landing page: the browser holds to the park's true
+  // window and the server allows one day past it, so anything this page accepts, create accepts.
+  function checkHorizonWindow(settingsData: any, arrivalDate: string) {
+    if (!arrivalDate) return
+    const maxDays = resolveMaxAdvanceDays(settingsData?.max_advance_days)
+    if (maxDays === null) return
+    const today = new Date().toISOString().split('T')[0]
+    const last = horizonLastArrival(maxDays, today)
+    if (arrivalDate > last) {
+      setHorizonMessage(
+        `We accept reservations up to ${maxDays} day${maxDays === 1 ? '' : 's'} in advance. Please choose an arrival date on or before ${last}.`
+      )
     }
   }
 
@@ -489,6 +512,32 @@ export default function BookingForm({
 
   const camperTypeLabel = (val: string) =>
     CAMPER_TYPES.find(t => t.value === val)?.label || val
+
+  if (horizonMessage) {
+    return (
+      <main className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--surface-bg)' }}>
+        <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: 'var(--surface-card)' }}>
+          {settings?.logo_url && (
+            <div className={`w-12 h-12 overflow-hidden flex items-center justify-center shrink-0 ${logoShapeClass}`}>
+              <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={48} height={48} className="object-contain w-full h-full" />
+            </div>
+          )}
+          <div>
+            <h1 className="text-[var(--text-primary)] font-bold">{settings?.park_name || 'Campground'}</h1>
+            <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Online Reservations</p>
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center px-4 py-16">
+          <div className="max-w-md w-full rounded-2xl p-8 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
+            <div className="text-5xl mb-4">🗓️</div>
+            <h2 className="text-[var(--text-primary)] text-2xl font-bold mb-3">That's Further Out Than We Book</h2>
+            <p className="text-[var(--text-muted)] text-base leading-relaxed">{horizonMessage}</p>
+            <button onClick={() => window.location.href = '/'} className="mt-8 px-6 py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>← Choose Different Dates</button>
+          </div>
+        </div>
+      </main>
+    )
+  }
 
   if (sameDayBlocked) {
     return (

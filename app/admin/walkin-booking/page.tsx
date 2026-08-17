@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import toast, { Toaster } from 'react-hot-toast'
 import { loadSquarePayments } from '@/lib/square-card-client'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
+import { useHorizonOverride, HorizonOverrideNotice } from '@/app/components/HorizonOverride'
 
 // Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
 // Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
@@ -103,6 +104,12 @@ export default function WalkInBookingPage() {
   const [priceOverride, setPriceOverride] = useState('')
   const [adultsDisplay, setAdultsDisplay] = useState('2')
   const [childrenDisplay, setChildrenDisplay] = useState('')
+  // This page pulled two fields off the settings row and kept neither the row nor any state for it.
+  // The horizon hook needs max_advance_days, so the row is held now. A walk-in is nearly always
+  // arriving today, so this warning should almost never fire here — it is wired anyway because this
+  // page posts to the same route as the other two, and a route rejection with no on-screen
+  // explanation is a dead end for whoever is standing at the desk.
+  const [settings, setSettings] = useState<any>(null)
 
   const [form, setForm] = useState({
     guest_name: '',
@@ -125,13 +132,14 @@ export default function WalkInBookingPage() {
     const [{ data: siteData }, { data: prods }, { data: settings }, { data: cats }, { data: feesData }, { data: rulesData }] = await Promise.all([
       supabase.from('sites').select('*').eq('is_available', true).order('display_order'),
       supabase.from('products').select('*').eq('active', true).order('display_order'),
-      supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id').single(),
+      supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id, max_advance_days').single(),
       supabase.from('product_categories').select('name').order('display_order'),
       supabase.from('fees').select('*').eq('is_active', true),
       supabase.from('pricing_rules').select('*').eq('is_active', true),
     ])
     setSites(siteData || [])
     setProducts(prods || [])
+    setSettings(settings || null)
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
     if (settings?.square_terminal_device_id) setTerminalDeviceId(settings.square_terminal_device_id)
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
@@ -170,6 +178,9 @@ export default function WalkInBookingPage() {
   const calculatedTotal = selectedSite ? nightlyRate * nights : 0
   const total = priceOverride !== '' ? Math.round(parseFloat(priceOverride) * 100) : calculatedTotal
 
+  // The park's booking window and the operator's explicit waiver of it.
+  const horizon = useHorizonOverride(settings, form.arrival_date)
+
   // Card-only fee calculation for cash/card split
   const applicableFees = selectedSite ? allFees.filter((f: any) => {
     if (f.applies_to === 'all') return true
@@ -184,6 +195,11 @@ export default function WalkInBookingPage() {
     if (!form.site_id) { toast.error('Please select a site'); return }
     if (!form.arrival_date || !form.departure_date) { toast.error('Please enter dates'); return }
     if (nights <= 0) { toast.error('Departure must be after arrival'); return }
+    // Prompt, not gate — /api/manual-booking enforces this regardless.
+    if (!horizon.cleared) {
+      toast.error(`This arrival is beyond your ${horizon.maxDays}-day booking window. Tick "Book beyond the booking window" to continue.`)
+      return
+    }
     setSaving(true)
     const response = await fetch('/api/manual-booking', {
       method: 'POST',
@@ -192,6 +208,7 @@ export default function WalkInBookingPage() {
         site_id: form.site_id,
         arrival_date: form.arrival_date,
         departure_date: form.departure_date,
+        override_horizon: horizon.override,
         num_adults: form.num_adults,
         num_children: form.num_children,
         guest_name: form.guest_name,
@@ -478,6 +495,8 @@ export default function WalkInBookingPage() {
 
       <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '1.5rem', marginBottom: 16 }}>
         <h3 style={{ margin: '0 0 1rem', fontSize: 15, fontWeight: 700, color: '#374151' }}>Stay Details</h3>
+        {/* Renders nothing unless the arrival is past the park's booking window. */}
+        <HorizonOverrideNotice state={horizon} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <div>
             <label style={lbl}>Arrival date *</label>
