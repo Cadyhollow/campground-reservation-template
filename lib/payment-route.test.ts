@@ -151,15 +151,19 @@ test('payment: an overlapping booking is refused, and never reaches Square', { s
   // missing fixture, not a broken gate. Visible in the output either way.
   if (!existing) return t.skip('no non-cancelled reservation on an unblocked site to test against')
 
-  const r = await post({
-    siteId: existing.site_id,
-    arrival: existing.arrival_date,
-    departure: existing.departure_date,
-  })
+  // Horizon pinned off: an existing reservation can sit any distance in the future, so a tenant
+  // with a booking window would refuse this for the wrong reason.
+  await withHorizon(null, async () => {
+    const r = await post({
+      siteId: existing.site_id,
+      arrival: existing.arrival_date,
+      departure: existing.departure_date,
+    })
 
-  assert.ok(r.gated, `double-booking reached Square instead of being refused: ${JSON.stringify(r.json)}`)
-  assert.equal(r.json.reason, 'double-booked')
-  assert.equal(r.status, 409, 'a double-booking is a 409 — someone got there first')
+    assert.ok(r.gated, `double-booking reached Square instead of being refused: ${JSON.stringify(r.json)}`)
+    assert.equal(r.json.reason, 'double-booked')
+    assert.equal(r.status, 409, 'a double-booking is a 409 — someone got there first')
+  })
 })
 
 test('payment: an out-of-season booking is refused, and never reaches Square', { skip }, async (t) => {
@@ -177,11 +181,16 @@ test('payment: an out-of-season booking is refused, and never reaches Square', {
 
   const { data: site } = await supabase.from('sites').select('id').eq('is_available', true).limit(1).single()
   const departure = addDays(excluded, 3)
-  const r = await post({ siteId: site.id, arrival: excluded, departure })
 
-  assert.ok(r.gated, `out-of-season booking reached Square: ${JSON.stringify(r.json)}`)
-  assert.equal(r.json.reason, 'out-of-season')
-  assert.equal(r.status, 400)
+  // Horizon pinned off: an out-of-season date is usually months away, so a live booking window
+  // rejects it as `beyond-horizon` before the season is ever consulted.
+  await withHorizon(null, async () => {
+    const r = await post({ siteId: site.id, arrival: excluded, departure })
+
+    assert.ok(r.gated, `out-of-season booking reached Square: ${JSON.stringify(r.json)}`)
+    assert.equal(r.json.reason, 'out-of-season')
+    assert.equal(r.status, 400)
+  })
 })
 
 test('payment: a blocked date is refused, and never reaches Square', { skip }, async (t) => {
@@ -192,11 +201,15 @@ test('payment: a blocked date is refused, and never reaches Square', { skip }, a
 
   const b = blocks[0]
   const departure = new Date(Date.parse(`${b.date}T12:00:00Z`) + 86400000).toISOString().slice(0, 10)
-  const r = await post({ siteId: b.site_id, arrival: b.date, departure, nights: 1 })
 
-  assert.ok(r.gated, `blocked date reached Square: ${JSON.stringify(r.json)}`)
-  assert.equal(r.json.reason, 'blocked')
-  assert.equal(r.status, 400)
+  // Horizon pinned off, same reason: a blocked date can be any distance out.
+  await withHorizon(null, async () => {
+    const r = await post({ siteId: b.site_id, arrival: b.date, departure, nights: 1 })
+
+    assert.ok(r.gated, `blocked date reached Square: ${JSON.stringify(r.json)}`)
+    assert.equal(r.json.reason, 'blocked')
+    assert.equal(r.status, 400)
+  })
 })
 
 test('payment: a malformed range is refused, and never reaches Square', { skip }, async () => {
@@ -242,7 +255,10 @@ test('payment: a legitimate booking is NOT refused — it reaches the charge', {
   const priced = (quote.sites || []).find((s: any) => s.id === free.id)
   if (!priced) return t.skip('the search did not offer the free site — nothing to price against')
 
-  const r = await post({
+  // Horizon pinned off here too. This test asserts that NO gate refused a legitimate booking, so
+  // a tenant with a short window would fail it for a reason that has nothing to do with what it
+  // is checking.
+  const r = await withHorizonValue(null, () => post({
     siteId: free.id,
     arrival,
     departure,
@@ -250,7 +266,7 @@ test('payment: a legitimate booking is NOT refused — it reaches the charge', {
     nightlyRate: priced.nightly_rate,
     totalPrice: priced.total_price,
     amountToPay: priced.total_price,
-  })
+  }))
 
   // WHAT THIS PROVES, precisely: no gate above the payment step refused a legitimate booking.
   //
@@ -291,6 +307,18 @@ test('payment: a legitimate booking is NOT refused — it reaches the charge', {
 // row back. Restored in a finally, so a failing assertion cannot leave the test tenant with a
 // booking window nobody configured.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+// Also used by the tests ABOVE that assert a non-horizon gate. The horizon is checked before the
+// season and before the date facts, so a tenant that happens to have a booking window configured
+// makes those tests fail with `beyond-horizon` instead of the gate they are about — which is
+// exactly what happened the first time this suite met a tenant with a live window. Pinning the
+// window to null is what makes each of them a test of one gate rather than of the tenant's config.
+// Value-returning sibling, for the tests that need the response back out of the wrapper.
+async function withHorizonValue<T>(days: number | null, fn: () => Promise<T>): Promise<T> {
+  let out!: T
+  await withHorizon(days, async () => { out = await fn() })
+  return out
+}
 
 async function withHorizon(days: number | null, fn: () => Promise<void>) {
   const { data: before } = await supabase.from('settings').select('id, max_advance_days').limit(1).single()
