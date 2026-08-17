@@ -698,7 +698,7 @@ function NewReservationWizardInner() {
             )}
           </div>
 
-          <SummaryPanel pricing={pricing} form={form} set={set} selectedSite={selectedSite} step={step} setStep={setStep} onComplete={handleComplete} saving={saving} error={error} settings={settings} effectiveTotal={effectiveTotal} overrideActive={overrideActive} grandTotal={grandTotal} posCart={posCart} showPOS={showPOS} setShowPOS={setShowPOS} sendWaiver={sendWaiver} setSendWaiver={setSendWaiver} />
+          <SummaryPanel horizon={horizon} season={season} pricing={pricing} form={form} set={set} selectedSite={selectedSite} step={step} setStep={setStep} onComplete={handleComplete} saving={saving} error={error} settings={settings} effectiveTotal={effectiveTotal} overrideActive={overrideActive} grandTotal={grandTotal} posCart={posCart} showPOS={showPOS} setShowPOS={setShowPOS} sendWaiver={sendWaiver} setSendWaiver={setSendWaiver} />
         </div>
       </div>
     </div>
@@ -832,7 +832,7 @@ function StepDatesSite({ form, set, available, camper, onSelectSite, siteCleared
   )
 }
 
-function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onComplete, saving, error, settings, effectiveTotal, overrideActive, grandTotal, posCart, showPOS, setShowPOS, sendWaiver, setSendWaiver }: any) {
+function SummaryPanel({ horizon, season, pricing, form, set, selectedSite, step, setStep, onComplete, saving, error, settings, effectiveTotal, overrideActive, grandTotal, posCart, showPOS, setShowPOS, sendWaiver, setSendWaiver }: any) {
   const cash = pricing?.cashTotal || 0
   const fee = pricing ? pricing.cardSurcharge(cash) : 0
   const [editingTotal, setEditingTotal] = useState(false)
@@ -840,8 +840,16 @@ function SummaryPanel({ pricing, form, set, selectedSite, step, setStep, onCompl
   const [confirmZero, setConfirmZero] = useState(false)
   const guests = `${form.num_adults} adult${form.num_adults !== 1 ? 's' : ''}${form.num_children ? `, ${form.num_children} child${form.num_children !== 1 ? 'ren' : ''}` : ''}`
   const name = `${form.guest_first} ${form.guest_last}`.trim()
+  // An un-acknowledged override blocks the step it belongs to, not just the final save.
+  //
+  // The guards in handleComplete are the ones that MATTER — nothing is created without them, and
+  // /api/manual-booking refuses independently regardless. But leaving them as the only barrier
+  // meant an operator could walk all four steps, enter the guest, pick add-ons, choose a payment
+  // method, and only then be told to go back to step 1 and tick a box. The notice is on step 1
+  // and describes step 1's dates, so step 1 is where it has to be answered.
   const continueDisabled =
     (step === 1 && !form.site_id) ||
+    (step === 1 && (!horizon?.cleared || !season?.cleared)) ||
     (step === 2 && !form.guest_first.trim() && !form.guest_last.trim())
   const isReview = step === 4
   const paidCents = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0

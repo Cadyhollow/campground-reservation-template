@@ -81,15 +81,42 @@ async function book(over: Record<string, any>) {
 }
 
 // Sets the window, runs the body, and always puts the row back.
-async function withHorizon(days: number | null, fn: () => Promise<void>) {
-  const { data: before } = await supabase.from('settings').select('id, max_advance_days').limit(1).single()
+// EVERY GATE STATED EXPLICITLY, always. /api/manual-booking checks the horizon BEFORE the season,
+// so a test that pins only one is really testing whatever the tenant happens to be configured with:
+// a live booking window makes every season test fail with `beyond-horizon`, and a live season makes
+// the far-future horizon tests fail with `out-of-season`.
+//
+// Found the hard way — a browser walk left season = April 1 to October 31 and window = 30 days on
+// the sandbox, and six tests went red without a line of product code changing. Defaulting both to
+// null and requiring each test to name what it wants means that cannot recur.
+type Gates = { horizon?: number | null; seasonStart?: string | null; seasonEnd?: string | null }
+
+async function withGates(gates: Gates, fn: () => Promise<void>) {
+  const { data: before } = await supabase
+    .from('settings').select('id, max_advance_days, season_start, season_end').limit(1).single()
   if (!before) throw new Error('no settings row on this tenant')
-  await supabase.from('settings').update({ max_advance_days: days }).eq('id', before.id)
+
+  await supabase.from('settings').update({
+    max_advance_days: gates.horizon ?? null,
+    season_start: gates.seasonStart ?? null,
+    season_end: gates.seasonEnd ?? null,
+  }).eq('id', before.id)
+
   try {
     await fn()
   } finally {
-    await supabase.from('settings').update({ max_advance_days: before.max_advance_days }).eq('id', before.id)
+    await supabase.from('settings').update({
+      max_advance_days: before.max_advance_days,
+      season_start: before.season_start,
+      season_end: before.season_end,
+    }).eq('id', before.id)
   }
+}
+
+// Kept as thin, explicit wrappers so each test still reads as being about one gate — but both are
+// always pinned underneath.
+async function withHorizon(days: number | null, fn: () => Promise<void>) {
+  return withGates({ horizon: days }, fn)
 }
 
 const isoPlus = (days: number) => addDays(new Date().toISOString().slice(0, 10), days)
@@ -231,17 +258,7 @@ test('manual-booking: the override waives the horizon and NOT double-booking', {
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 async function withSeason(start: string | null, end: string | null, fn: () => Promise<void>) {
-  const { data: before } = await supabase
-    .from('settings').select('id, season_start, season_end').limit(1).single()
-  if (!before) throw new Error('no settings row on this tenant')
-  await supabase.from('settings').update({ season_start: start, season_end: end }).eq('id', before.id)
-  try {
-    await fn()
-  } finally {
-    await supabase.from('settings')
-      .update({ season_start: before.season_start, season_end: before.season_end })
-      .eq('id', before.id)
-  }
+  return withGates({ seasonStart: start, seasonEnd: end }, fn)
 }
 
 test('manual-booking: a stay running past closing is refused for STAFF too', { skip }, async (t) => {
@@ -371,20 +388,18 @@ test('manual-booking: the season override waives the season and NOT double-booki
 test('manual-booking: the two overrides are separate — season does not waive the horizon', { skip }, async (t) => {
   // Different rules, different severities, different flags. An operator who accepted a closure
   // has not thereby accepted booking years ahead.
-  await withHorizon(30, async () => {
-    await withSeason('April 1', 'October 31', async () => {
-      const arrival = isoPlus(400), departure = addDays(isoPlus(400), 2)
-      const site = await freeSite(arrival, departure)
-      if (!site) return t.skip('no free site 400 days out')
+  await withGates({ horizon: 30, seasonStart: 'April 1', seasonEnd: 'October 31' }, async () => {
+    const arrival = isoPlus(400), departure = addDays(isoPlus(400), 2)
+    const site = await freeSite(arrival, departure)
+    if (!site) return t.skip('no free site 400 days out')
 
-      const r = await book({
-        site_id: site.id, arrival_date: arrival, departure_date: departure,
-        base_nightly_rate: site.base_rate, total_price: site.base_rate * 2,
-        override_season: true, // season waived, horizon NOT
-      })
-
-      assert.equal(r.json.reason, 'beyond-horizon',
-        `the season override wrongly waived the booking window: ${JSON.stringify(r.json)}`)
+    const r = await book({
+      site_id: site.id, arrival_date: arrival, departure_date: departure,
+      base_nightly_rate: site.base_rate, total_price: site.base_rate * 2,
+      override_season: true, // season waived, horizon NOT
     })
+
+    assert.equal(r.json.reason, 'beyond-horizon',
+      `the season override wrongly waived the booking window: ${JSON.stringify(r.json)}`)
   })
 })

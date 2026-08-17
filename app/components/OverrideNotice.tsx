@@ -112,7 +112,12 @@ export function OverrideNotice({
           type="checkbox"
           checked={state.override}
           onChange={e => state.setOverride(e.target.checked)}
-          className="h-4 w-4"
+          // `native-checkbox` opts out of the global `input { appearance: none; width: 100% }`
+          // rule in globals.css, which otherwise renders this box INVISIBLE and stretches it
+          // across the row. See the comment on the class. The horizon override has rendered
+          // that way since it merged — caught only when the season override's browser walk
+          // finally put a human in front of one.
+          className="native-checkbox"
         />
         <span className={`text-sm ${t.label}`}>{label}</span>
       </label>
