@@ -196,6 +196,44 @@ test('season span: FAILS OPEN when the season cannot be read', () => {
   }
 })
 
+test('season span: THE ENDPOINT TRAP — both ends in season, the middle is not', () => {
+  // The failure mode a month/day comparison invites. Both endpoints of each stay below sit
+  // inside the season window when read as bare month/day, so an implementation that compared
+  // only arrival and departure would ACCEPT them — while the guest occupies the site straight
+  // through the closed period.
+  //
+  // checkSeasonSpan is immune because it never compares endpoints: it walks the real calendar
+  // dates and tests each night. The assertions on isNightInSeason below are what make that
+  // meaningful — they show the trap is genuinely armed, so the test would fail against an
+  // endpoint-only implementation rather than passing for the wrong reason.
+
+  // Non-wrap: October 20 to April 15 the FOLLOWING year. November through March are all closed.
+  assert.equal(isNightInSeason('2026-10-20', SEASON_APR_OCT), true, 'arrival looks in season')
+  assert.equal(isNightInSeason('2027-04-15', SEASON_APR_OCT), true, 'departure looks in season')
+  const r1 = checkSeasonSpan('2026-10-20', '2027-04-15', SEASON_APR_OCT)
+  assert.equal(r1.bookable, false, 'six months straight through a closed winter')
+  assert.equal(r1.reason, 'out-of-season')
+
+  // Wrap-around: February 1 to December 15 of the SAME year, across the closed summer.
+  const WRAPPING = { season_start: 'November 1', season_end: 'March 31' }
+  assert.equal(isNightInSeason('2026-02-01', WRAPPING), true, 'arrival looks in season')
+  assert.equal(isNightInSeason('2026-12-15', WRAPPING), true, 'departure looks in season')
+  const r2 = checkSeasonSpan('2026-02-01', '2026-12-15', WRAPPING)
+  assert.equal(r2.bookable, false, 'ten months straight through a closed summer')
+  assert.equal(r2.reason, 'out-of-season')
+})
+
+test('season span: a long stay wholly inside ONE season occurrence is still accepted', () => {
+  // The control that keeps the test above honest. If the span check refused anything long, the
+  // endpoint-trap test would pass for the wrong reason — so a stay that fills an entire season,
+  // and one that fills an entire WRAPPING season, must both be bookable.
+  const WRAPPING = { season_start: 'November 1', season_end: 'March 31' }
+  assert.equal(checkSeasonSpan('2026-04-01', '2026-10-31', SEASON_APR_OCT).bookable, true,
+    'the whole open season, opening day to closing day')
+  assert.equal(checkSeasonSpan('2026-11-01', '2027-03-31', WRAPPING).bookable, true,
+    'the whole wrapping season, straight across New Year')
+})
+
 test('season span: falls back to the default closed message when the park configured none', () => {
   const r = checkSeasonSpan('2026-12-20', '2026-12-22', { season_start: 'May 1', season_end: 'October 15' })
   assert.equal(r.bookable, false)

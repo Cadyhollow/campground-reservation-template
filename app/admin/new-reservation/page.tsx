@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation'
 import { methodLabel, ymd } from '@/lib/transactions'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useHorizonOverride, HorizonOverrideNotice } from '@/app/components/HorizonOverride'
+import { useSeasonOverride, SeasonOverrideNotice } from '@/app/components/SeasonOverride'
 
 // Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
 // Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
@@ -245,6 +246,8 @@ function NewReservationWizardInner() {
   // The park's booking window and the operator's explicit waiver of it. `settings` here is a
   // select('*'), so max_advance_days is already in hand — no query change needed on this page.
   const horizon = useHorizonOverride(settings, form.arrival_date)
+  // `settings` here is a select('*'), so the season columns are already in hand.
+  const season = useSeasonOverride(settings, form.arrival_date, form.departure_date)
 
   function selectSite(s: any, needsOverride: boolean, reason?: string) {
     if (needsOverride) {
@@ -269,6 +272,10 @@ function NewReservationWizardInner() {
     // is sent to the tick box on step 1 rather than to an error they cannot act on from step 4.
     if (!horizon.cleared) {
       setError(`This arrival is beyond your ${horizon.maxDays}-day booking window. Go back to Dates & Site and tick "Book beyond the booking window" to continue.`)
+      return
+    }
+    if (!season.cleared) {
+      setError('Some nights of this stay are outside your open season. Go back to Dates & Site and tick "Book outside the open season" to continue.')
       return
     }
     const paidCents = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0
@@ -313,6 +320,7 @@ function NewReservationWizardInner() {
           arrival_date: form.arrival_date,
           departure_date: form.departure_date,
           override_horizon: horizon.override,
+          override_season: season.override,
           num_adults: form.num_adults,
           num_children: form.num_children,
           guest_name,
@@ -676,6 +684,7 @@ function NewReservationWizardInner() {
                 onSelectSite={selectSite}
                 siteClearedNote={siteClearedNote}
                 horizon={horizon}
+                season={season}
               />
             )}
             {step === 2 && (
@@ -720,7 +729,7 @@ function Stepper({ step }: { step: Step }) {
   )
 }
 
-function StepDatesSite({ form, set, available, camper, onSelectSite, siteClearedNote, horizon }: any) {
+function StepDatesSite({ form, set, available, camper, onSelectSite, siteClearedNote, horizon, season }: any) {
   const rv = available.filter((s: any) => s.site_type === 'rv_site')
   const fittingRv = rv.filter((s: any) => siteFitsCamper(s, camper).fits)
   const otherRv = rv.filter((s: any) => !siteFitsCamper(s, camper).fits)
@@ -753,6 +762,7 @@ function StepDatesSite({ form, set, available, camper, onSelectSite, siteCleared
     <div>
       {/* Renders nothing unless the arrival is past the park's booking window. No wrapper div —
           one would leave an empty margin on every in-window booking. */}
+      <SeasonOverrideNotice state={season} />
       <HorizonOverrideNotice state={horizon} />
       <div className="grid grid-cols-2 gap-3 mb-4">
         <label className="block">

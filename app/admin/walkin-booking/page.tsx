@@ -5,6 +5,7 @@ import toast, { Toaster } from 'react-hot-toast'
 import { loadSquarePayments } from '@/lib/square-card-client'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useHorizonOverride, HorizonOverrideNotice } from '@/app/components/HorizonOverride'
+import { useSeasonOverride, SeasonOverrideNotice } from '@/app/components/SeasonOverride'
 
 // Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
 // Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
@@ -132,7 +133,7 @@ export default function WalkInBookingPage() {
     const [{ data: siteData }, { data: prods }, { data: settings }, { data: cats }, { data: feesData }, { data: rulesData }] = await Promise.all([
       supabase.from('sites').select('*').eq('is_available', true).order('display_order'),
       supabase.from('products').select('*').eq('active', true).order('display_order'),
-      supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id, max_advance_days').single(),
+      supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id, max_advance_days, season_start, season_end, closed_season_message').single(),
       supabase.from('product_categories').select('name').order('display_order'),
       supabase.from('fees').select('*').eq('is_active', true),
       supabase.from('pricing_rules').select('*').eq('is_active', true),
@@ -180,6 +181,7 @@ export default function WalkInBookingPage() {
 
   // The park's booking window and the operator's explicit waiver of it.
   const horizon = useHorizonOverride(settings, form.arrival_date)
+  const season = useSeasonOverride(settings, form.arrival_date, form.departure_date)
 
   // Card-only fee calculation for cash/card split
   const applicableFees = selectedSite ? allFees.filter((f: any) => {
@@ -200,6 +202,10 @@ export default function WalkInBookingPage() {
       toast.error(`This arrival is beyond your ${horizon.maxDays}-day booking window. Tick "Book beyond the booking window" to continue.`)
       return
     }
+    if (!season.cleared) {
+      toast.error('Some nights of this stay are outside your open season. Tick "Book outside the open season" to continue.')
+      return
+    }
     setSaving(true)
     const response = await fetch('/api/manual-booking', {
       method: 'POST',
@@ -209,6 +215,7 @@ export default function WalkInBookingPage() {
         arrival_date: form.arrival_date,
         departure_date: form.departure_date,
         override_horizon: horizon.override,
+        override_season: season.override,
         num_adults: form.num_adults,
         num_children: form.num_children,
         guest_name: form.guest_name,
@@ -496,6 +503,7 @@ export default function WalkInBookingPage() {
       <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '1.5rem', marginBottom: 16 }}>
         <h3 style={{ margin: '0 0 1rem', fontSize: 15, fontWeight: 700, color: '#374151' }}>Stay Details</h3>
         {/* Renders nothing unless the arrival is past the park's booking window. */}
+        <SeasonOverrideNotice state={season} />
         <HorizonOverrideNotice state={horizon} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <div>

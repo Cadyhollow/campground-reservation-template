@@ -9,6 +9,11 @@
 // is three chances for one of them to compute the boundary a day differently from the route that
 // enforces it.
 //
+// The acknowledgement machinery now lives in OverrideNotice.tsx and is shared with the closed
+// season. This file keeps only what is specific to the horizon: what triggers it, what the guest
+// would have been told, and the fact that the key is the ARRIVAL alone — the horizon is an
+// arrival-only rule, unlike the season, which is whole-stay and keys on both dates.
+//
 // ── WHY THE STAFF DATE INPUTS DO NOT GET A `max` ─────────────────────────────────────────────
 //
 // The guest-facing picker on the landing page caps its arrival input at the horizon. These do not,
@@ -19,24 +24,16 @@
 //
 // The asymmetry is the design: absolute for guests, advisory-with-a-record for staff.
 
-import { useState } from 'react'
 import { resolveMaxAdvanceDays, horizonLastArrival, type HorizonSettings } from '@/lib/bookability'
+import { useDateBoundAcknowledgement, OverrideNotice, type OverrideState } from './OverrideNotice'
 
-export type HorizonOverrideState = {
-  /** True when the chosen arrival is past the park's window and an override is required. */
+export type HorizonOverrideState = OverrideState & {
+  /** True when the chosen arrival is past the park's window. Alias of `triggered`. */
   beyond: boolean
-  /** Whether the operator has ticked the box. Send as `override_horizon`. */
-  override: boolean
-  setOverride: (v: boolean) => void
   /** The configured window, or null when the park has set none. */
   maxDays: number | null
   /** The last arrival date inside the window, or null when there is no window. */
   lastArrival: string | null
-  /**
-   * True when the booking may be submitted as far as the horizon is concerned: either the date is
-   * inside the window, or it is outside and the operator has explicitly accepted that.
-   */
-  cleared: boolean
 }
 
 // `settings` is typed to just the column this needs rather than the `any` the booking pages pass
@@ -46,20 +43,6 @@ export function useHorizonOverride(
   settings: HorizonSettings | null | undefined,
   arrivalDate: string
 ): HorizonOverrideState {
-  // WHAT IS STORED IS THE DATE THE OPERATOR AGREED TO, not a boolean.
-  //
-  // The obvious version of this holds a `true`/`false` and clears it in an effect when the date
-  // comes back inside the window. That leaves the waiver alive for a moment after the date has
-  // changed, and it makes the safety property depend on an effect firing — so an operator who
-  // overrides one booking and then corrects the date can keep sending override_horizon: true on
-  // bookings they never meant to waive. It is also the anti-pattern the react-hooks lint rule
-  // exists to catch.
-  //
-  // Binding the acknowledgement to a specific arrival date removes the failure mode instead of
-  // tidying it up: change the date by a single day and the tick is no longer for the date on
-  // screen, so it counts for nothing. There is no state to get out of step, and no effect.
-  const [acknowledgedFor, setAcknowledgedFor] = useState<string | null>(null)
-
   // No slack, matching the guest picker. The route allows one day past this because it has no park
   // timezone, so a date this warns about is always a date the route would also have refused —
   // never the other way round, which would be an operator ticking a box for no reason and then
@@ -69,47 +52,21 @@ export function useHorizonOverride(
   const lastArrival = maxDays === null ? null : horizonLastArrival(maxDays, today)
   const beyond = !!(lastArrival && arrivalDate && arrivalDate > lastArrival)
 
-  const acknowledged = acknowledgedFor !== null && acknowledgedFor === arrivalDate
-  // `beyond &&` so the flag can never be true for a date inside the window, whatever the checkbox
-  // has been doing. The request cannot carry a waiver for a booking that did not need one.
-  const override = beyond && acknowledged
+  // ARRIVAL ONLY as the key. The horizon is a statement about how far ahead someone may plan, so
+  // the departure cannot change the verdict and must not withdraw the acknowledgement.
+  const state = useDateBoundAcknowledgement(beyond, arrivalDate)
 
-  return {
-    beyond,
-    override,
-    setOverride: (v: boolean) => setAcknowledgedFor(v ? arrivalDate : null),
-    maxDays,
-    lastArrival,
-    cleared: !beyond || acknowledged,
-  }
+  return { ...state, beyond, maxDays, lastArrival }
 }
 
-// The warning and the tick box. Renders nothing at all when the date is inside the window, so it
-// can be dropped into a form unconditionally.
 export function HorizonOverrideNotice({ state }: { state: HorizonOverrideState }) {
-  if (!state.beyond) return null
-
   return (
-    // col-span-full so it spans a two-column form grid; harmless where the parent is not a grid.
-    // Carries its own bottom margin rather than relying on a wrapper, so that callers do not need
-    // a conditional div that would otherwise leave a gap whenever this renders nothing.
-    <div className="col-span-full rounded-lg border border-amber-300 bg-amber-50 p-3 mb-4">
-      <p className="text-sm font-medium text-amber-900">
-        This arrival is beyond your {state.maxDays}-day booking window.
-      </p>
-      <p className="text-xs text-amber-800 mt-0.5">
-        Guests can only book online through {state.lastArrival}. You can still take this reservation,
-        but confirm it below so it is not booked this far out by accident.
-      </p>
-      <label className="flex items-center gap-2 mt-2 cursor-pointer">
-        <input
-          type="checkbox"
-          checked={state.override}
-          onChange={e => state.setOverride(e.target.checked)}
-          className="h-4 w-4"
-        />
-        <span className="text-sm text-amber-900">Book beyond the booking window</span>
-      </label>
-    </div>
+    <OverrideNotice
+      tone="amber"
+      title={`This arrival is beyond your ${state.maxDays}-day booking window.`}
+      body={`Guests can only book online through ${state.lastArrival}. You can still take this reservation, but confirm it below so it is not booked this far out by accident.`}
+      label="Book beyond the booking window"
+      state={state}
+    />
   )
 }
