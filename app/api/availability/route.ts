@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 import {
-  checkSeason,
+  checkSeasonSpan,
   checkHorizon,
   resolveMaxAdvanceDays,
   horizonLastArrival,
@@ -64,7 +64,10 @@ export async function GET(request: NextRequest) {
   // The season gate now lives in lib/bookability, so /api/payment applies the same one before
   // charging. The closed payload below is unchanged — search still answers with the park's
   // message and season dates rather than a bare error.
-  if (!checkSeason(arrival, settings).bookable) {
+  // The SAME span rule the create path enforces, so a stay the search calls bookable is one
+  // /api/payment will honour. Arrival-only here would advertise availability for a stay that runs
+  // past closing and then refuse it at the charge.
+  if (!checkSeasonSpan(arrival, departure, settings).bookable) {
     return NextResponse.json({
       sites: [],
       closed: true,

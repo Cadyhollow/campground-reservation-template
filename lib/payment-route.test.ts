@@ -36,7 +36,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { createClient } from '@supabase/supabase-js'
-import { fetchDateFacts, checkDateFacts, checkSeason, addDays } from './bookability.ts'
+import { fetchDateFacts, checkDateFacts, isNightInSeason, addDays } from './bookability.ts'
 
 const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
 const ENV_PATH = resolvePath(REPO_ROOT, '.env.local')
@@ -176,7 +176,7 @@ test('payment: an out-of-season booking is refused, and never reaches Square', {
   // the assertion failed against working code. Find a genuinely excluded date instead, and skip
   // honestly when the park never closes.
   const excluded = ['2026-12-20', '2026-01-15', '2026-03-05', '2026-07-04', '2026-10-28']
-    .find(d => !checkSeason(d, settings).bookable)
+    .find(d => isNightInSeason(d, settings) === false)
   if (!excluded) return t.skip('this park is open year-round — no out-of-season date to test with')
 
   const { data: site } = await supabase.from('sites').select('id').eq('is_available', true).limit(1).single()
@@ -236,7 +236,7 @@ test('payment: a legitimate booking is NOT refused — it reaches the charge', {
   if (!free) return t.skip('no free site in the sample week — nothing to prove the negative with')
   // The season must actually contain the sample week, or this asserts the wrong thing.
   const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
-  if (st?.season_start && st?.season_end && !checkSeason(arrival, st).bookable) {
+  if (isNightInSeason(arrival, st) === false) {
     return t.skip('sample week falls outside the configured season')
   }
 
@@ -367,7 +367,7 @@ test('payment: the last day inside the horizon is NOT refused', { skip }, async 
     const site = await aFreeSite(arrival, departure)
     if (!site) return t.skip('no free site on the horizon boundary')
     const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
-    if (st?.season_start && st?.season_end && !checkSeason(arrival, st).bookable) {
+    if (isNightInSeason(arrival, st) === false) {
       return t.skip('the boundary date falls outside the configured season')
     }
 
@@ -386,7 +386,7 @@ test('payment: with no horizon configured, a far-future booking is not refused f
     const site = await aFreeSite(arrival, departure)
     if (!site) return t.skip('no free site 400 days out')
     const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
-    if (st?.season_start && st?.season_end && !checkSeason(arrival, st).bookable) {
+    if (isNightInSeason(arrival, st) === false) {
       return t.skip('the sample date falls outside the configured season')
     }
 
@@ -412,5 +412,119 @@ test('availability: the search reports the horizon on the same dates the route r
     const res2 = await fetch(`${BASE}/api/availability?arrival=${inside}&departure=${isoPlus(12)}`)
     const json2: any = await res2.json()
     assert.notEqual(json2.outOfWindow, true, `search wrongly reported the window inside it: ${JSON.stringify(json2)}`)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// THE CLOSED SEASON — whole-stay, hard block, public path
+//
+// The defect these cover was live and took money: checkBookability passed the ARRIVAL alone to
+// the season gate, so a stay that began in season and ran past closing was accepted and charged,
+// and a guest could occupy a site for weeks after the park had shut.
+//
+// Like the horizon tests, these SET a season and put it back in a finally.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+async function withSeason(
+  start: string | null,
+  end: string | null,
+  fn: () => Promise<void>
+) {
+  const { data: before } = await supabase
+    .from('settings').select('id, season_start, season_end, closed_season_message').limit(1).single()
+  if (!before) throw new Error('no settings row on this tenant')
+  await supabase.from('settings')
+    .update({ season_start: start, season_end: end }).eq('id', before.id)
+  try {
+    await fn()
+  } finally {
+    await supabase.from('settings')
+      .update({ season_start: before.season_start, season_end: before.season_end })
+      .eq('id', before.id)
+  }
+}
+
+// THE CRAFTED REQUEST. Charissa's exact case, posted straight at the charge route with the
+// browser bypassed: arrival inside the season, departure two months past closing.
+test('payment: a stay that runs PAST CLOSING is refused, and never reaches Square', { skip }, async (t) => {
+  await withHorizon(null, async () => {
+    await withSeason('April 1', 'October 31', async () => {
+      const arrival = '2026-10-20', departure = '2026-12-31'
+      const site = await aFreeSite(arrival, departure)
+      if (!site) return t.skip('no free site for the sample range')
+
+      const r = await post({ siteId: site.id, arrival, departure, nights: 72 })
+
+      assert.ok(r.gated, `a stay running past closing reached Square: ${JSON.stringify(r.json)}`)
+      assert.equal(r.json.reason, 'out-of-season', 'refused by the season gate specifically')
+      assert.equal(r.status, 400)
+    })
+  })
+})
+
+// The counterpart: the arrival alone was always enough to pass before, so this proves the gate
+// is looking at the whole stay rather than having simply become stricter about arrivals.
+test('payment: a stay wholly inside the season is NOT refused by it', { skip }, async (t) => {
+  await withHorizon(null, async () => {
+    await withSeason('April 1', 'October 31', async () => {
+      const arrival = '2026-07-06', departure = '2026-07-09'
+      const site = await aFreeSite(arrival, departure)
+      if (!site) return t.skip('no free site for the sample range')
+
+      const r = await post({ siteId: site.id, arrival, departure, nights: 3 })
+
+      assert.notEqual(r.json.reason, 'out-of-season', `an in-season stay was refused: ${JSON.stringify(r.json)}`)
+    })
+  })
+})
+
+// THE CHECKOUT BOUNDARY, through the real route. The off-by-one most likely to ship: validating
+// "through departure" instead of "through departure-1" would refuse a guest checking out on the
+// morning after the last open day, which every park takes.
+test('payment: arriving on the last open day and leaving the next is accepted', { skip }, async (t) => {
+  await withHorizon(null, async () => {
+    await withSeason('April 1', 'October 31', async () => {
+      const arrival = '2026-10-31', departure = '2026-11-01'
+      const site = await aFreeSite(arrival, departure)
+      if (!site) return t.skip('no free site for the boundary range')
+
+      const r = await post({ siteId: site.id, arrival, departure, nights: 1 })
+
+      assert.notEqual(r.json.reason, 'out-of-season',
+        `the checkout boundary was wrongly refused: ${JSON.stringify(r.json)}`)
+    })
+  })
+})
+
+// Search must agree with create, or the site advertises a stay it will refuse to charge for.
+test('availability: the search refuses the same past-closing stay the route does', { skip }, async () => {
+  await withHorizon(null, async () => {
+    await withSeason('April 1', 'October 31', async () => {
+      const res = await fetch(`${BASE}/api/availability?arrival=2026-10-20&departure=2026-12-31`)
+      const json: any = await res.json()
+      assert.equal(json.closed, true, `search offered a stay running past closing: ${JSON.stringify(json)}`)
+      assert.ok(Array.isArray(json.sites) && json.sites.length === 0)
+
+      const res2 = await fetch(`${BASE}/api/availability?arrival=2026-10-31&departure=2026-11-01`)
+      const json2: any = await res2.json()
+      assert.notEqual(json2.closed, true, 'the checkout boundary must remain searchable')
+    })
+  })
+})
+
+// A winter park could not take a single booking before this: the season was built from the
+// arrival's own year, so Nov 1 resolved LATER than Mar 31 and every date failed both bounds.
+test('payment: a wrapping winter season is bookable across New Year', { skip }, async (t) => {
+  await withHorizon(null, async () => {
+    await withSeason('November 1', 'March 31', async () => {
+      const arrival = '2026-12-28', departure = '2027-01-04'
+      const site = await aFreeSite(arrival, departure)
+      if (!site) return t.skip('no free site over New Year')
+
+      const r = await post({ siteId: site.id, arrival, departure, nights: 7 })
+
+      assert.notEqual(r.json.reason, 'out-of-season',
+        `a wrapping season refused its own mid-season dates: ${JSON.stringify(r.json)}`)
+    })
   })
 })

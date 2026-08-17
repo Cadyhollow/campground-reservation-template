@@ -12,10 +12,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  monthDayToISO,
+  parseMonthDay,
+  monthDayKey,
+  isNightInSeason,
+  checkSeasonSpan,
   nightsBetween,
   addDays,
-  checkSeason,
   checkDateFacts,
   resolveMinNights,
   ruleAppliesToSite,
@@ -30,83 +32,188 @@ import {
 
 // A conventional summer season, the shape nearly every park configures.
 const SEASON = { season_start: 'May 1', season_end: 'October 15', closed_season_message: 'Closed for winter.' }
+// The test tenant's real configuration, and the one Charissa's Oct 20 -> Dec 31 booking hit.
+const SEASON_APR_OCT = { season_start: 'April 1', season_end: 'October 31', closed_season_message: 'We are closed.' }
 
 // --- month/day parsing -------------------------------------------------------
+//
+// The old parser defaulted an unknown month to January and let parseInt produce NaN days, so
+// "Oct 31" silently meant January 31 and "banana" silently meant no season at all. Every case
+// below that returns null used to return something that LOOKED like a date.
 
-test('monthDayToISO: parses the free-text month/day the settings form stores', () => {
-  assert.equal(monthDayToISO('May 1'), '05-01')
-  assert.equal(monthDayToISO('October 15'), '10-15')
-  assert.equal(monthDayToISO('  December 31  '), '12-31', 'surrounding whitespace is tolerated')
-  assert.equal(monthDayToISO('January 5'), '01-05', 'single digits are zero-padded')
+test('parseMonthDay: the ordinary forms a park types', () => {
+  assert.deepEqual(parseMonthDay('May 1'), { month: 5, day: 1 })
+  assert.deepEqual(parseMonthDay('October 15'), { month: 10, day: 15 })
+  assert.deepEqual(parseMonthDay('  December 31  '), { month: 12, day: 31 }, 'whitespace tolerated')
+  assert.deepEqual(parseMonthDay('May 1st'), { month: 5, day: 1 }, 'ordinal suffix tolerated')
+  assert.deepEqual(parseMonthDay('April 1'), { month: 4, day: 1 })
 })
 
-// --- season gate -------------------------------------------------------------
+test('parseMonthDay: THE SILENT-JANUARY BUGS, now parsed correctly', () => {
+  // Both of these used to resolve to January. A park typing "Oct 1" / "Oct 31" got a
+  // January 1 - January 31 season and refused bookings for eleven months of the year.
+  assert.deepEqual(parseMonthDay('Oct 31'), { month: 10, day: 31 }, 'abbreviation')
+  assert.deepEqual(parseMonthDay('oct 31'), { month: 10, day: 31 }, 'lowercase abbreviation')
+  assert.deepEqual(parseMonthDay('february 3'), { month: 2, day: 3 }, 'lowercase full name')
+  assert.deepEqual(parseMonthDay('OCTOBER 31'), { month: 10, day: 31 }, 'uppercase')
+  assert.deepEqual(parseMonthDay('Sept 5'), { month: 9, day: 5 }, 'four-letter abbreviation')
+})
 
-test('season: a date inside the season is bookable', () => {
-  assert.equal(checkSeason('2026-07-04', SEASON).bookable, true)
+test('parseMonthDay: day-first is the same date written the other way round', () => {
+  assert.deepEqual(parseMonthDay('31 October'), { month: 10, day: 31 })
+  assert.deepEqual(parseMonthDay('1 May'), { month: 5, day: 1 })
+})
+
+test('parseMonthDay: unreadable input is null, never a guess', () => {
+  // The property the whole fail-open decision rests on. Each of these used to produce either a
+  // January date or an Invalid Date, and neither was distinguishable from a real season.
+  for (const bad of ['', '   ', 'banana', 'May', 'October', '31', 'ma 1', 'Oct', 'Oct 31 2026', 'x y']) {
+    assert.equal(parseMonthDay(bad), null, `${JSON.stringify(bad)} must not parse`)
+  }
+  assert.equal(parseMonthDay(null), null)
+  assert.equal(parseMonthDay(undefined), null)
+  assert.equal(parseMonthDay(42 as any), null, 'a non-string is not a date')
+})
+
+test('parseMonthDay: an ambiguous month prefix is refused rather than guessed', () => {
+  // "ma" could be March or May. Guessing either would be the old bug in a new coat.
+  assert.equal(parseMonthDay('ma 1'), null)
+  assert.deepEqual(parseMonthDay('mar 1'), { month: 3, day: 1 })
+  assert.deepEqual(parseMonthDay('may 1'), { month: 5, day: 1 })
+})
+
+test('parseMonthDay: the day must be real for that month', () => {
+  assert.equal(parseMonthDay('February 30'), null)
+  assert.equal(parseMonthDay('April 31'), null)
+  assert.equal(parseMonthDay('June 0'), null)
+  assert.equal(parseMonthDay('May 32'), null)
+  assert.deepEqual(parseMonthDay('February 29'), { month: 2, day: 29 }, 'leap day is a real closing date')
+  assert.deepEqual(parseMonthDay('January 31'), { month: 1, day: 31 })
+})
+
+test('monthDayKey: orders month/day without a year or a timezone', () => {
+  assert.equal(monthDayKey({ month: 10, day: 31 }), 1031)
+  assert.equal(monthDayKey({ month: 1, day: 1 }), 101)
+  assert.ok(monthDayKey({ month: 4, day: 1 }) < monthDayKey({ month: 10, day: 31 }))
+})
+
+// --- season gate: single nights ----------------------------------------------
+
+test('season: a night inside the season is in season', () => {
+  assert.equal(isNightInSeason('2026-07-04', SEASON), true)
 })
 
 test('season: boundaries are inclusive on both ends', () => {
   // The park is open ON its first and last day. An off-by-one here silently closes the two
   // busiest changeover days of the year.
-  assert.equal(checkSeason('2026-05-01', SEASON).bookable, true, 'opening day')
-  assert.equal(checkSeason('2026-10-15', SEASON).bookable, true, 'closing day')
+  assert.equal(isNightInSeason('2026-05-01', SEASON), true, 'opening day')
+  assert.equal(isNightInSeason('2026-10-15', SEASON), true, 'closing day')
 })
 
-test('season: the days just outside the boundaries are rejected', () => {
-  const before = checkSeason('2026-04-30', SEASON)
-  assert.equal(before.bookable, false)
-  assert.equal(before.reason, 'out-of-season')
-
-  const after = checkSeason('2026-10-16', SEASON)
-  assert.equal(after.bookable, false)
-  assert.equal(after.reason, 'out-of-season')
+test('season: the days just outside the boundaries are out', () => {
+  assert.equal(isNightInSeason('2026-04-30', SEASON), false)
+  assert.equal(isNightInSeason('2026-10-16', SEASON), false)
 })
 
-test('season: a deep-winter date is rejected and carries the park\'s own message', () => {
-  const r = checkSeason('2027-01-20', SEASON)
-  assert.equal(r.bookable, false)
-  assert.equal(r.message, 'Closed for winter.', 'the configured wording, not a generic error')
-})
-
-test('season: an unconfigured season closes nothing', () => {
-  // A park that has not set a season must not have every date rejected — half a season is not
-  // a season, matching what the availability route has always done.
-  assert.equal(checkSeason('2026-01-20', null).bookable, true)
-  assert.equal(checkSeason('2026-01-20', {}).bookable, true)
-  assert.equal(checkSeason('2026-01-20', { season_start: 'May 1' }).bookable, true, 'start only')
-  assert.equal(checkSeason('2026-01-20', { season_end: 'October 15' }).bookable, true, 'end only')
-})
-
-test('season: falls back to the default closed message when the park configured none', () => {
-  const r = checkSeason('2026-02-01', { season_start: 'May 1', season_end: 'October 15' })
-  assert.equal(r.bookable, false)
-  assert.equal(r.message, DEFAULT_CLOSED_MESSAGE)
+test('season: an unconfigured or unreadable season closes nothing (null, not false)', () => {
+  // null means "no usable season", which the gate treats as open. Distinct from false, which
+  // means definitely closed — the caller must be able to tell those apart.
+  assert.equal(isNightInSeason('2026-01-20', null), null)
+  assert.equal(isNightInSeason('2026-01-20', {}), null)
+  assert.equal(isNightInSeason('2026-01-20', { season_start: 'May 1' }), null, 'start only')
+  assert.equal(isNightInSeason('2026-01-20', { season_end: 'October 15' }), null, 'end only')
+  assert.equal(isNightInSeason('2026-01-20', { season_start: 'banana', season_end: 'October 15' }), null)
+  assert.equal(isNightInSeason('2026-01-20', { season_start: 'May 1', season_end: 'pancake' }), null)
 })
 
 test('season: the same rule applies in every calendar year', () => {
   for (const year of ['2026', '2027', '2030']) {
-    assert.equal(checkSeason(`${year}-07-04`, SEASON).bookable, true, `July ${year}`)
-    assert.equal(checkSeason(`${year}-12-25`, SEASON).bookable, false, `December ${year}`)
+    assert.equal(isNightInSeason(`${year}-07-04`, SEASON), true, `July ${year}`)
+    assert.equal(isNightInSeason(`${year}-12-25`, SEASON), false, `December ${year}`)
   }
 })
 
-test('season: KNOWN BUG, a season spanning New Year rejects everything — unchanged by PR 0', () => {
-  // The season is built from the ARRIVAL's own calendar year, so a November→March season
-  // resolves to a start (Nov 1) later than its end (Mar 31) and nothing is ever inside it.
+test('season: FIXED — a season spanning New Year is now bookable', () => {
+  // INVERTED. This test previously pinned the broken behaviour: the season was built from the
+  // arrival's own calendar year, so a November→March season resolved to a start (Nov 1) LATER
+  // than its end (Mar 31) and every date failed both comparisons — including its own opening
+  // day. A winter park could not take a single booking.
   //
-  // This is pre-existing behaviour on the search path, pinned here deliberately rather than
-  // fixed: PR 0's job is to make create agree with search on every date. Fixing the wrap here
-  // alone would make create ACCEPT dates search still rejects — the exact drift this module
-  // exists to prevent. The fix rides with the seasonal-release PR, in checkSeason, for both
-  // callers at once. This test documents the bug and will be inverted then.
+  // The comparison is now month/day based and handles the wrap explicitly, so the window means
+  // what a winter park means by it.
   const WRAPPING = { season_start: 'November 1', season_end: 'March 31' }
-  assert.equal(checkSeason('2026-12-20', WRAPPING).bookable, false, 'mid-season, still rejected')
-  assert.equal(checkSeason('2026-02-10', WRAPPING).bookable, false, 'mid-season, still rejected')
-  assert.equal(checkSeason('2026-07-04', WRAPPING).bookable, false, 'genuinely out of season')
-  // The point that matters for PR 0: the gate is not newly WRONG in either direction — it
-  // rejects, and search rejected the same dates before this extraction. No date became
-  // bookable at create that was not bookable at search.
+  assert.equal(isNightInSeason('2026-11-01', WRAPPING), true, 'its own opening day')
+  assert.equal(isNightInSeason('2026-12-20', WRAPPING), true, 'mid-season, before New Year')
+  assert.equal(isNightInSeason('2027-01-15', WRAPPING), true, 'mid-season, after New Year')
+  assert.equal(isNightInSeason('2026-02-10', WRAPPING), true, 'mid-season, early in the year')
+  assert.equal(isNightInSeason('2026-03-31', WRAPPING), true, 'its own closing day')
+  assert.equal(isNightInSeason('2026-07-04', WRAPPING), false, 'genuinely out of season')
+  assert.equal(isNightInSeason('2026-04-01', WRAPPING), false, 'the day after closing')
+  assert.equal(isNightInSeason('2026-10-31', WRAPPING), false, 'the day before opening')
+})
+
+// --- season gate: the whole stay ---------------------------------------------
+
+test('season span: THE LIVE HOLE — a stay that starts in season and runs past closing', () => {
+  // The public path accepted and CHARGED this: arrival October 20 is in season, and the
+  // departure was never examined, so a guest could occupy a closed site until December 31.
+  const r = checkSeasonSpan('2026-10-20', '2026-12-31', SEASON_APR_OCT)
+  assert.equal(r.bookable, false)
+  assert.equal(r.reason, 'out-of-season')
+  assert.equal(r.message, 'We are closed.', "the park's own wording")
+})
+
+test('season span: a stay wholly inside the season is fine', () => {
+  assert.equal(checkSeasonSpan('2026-07-01', '2026-07-08', SEASON_APR_OCT).bookable, true)
+})
+
+test('season span: THE CHECKOUT BOUNDARY — arrive on the last open day, leave the next', () => {
+  // The stay occupies the nights arrival … departure-1. With a season ending October 31, a guest
+  // arriving October 31 and leaving November 1 occupies exactly one night — October 31 — and
+  // must be ACCEPTED. Checking "through departure" instead would reject a normal checkout.
+  assert.equal(checkSeasonSpan('2026-10-31', '2026-11-01', SEASON_APR_OCT).bookable, true)
+  // One night further and a genuinely closed night is occupied.
+  assert.equal(checkSeasonSpan('2026-10-31', '2026-11-02', SEASON_APR_OCT).bookable, false)
+})
+
+test('season span: the opening boundary behaves the same way', () => {
+  assert.equal(checkSeasonSpan('2026-04-01', '2026-04-03', SEASON_APR_OCT).bookable, true, 'opening day')
+  assert.equal(checkSeasonSpan('2026-03-31', '2026-04-03', SEASON_APR_OCT).bookable, false, 'one night before opening')
+})
+
+test('season span: a wrapping season is bookable straight across New Year', () => {
+  const WRAPPING = { season_start: 'November 1', season_end: 'March 31' }
+  assert.equal(checkSeasonSpan('2026-12-28', '2027-01-04', WRAPPING).bookable, true, 'over New Year')
+  assert.equal(checkSeasonSpan('2027-03-29', '2027-04-01', WRAPPING).bookable, true, 'up to closing day')
+  assert.equal(checkSeasonSpan('2027-03-30', '2027-04-03', WRAPPING).bookable, false, 'past closing')
+})
+
+test('season span: FAILS OPEN when the season cannot be read', () => {
+  // Deliberate, and safe only because the Settings page refuses to save text parseMonthDay
+  // cannot read. A park with a garbage season keeps taking bookings rather than going dark.
+  for (const s of [null, {}, { season_start: 'banana', season_end: 'pancake' }, { season_start: 'May' }]) {
+    assert.equal(checkSeasonSpan('2026-12-20', '2026-12-27', s as any).bookable, true, JSON.stringify(s))
+  }
+})
+
+test('season span: falls back to the default closed message when the park configured none', () => {
+  const r = checkSeasonSpan('2026-12-20', '2026-12-22', { season_start: 'May 1', season_end: 'October 15' })
+  assert.equal(r.bookable, false)
+  assert.equal(r.message, DEFAULT_CLOSED_MESSAGE)
+})
+
+test('season span: a non-stay is not the season gate\'s problem', () => {
+  // checkBookability rejects a backwards or zero-night range on its own terms, before this runs.
+  assert.equal(checkSeasonSpan('2026-12-20', '2026-12-20', SEASON_APR_OCT).bookable, true)
+  assert.equal(checkSeasonSpan('2026-12-20', '2026-12-18', SEASON_APR_OCT).bookable, true)
+})
+
+test('season span: an absurdly long stay still terminates and is refused', () => {
+  // The loop is bounded at 366 nights, after which every calendar day has already been visited.
+  assert.equal(checkSeasonSpan('2026-05-01', '2031-05-01', SEASON_APR_OCT).bookable, false)
+  // And a year-round season accepts it, proving the bound did not short-circuit to a refusal.
+  const ALL_YEAR = { season_start: 'January 1', season_end: 'December 31' }
+  assert.equal(checkSeasonSpan('2026-05-01', '2031-05-01', ALL_YEAR).bookable, true)
 })
 
 // --- nights ------------------------------------------------------------------
@@ -522,4 +629,32 @@ test('chokepoint: with no horizon set, the override changes nothing', () => {
       assert.equal(r.bookable, true, `allowBeyondHorizon=${String(allow)}`)
     }
   })()
+})
+
+// --- the settings-save contract ----------------------------------------------
+
+test('settings validation: the save gate rejects exactly what the season gate cannot read', () => {
+  // /admin/settings refuses to save season text when parseMonthDay returns null, and that is the
+  // ONLY reason checkSeasonSpan is allowed to fail open. The two must agree, or one of two bad
+  // things happens: a park saves a season the gate silently ignores, or a park is blocked from
+  // saving a season the gate would have honoured.
+  //
+  // The save handler itself lives in a React page and is browser-verified; this pins the
+  // contract it depends on.
+  const REJECTED = ['Oct 31st!', 'banana', 'May', '', '   ', '31', 'ma 1', 'February 30', 'April 31']
+  const ACCEPTED = ['October 31', 'Oct 31', 'oct 31', 'february 3', '31 October', 'May 1st', 'February 29']
+
+  for (const text of REJECTED) {
+    assert.equal(parseMonthDay(text), null, `${JSON.stringify(text)} must be refused at save`)
+    // And, being unreadable, it would have made the gate fail OPEN — which is precisely why it
+    // must never reach the database.
+    assert.equal(
+      checkSeasonSpan('2026-12-20', '2026-12-27', { season_start: text, season_end: 'October 31' }).bookable,
+      true,
+      `${JSON.stringify(text)} would silently disable the closed season`
+    )
+  }
+  for (const text of ACCEPTED) {
+    assert.notEqual(parseMonthDay(text), null, `${JSON.stringify(text)} must be accepted at save`)
+  }
 })
