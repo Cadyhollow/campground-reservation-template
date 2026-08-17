@@ -73,6 +73,11 @@ export async function getBookingPageData(
   // The same named column list the browser used to send, plus max_advance_days. It is already the
   // page's real appetite, so nothing new is exposed and nothing needed goes missing.
   //
+  // season_start / season_end / closed_season_message are here for the same reason as
+  // max_advance_days below: /book is reachable by URL without ever running a search, and until now
+  // it showed NO closure warning at all — a crafted link to a closed week rendered a normal booking
+  // page right up to the card form, where /api/payment refused it.
+  //
   // max_advance_days is here because /book takes its dates from URL parameters and the search that
   // would have applied the booking window is skippable — BookingForm re-checks it so a guest on a
   // crafted or stale link is told up front rather than after entering a card. Without the column in
@@ -83,7 +88,7 @@ export async function getBookingPageData(
   // /book page loses its settings. See db/2026-08-17-booking-horizon.sql — schema first, code after.
   const settingsQuery = supabase
     .from('settings')
-    .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message, early_checkin_enabled, early_checkin_price, early_checkin_time, early_checkin_show_customers, late_checkout_enabled, late_checkout_price, late_checkout_time, late_checkout_show_customers, check_in_time, check_out_time, deposit_type, deposit_value, base_occupancy_adults, base_occupancy_children, extra_adult_fee, extra_child_fee, max_advance_days')
+    .select('park_name, park_location, logo_url, logo_shape, waiver_enabled, waiver_text, same_day_cutoff_time, same_day_cutoff_message, early_checkin_enabled, early_checkin_price, early_checkin_time, early_checkin_show_customers, late_checkout_enabled, late_checkout_price, late_checkout_time, late_checkout_show_customers, check_in_time, check_out_time, deposit_type, deposit_value, base_occupancy_adults, base_occupancy_children, extra_adult_fee, extra_child_fee, max_advance_days, season_start, season_end, closed_season_message')
     .limit(1)
     .single()
 

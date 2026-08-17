@@ -55,18 +55,75 @@ export const DEFAULT_CLOSED_MESSAGE =
 // ---------------------------------------------------------------------------
 
 // settings.season_start / season_end are free text like "May 1" — a month name and a day, no
-// year, because a season repeats annually. Lifted verbatim from the availability route so the
-// parsing cannot drift; unchanged in behaviour, including the fallbacks.
-export function monthDayToISO(monthDay: string): string {
-  const months: Record<string, string> = {
-    'January': '01', 'February': '02', 'March': '03', 'April': '04',
-    'May': '05', 'June': '06', 'July': '07', 'August': '08',
-    'September': '09', 'October': '10', 'November': '11', 'December': '12'
-  }
-  const parts = monthDay.trim().split(' ')
-  const month = months[parts[0]] || '01'
-  const day = String(parseInt(parts[1])).padStart(2, '0')
-  return `${month}-${day}`
+// year, because a season repeats annually.
+//
+// ── WHY THE OLD PARSER WAS REPLACED ──────────────────────────────────────────────────────────
+//
+// It did `months[parts[0]] || '01'` and `parseInt(parts[1])`, which failed in two opposite
+// directions and neither of them loudly:
+//
+//   "Oct 31"     -> January 31   an abbreviation silently became a DIFFERENT MONTH, so a park
+//                                that typed "Oct 1"/"Oct 31" got a Jan 1 - Jan 31 season and
+//                                refused bookings for eleven months
+//   "february 3" -> January 3    the month map was case-sensitive
+//   "banana"     -> "01-NaN"     an Invalid Date, and every comparison against NaN is false, so
+//                                the closed season silently vanished entirely
+//
+// A wrong-but-plausible value is worse than a rejected one. This returns null for anything it
+// cannot read, so "unparseable" is a state callers must handle rather than a January date they
+// cannot distinguish from a real one.
+//
+// It is also where the fail-open decision is made safe: enforcement treats null as "no season"
+// (see checkSeasonSpan), which is only defensible because the Settings page validates with THIS
+// function on save and refuses to store text it cannot read. A park finds out it mistyped its
+// season when it saves, not silently months later.
+
+const MONTHS = [
+  'january', 'february', 'march', 'april', 'may', 'june',
+  'july', 'august', 'september', 'october', 'november', 'december',
+]
+
+// Days per month, 1-indexed. February is 29 because a season carries no year — "February 29" is
+// a real closing date in leap years and must not be rejected out of hand.
+const DAYS_IN_MONTH = [0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+export type MonthDay = { month: number; day: number }
+
+// A month name (full or any unambiguous prefix, any case) and a day number, in either order.
+// Returns null on anything else — never a silent default.
+export function parseMonthDay(text: string | null | undefined): MonthDay | null {
+  if (typeof text !== 'string') return null
+  const tokens = text.trim().toLowerCase().split(/[\s,]+/).filter(Boolean)
+  if (tokens.length !== 2) return null
+
+  // Either order: "October 31" and "31 October" are the same date written two ways, and rejecting
+  // the second would be user-hostile rather than safe. Both tokens are still required, so a bare
+  // "May" — which has no day and cannot name a boundary — is still null.
+  const [a, b] = tokens
+  const monthToken = /^\d+$/.test(a) ? b : a
+  const dayToken = /^\d+$/.test(a) ? a : b
+
+  // Prefix match, so "oct", "octo" and "october" all resolve — but only when exactly one month
+  // starts with it. "ma" is ambiguous between March and May and is rejected rather than guessed.
+  const matches = MONTHS.filter(m => m.startsWith(monthToken))
+  if (matches.length !== 1) return null
+  const month = MONTHS.indexOf(matches[0]) + 1
+
+  // parseInt would accept "31st" and also "31nonsense"; this requires the token to BE a number.
+  // A trailing ordinal suffix is allowed because people type "May 1st".
+  const dayMatch = dayToken.match(/^(\d{1,2})(?:st|nd|rd|th)?$/)
+  if (!dayMatch) return null
+  const day = Number(dayMatch[1])
+  if (day < 1 || day > DAYS_IN_MONTH[month]) return null
+
+  return { month, day }
+}
+
+// Month/day as a single comparable integer: October 31 -> 1031. Ordering these needs no Date, no
+// year and no timezone at all, which is why this module can decide the season without any of the
+// noon-anchoring the old implementation relied on.
+export function monthDayKey(md: MonthDay): number {
+  return md.month * 100 + md.day
 }
 
 export type SeasonSettings = {
@@ -201,35 +258,97 @@ export function checkHorizon(
   return OK
 }
 
-// The season gate, exactly as the availability route has always applied it.
+// Whether one calendar date falls inside the park's open season.
 //
-// KNOWN LIMITATION, deliberately preserved: the season is built from the ARRIVAL's own
-// calendar year, so a season that spans New Year (say November 1 → March 31) resolves to a
-// start that is after its end and rejects every date in it. That bug predates this file and is
-// not fixed here — PR 0 reuses the existing season semantics unchanged so that the search and
-// the new create-side check agree on every date, right or wrong. Fixing the wrap here would
-// make create ACCEPT dates search still rejects, which is the exact drift this module exists
-// to prevent. The wrap fix rides with the seasonal-release PR, in this function, for both
-// callers at once.
-export function checkSeason(arrival: string, settings: SeasonSettings | null | undefined): BookabilityResult {
-  // A park that has not configured a season has no closed period. Both bounds required, same
-  // as the availability route: half a season is not a season.
-  if (!settings?.season_start || !settings?.season_end) return OK
+// WRAP-AROUND IS HANDLED HERE, and it is the whole reason this is a month/day comparison rather
+// than a Date one. The previous implementation built both bounds from the ARRIVAL's own calendar
+// year, so a winter park (November 1 → March 31) got a start LATER than its end and every date
+// failed both comparisons — including its own opening day. A winter park could not take a single
+// booking. That bug was pinned by a test asserting the broken behaviour; this fixes it and the
+// test is inverted.
+//
+// A season is a recurring annual window, so it is decided entirely by month and day:
+//
+//   normal (Apr 1 → Oct 31)   in season when  start <= date <= end
+//   wrapped (Nov 1 → Mar 31)  in season when  date >= start OR date <= end
+//
+// Both bounds are inclusive: a park is open ON its first and last day.
+//
+// Returns null — NOT false — when the season cannot be read at all, so the caller can tell
+// "definitely closed" apart from "no usable season configured".
+export function isNightInSeason(
+  date: string,
+  settings: SeasonSettings | null | undefined
+): boolean | null {
+  // Half a season is not a season: a park with only one bound configured has no closed period,
+  // which is how the availability route has always treated it.
+  if (!settings?.season_start || !settings?.season_end) return null
 
-  // An unparseable arrival yields NaN, and every comparison below is then false, so it falls
-  // through as "in season". Preserved rather than tightened: this is a faithful extraction of
-  // the search-path gate, and checkBookability already rejects a malformed range outright
-  // before it reaches here.
-  const arrivalDate = new Date(arrival + 'T12:00:00')
-  const year = arrivalDate.getFullYear()
-  const seasonStart = new Date(`${year}-${monthDayToISO(settings.season_start)}T00:00:00`)
-  const seasonEnd = new Date(`${year}-${monthDayToISO(settings.season_end)}T23:59:59`)
+  const start = parseMonthDay(settings.season_start)
+  const end = parseMonthDay(settings.season_end)
+  if (!start || !end) return null
 
-  if (arrivalDate < seasonStart || arrivalDate > seasonEnd) {
-    return {
-      bookable: false,
-      reason: 'out-of-season',
-      message: settings.closed_season_message || DEFAULT_CLOSED_MESSAGE,
+  const m = Number(date.slice(5, 7))
+  const d = Number(date.slice(8, 10))
+  if (!m || !d) return null
+
+  const x = m * 100 + d
+  const s = monthDayKey(start)
+  const e = monthDayKey(end)
+
+  return s <= e
+    ? x >= s && x <= e
+    : x >= s || x <= e
+}
+
+// THE SEASON GATE. Every NIGHT of the stay must fall inside the open season.
+//
+// ── WHY THE WHOLE STAY, AND WHY NIGHTS RATHER THAN DAYS ─────────────────────────────────────
+//
+// This used to check the ARRIVAL only, which left a live hole on the PUBLIC path: a stay that
+// began in season and ran past closing was accepted and charged, so a guest could occupy a site
+// for weeks after the park shut. Arriving October 20 and leaving December 31, against a season
+// ending October 31, was a booking the site would take money for.
+//
+// The unit is the NIGHT, not the calendar day, and the difference is load-bearing at the
+// boundary. A stay occupies the nights arrival … departure-1; the departure day is a checkout,
+// not an occupancy. So with a season ending October 31, arriving October 31 and leaving
+// November 1 is exactly one night — October 31 — and must be ACCEPTED. Validating "through
+// departure" instead would reject a guest checking out on the morning after the last open day,
+// which is a normal booking every park takes.
+//
+// Pure: no database, no clock, no Date arithmetic beyond stepping a day at a time.
+export function checkSeasonSpan(
+  arrival: string,
+  departure: string,
+  settings: SeasonSettings | null | undefined
+): BookabilityResult {
+  // FAILS OPEN on an unreadable or unconfigured season, matching how a missing season has always
+  // behaved and how checkHorizon treats an unusable window. A park whose season text is garbage
+  // keeps taking bookings rather than going dark on every date.
+  //
+  // That is only a safe default because the Settings page validates this text with
+  // parseMonthDay on save and refuses to store what it cannot read — so unparseable season text
+  // is caught when an owner types it, not silently months later. If that validation is ever
+  // removed, this default becomes dangerous and must be revisited.
+  if (isNightInSeason(arrival, settings) === null) return OK
+
+  const nights = nightsBetween(arrival, departure)
+  if (nights < 1) return OK // not a stay; checkBookability rejects the range on its own terms
+
+  // After 366 nights every calendar day has been visited, so anything still unchecked can only
+  // repeat a day already cleared. Bounds the loop against an absurd span without changing the
+  // answer for any real one.
+  const limit = Math.min(nights, 366)
+
+  for (let i = 0; i < limit; i++) {
+    const night = addDays(arrival, i)
+    if (isNightInSeason(night, settings) === false) {
+      return {
+        bookable: false,
+        reason: 'out-of-season',
+        message: settings?.closed_season_message || DEFAULT_CLOSED_MESSAGE,
+      }
     }
   }
 
@@ -410,7 +529,13 @@ export async function checkBookability(
     if (!horizon.bookable) return horizon
   }
 
-  const season = checkSeason(arrival, settings)
+  // THE SPAN FIX. This passed `arrival` alone until now, which meant a stay beginning in season
+  // and running past closing was accepted and CHARGED on the public path — the live hole this
+  // change closes. Every night of the stay is checked; see checkSeasonSpan.
+  //
+  // No override exists here and none should: the public flow is a hard block. Waiving the season
+  // is a staff-only act, handled at /api/manual-booking.
+  const season = checkSeasonSpan(arrival, departure, settings)
   if (!season.bookable) return season
 
   const facts = await fetchDateFacts(supabase, arrival, departure)

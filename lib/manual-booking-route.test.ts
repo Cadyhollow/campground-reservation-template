@@ -81,15 +81,42 @@ async function book(over: Record<string, any>) {
 }
 
 // Sets the window, runs the body, and always puts the row back.
-async function withHorizon(days: number | null, fn: () => Promise<void>) {
-  const { data: before } = await supabase.from('settings').select('id, max_advance_days').limit(1).single()
+// EVERY GATE STATED EXPLICITLY, always. /api/manual-booking checks the horizon BEFORE the season,
+// so a test that pins only one is really testing whatever the tenant happens to be configured with:
+// a live booking window makes every season test fail with `beyond-horizon`, and a live season makes
+// the far-future horizon tests fail with `out-of-season`.
+//
+// Found the hard way — a browser walk left season = April 1 to October 31 and window = 30 days on
+// the sandbox, and six tests went red without a line of product code changing. Defaulting both to
+// null and requiring each test to name what it wants means that cannot recur.
+type Gates = { horizon?: number | null; seasonStart?: string | null; seasonEnd?: string | null }
+
+async function withGates(gates: Gates, fn: () => Promise<void>) {
+  const { data: before } = await supabase
+    .from('settings').select('id, max_advance_days, season_start, season_end').limit(1).single()
   if (!before) throw new Error('no settings row on this tenant')
-  await supabase.from('settings').update({ max_advance_days: days }).eq('id', before.id)
+
+  await supabase.from('settings').update({
+    max_advance_days: gates.horizon ?? null,
+    season_start: gates.seasonStart ?? null,
+    season_end: gates.seasonEnd ?? null,
+  }).eq('id', before.id)
+
   try {
     await fn()
   } finally {
-    await supabase.from('settings').update({ max_advance_days: before.max_advance_days }).eq('id', before.id)
+    await supabase.from('settings').update({
+      max_advance_days: before.max_advance_days,
+      season_start: before.season_start,
+      season_end: before.season_end,
+    }).eq('id', before.id)
   }
+}
+
+// Kept as thin, explicit wrappers so each test still reads as being about one gate — but both are
+// always pinned underneath.
+async function withHorizon(days: number | null, fn: () => Promise<void>) {
+  return withGates({ horizon: days }, fn)
 }
 
 const isoPlus = (days: number) => addDays(new Date().toISOString().slice(0, 10), days)
@@ -221,3 +248,158 @@ test('manual-booking: the override waives the horizon and NOT double-booking', {
 // React hook, and it is browser-verified by clicking a wizard rather than by a test harness
 // invented for one assertion. Asserting it here would mean asserting against a boolean this file
 // sets itself, which would prove nothing about the hook.
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// THE CLOSED SEASON ON THE STAFF PATH
+//
+// The wizards had no season check at all, which is how a staff booking of October 20 to
+// December 31 was taken against a season ending October 31. These drive the real route with a
+// real staff session, and set/restore the season in a finally.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+async function withSeason(start: string | null, end: string | null, fn: () => Promise<void>) {
+  return withGates({ seasonStart: start, seasonEnd: end }, fn)
+}
+
+test('manual-booking: a stay running past closing is refused for STAFF too', { skip }, async (t) => {
+  await withSeason('April 1', 'October 31', async () => {
+    const arrival = '2026-10-20', departure = '2026-12-31'
+    const site = await freeSite(arrival, departure)
+    if (!site) return t.skip('no free site for the sample range')
+
+    const r = await book({
+      site_id: site.id, arrival_date: arrival, departure_date: departure,
+      base_nightly_rate: site.base_rate, total_price: site.base_rate * 72,
+    })
+
+    assert.equal(r.json.reason, 'out-of-season', `expected the season gate, got: ${JSON.stringify(r.json)}`)
+    assert.equal(r.status, 400)
+    assert.equal(r.json.reservationId, undefined, 'nothing was created')
+  })
+})
+
+test('manual-booking: the season override lets staff book across the closure', { skip }, async (t) => {
+  await withSeason('April 1', 'October 31', async () => {
+    const arrival = '2026-10-20', departure = '2026-12-31'
+    const site = await freeSite(arrival, departure)
+    if (!site) return t.skip('no free site for the sample range')
+
+    const r = await book({
+      site_id: site.id, arrival_date: arrival, departure_date: departure,
+      base_nightly_rate: site.base_rate, total_price: site.base_rate * 72,
+      override_season: true,
+    })
+
+    assert.equal(r.json.success, true, `the override did not admit the booking: ${JSON.stringify(r.json)}`)
+    assert.ok(r.json.reservationId, 'an overridden booking must actually be created')
+  })
+})
+
+test('manual-booking: an in-season stay needs no override at all', { skip }, async (t) => {
+  await withSeason('April 1', 'October 31', async () => {
+    const arrival = '2026-07-06', departure = '2026-07-09'
+    const site = await freeSite(arrival, departure)
+    if (!site) return t.skip('no free site for the sample range')
+
+    const r = await book({
+      site_id: site.id, arrival_date: arrival, departure_date: departure,
+      base_nightly_rate: site.base_rate, total_price: site.base_rate * 3,
+    })
+
+    assert.notEqual(r.json.reason, 'out-of-season', `an in-season stay was refused: ${JSON.stringify(r.json)}`)
+    assert.equal(r.json.success, true)
+  })
+})
+
+test('manual-booking: the checkout boundary is accepted without an override', { skip }, async (t) => {
+  // Arrive on the last open day, leave the next morning: one night, October 31, which is open.
+  await withSeason('April 1', 'October 31', async () => {
+    const arrival = '2026-10-31', departure = '2026-11-01'
+    const site = await freeSite(arrival, departure)
+    if (!site) return t.skip('no free site for the boundary range')
+
+    const r = await book({
+      site_id: site.id, arrival_date: arrival, departure_date: departure,
+      base_nightly_rate: site.base_rate, total_price: site.base_rate,
+    })
+
+    assert.notEqual(r.json.reason, 'out-of-season', `the checkout boundary was refused: ${JSON.stringify(r.json)}`)
+    assert.equal(r.json.success, true)
+  })
+})
+
+// THE WAIVER IS BOUND TO THE DATES IT WAS GIVEN FOR.
+//
+// The route takes a boolean, so this asserts the SERVER half of that contract: an override sent
+// for one stay does not authorise a different, longer stay unless it is sent again. The browser
+// half — that moving the departure clears the tick, so the flag is not sent at all — lives in
+// useSeasonOverride, whose key is `arrival|departure`, and is browser-verified.
+test('manual-booking: moving the departure past closing needs a fresh acknowledgement', { skip }, async (t) => {
+  await withSeason('April 1', 'October 31', async () => {
+    const arrival = '2026-10-25'
+    const inSeason = '2026-10-30'   // wholly inside the season
+    const pastClose = '2026-11-20'  // now crosses the closure
+
+    const site = await freeSite(arrival, pastClose)
+    if (!site) return t.skip('no free site for the sample range')
+
+    // The short stay needs no override, and the operator never ticks anything.
+    const short = await book({
+      site_id: site.id, arrival_date: arrival, departure_date: inSeason,
+      base_nightly_rate: site.base_rate, total_price: site.base_rate * 5,
+    })
+    assert.equal(short.json.success, true, `the in-season stay should book: ${JSON.stringify(short.json)}`)
+
+    // Same arrival, departure dragged past closing, and NO override — because the hook would have
+    // withdrawn it when the date changed. The route must refuse.
+    const stretched = await book({
+      site_id: site.id, arrival_date: arrival, departure_date: pastClose,
+      base_nightly_rate: site.base_rate, total_price: site.base_rate * 26,
+    })
+    assert.equal(stretched.json.reason, 'out-of-season',
+      `a stay stretched past closing was accepted without a fresh acknowledgement: ${JSON.stringify(stretched.json)}`)
+    assert.equal(stretched.json.reservationId, undefined, 'nothing was created')
+  })
+})
+
+test('manual-booking: the season override waives the season and NOT double-booking', { skip }, async (t) => {
+  // The invariant that keeps every override safe. Waiving a closure must not also waive the one
+  // rule that stops two guests being sold the same site.
+  await withSeason('April 1', 'October 31', async () => {
+    const arrival = '2026-11-10', departure = '2026-11-14'
+    const site = await freeSite(arrival, departure)
+    if (!site) return t.skip('no free site for the sample range')
+
+    const body = {
+      site_id: site.id, arrival_date: arrival, departure_date: departure,
+      base_nightly_rate: site.base_rate, total_price: site.base_rate * 4,
+      override_season: true,
+    }
+
+    const first = await book(body)
+    assert.equal(first.json.success, true, `setup booking failed: ${JSON.stringify(first.json)}`)
+
+    const second = await book(body)
+    assert.equal(second.status, 409, `a double-booking slipped through the season override: ${JSON.stringify(second.json)}`)
+    assert.equal(second.json.reservationId, undefined, 'the second booking must not have been created')
+  })
+})
+
+test('manual-booking: the two overrides are separate — season does not waive the horizon', { skip }, async (t) => {
+  // Different rules, different severities, different flags. An operator who accepted a closure
+  // has not thereby accepted booking years ahead.
+  await withGates({ horizon: 30, seasonStart: 'April 1', seasonEnd: 'October 31' }, async () => {
+    const arrival = isoPlus(400), departure = addDays(isoPlus(400), 2)
+    const site = await freeSite(arrival, departure)
+    if (!site) return t.skip('no free site 400 days out')
+
+    const r = await book({
+      site_id: site.id, arrival_date: arrival, departure_date: departure,
+      base_nightly_rate: site.base_rate, total_price: site.base_rate * 2,
+      override_season: true, // season waived, horizon NOT
+    })
+
+    assert.equal(r.json.reason, 'beyond-horizon',
+      `the season override wrongly waived the booking window: ${JSON.stringify(r.json)}`)
+  })
+})

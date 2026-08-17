@@ -6,7 +6,7 @@ import Image from 'next/image'
 import type { BookAddon, BookFee } from '@/lib/book-server'
 import PaymentTrustRow from '../components/PaymentTrustRow'
 import { computeBookingQuote } from '@/lib/booking-quote'
-import { resolveMaxAdvanceDays, horizonLastArrival } from '@/lib/bookability'
+import { resolveMaxAdvanceDays, horizonLastArrival, checkSeasonSpan } from '@/lib/bookability'
 
 const CAMPER_TYPES = [
   {
@@ -170,6 +170,7 @@ export default function BookingForm({
   const [sameDayBlocked, setSameDayBlocked] = useState(false)
   const [sameDayMessage, setSameDayMessage] = useState('')
   const [horizonMessage, setHorizonMessage] = useState('')
+  const [seasonMessage, setSeasonMessage] = useState('')
 
   const site = {
     id: searchParams.get('siteId') || '',
@@ -200,6 +201,11 @@ export default function BookingForm({
   // someone who arrives on a crafted or stale link is told why up front, instead of filling in
   // their card details and being rejected at the end.
   useEffect(() => { checkHorizonWindow(settings, arrival) }, [])
+  // The season, whole-stay. This page had NO season check at all, so a crafted or stale link to a
+  // closed week rendered the full booking page and the guest only found out at the charge. Not the
+  // enforcement — /api/payment refuses it regardless — but the guest should be told before they
+  // enter a card.
+  useEffect(() => { checkSeasonWindow(settings, arrival, departure) }, [])
   useEffect(() => { if (step >= 3 && !squareLoaded) loadSquare() }, [step])
   useEffect(() => { if (arrival) fetchCancellationPolicy() }, [arrival])
 
@@ -247,6 +253,12 @@ export default function BookingForm({
         `We accept reservations up to ${maxDays} day${maxDays === 1 ? '' : 's'} in advance. Please choose an arrival date on or before ${last}.`
       )
     }
+  }
+
+  function checkSeasonWindow(settingsData: any, arrivalDate: string, departureDate: string) {
+    if (!arrivalDate || !departureDate) return
+    const verdict = checkSeasonSpan(arrivalDate, departureDate, settingsData)
+    if (!verdict.bookable) setSeasonMessage(verdict.message)
   }
 
   async function fetchCancellationPolicy() {
@@ -512,6 +524,35 @@ export default function BookingForm({
 
   const camperTypeLabel = (val: string) =>
     CAMPER_TYPES.find(t => t.value === val)?.label || val
+
+  if (seasonMessage) {
+    return (
+      <main className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--surface-bg)' }}>
+        <div className="px-4 py-4 flex items-center gap-4" style={{ backgroundColor: 'var(--surface-card)' }}>
+          {settings?.logo_url && (
+            <div className={`w-12 h-12 overflow-hidden flex items-center justify-center shrink-0 ${logoShapeClass}`}>
+              <Image src={settings.logo_url} alt={settings?.park_name || 'Campground'} width={48} height={48} className="object-contain w-full h-full" />
+            </div>
+          )}
+          <div>
+            <h1 className="text-[var(--text-primary)] font-bold">{settings?.park_name || 'Campground'}</h1>
+            <p className="text-sm" style={{ color: 'var(--accent-color)' }}>Online Reservations</p>
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center px-4 py-16">
+          <div className="max-w-md w-full rounded-2xl p-8 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
+            <div className="text-5xl mb-4">❄️</div>
+            <h2 className="text-[var(--text-primary)] text-2xl font-bold mb-3">We&apos;re Closed for These Dates</h2>
+            <p className="text-[var(--text-muted)] text-base leading-relaxed">{seasonMessage}</p>
+            {settings?.season_start && settings?.season_end && (
+              <p className="text-sm mt-4" style={{ color: 'var(--accent-color)' }}>We are open from {settings.season_start} through {settings.season_end}</p>
+            )}
+            <button onClick={() => window.location.href = '/'} className="mt-8 px-6 py-3 rounded-xl text-white font-semibold transition-colors" style={{ backgroundColor: 'var(--accent-color)' }}>← Choose Different Dates</button>
+          </div>
+        </div>
+      </main>
+    )
+  }
 
   if (horizonMessage) {
     return (

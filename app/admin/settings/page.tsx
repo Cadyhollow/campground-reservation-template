@@ -14,7 +14,7 @@ import Image from 'next/image'
 import imageCompression from 'browser-image-compression'
 // The same arithmetic the guest-facing date picker and the server-side gate use, so the date this
 // page previews to the owner is exactly the last date a guest will be able to choose.
-import { resolveMaxAdvanceDays, horizonLastArrival } from '@/lib/bookability'
+import { resolveMaxAdvanceDays, horizonLastArrival, parseMonthDay } from '@/lib/bookability'
 
 // Hero photos come straight off phones, where 8-15MB and 4000px+ on the long edge is normal.
 // Downscaling in the browser before the upload keeps the landing page quick — the whole point
@@ -423,6 +423,31 @@ export default function SettingsPage() {
         return
       }
       horizonDays = n
+    }
+
+    // ── SEASON TEXT IS VALIDATED HERE, AND THIS IS WHAT MAKES FAIL-OPEN SAFE ────────────────
+    //
+    // checkSeasonSpan treats an unreadable season as "no season" and keeps taking bookings,
+    // because a park going dark on every date is a worse failure than one that misses a closure.
+    // That default is only defensible if a mistyped season is caught the moment it is typed —
+    // otherwise a park writes "Oct 31st!", saves happily, and discovers months later that its
+    // closed period never existed.
+    //
+    // So the same parser the gate uses runs here, and refuses the save. The message names the
+    // offending value and shows a form that works, because "invalid date" would leave an owner
+    // guessing which of the two fields is wrong and why.
+    //
+    // Both bounds are optional — a park with no season configured is a real, supported state —
+    // but anything non-empty has to be readable.
+    for (const [label, value] of [
+      ['Season Opens', form.season_start],
+      ['Season Closes', form.season_end],
+    ] as const) {
+      const text = String(value ?? '').trim()
+      if (text !== '' && !parseMonthDay(text)) {
+        toast.error(`${label}: "${text}" isn't a date we recognize — try "October 31".`)
+        return
+      }
     }
 
     setSaving(true)

@@ -222,3 +222,24 @@ input, select, textarea {
   width: 100%;
   box-sizing: border-box;
 }
+
+/* Opt back OUT of the rule directly above, for controls that need their native look.
+ *
+ * That rule is an iOS Safari fix for TEXT fields, but it matches every input — including
+ * checkboxes, where it does two damaging things: `appearance: none` renders the box invisible,
+ * so there is nothing to tick, and `width: 100%` stretches it across its flex row, pushing the
+ * label to the right and wrapping it. A staff override checkbox rendered exactly that way and
+ * could not be used at all.
+ *
+ * Scoped as an opt-in class rather than by narrowing the rule above, because that rule is
+ * load-bearing for the text inputs across the whole app and renarrowing it belongs in its own
+ * pass. /admin/fees already carries the same workaround inline; this is the shareable version. */
+.native-checkbox {
+  -webkit-appearance: auto;
+  appearance: auto;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin: 0;
+  border-radius: 0;
+}

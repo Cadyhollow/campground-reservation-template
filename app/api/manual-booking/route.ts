@@ -4,20 +4,18 @@
 //
 // ── WHAT THIS ROUTE STILL DOES NOT CHECK ──────────────────────────────────────────────────────
 //
-// The booking horizon (below) is the ONLY rule from lib/bookability.ts that this route applies.
-// The season gate, park-wide and per-site blocked dates, and min-stay are all still unenforced
-// here — this route checks double-booking and nothing else, as it always has. That is a real gap,
-// it predates this change, and closing it is deliberately held for its own PR: it would change
-// what staff are allowed to do on every existing tenant, which deserves to be reviewed on its own
-// rather than riding in behind a new setting.
+// This route applies the booking horizon and the closed season. Park-wide and per-site BLOCKED
+// DATES and MIN-STAY are still unenforced here — a real gap, predating all of this, deliberately
+// held for its own PR because closing it changes what staff may do on every existing tenant and
+// deserves its own review rather than riding in behind a new setting.
 //
-// So this route calls checkHorizon directly rather than checkBookability. Calling the full
-// chokepoint here would silently close all four gaps at once, which is exactly the unreviewable
-// change being avoided.
+// So the route calls checkHorizon and checkSeasonSpan directly rather than checkBookability.
+// Calling the full chokepoint would silently close the remaining gaps at once, which is exactly
+// the unreviewable change being avoided.
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { requireRole } from '@/lib/require-role'
-import { checkHorizon, HORIZON_SERVER_SLACK_DAYS } from '@/lib/bookability'
+import { checkHorizon, checkSeasonSpan, HORIZON_SERVER_SLACK_DAYS } from '@/lib/bookability'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -57,6 +55,8 @@ export async function POST(request: NextRequest) {
       // Set by the staff booking pages when an operator has ticked "book beyond the booking
       // window" on a date past the park's horizon. Absent or false on every other request.
       override_horizon,
+      // The same, for a stay with nights outside the park's open season.
+      override_season,
     } = body
 
     // ── THE BOOKING HORIZON, WITH AN OPERATOR OVERRIDE ──────────────────────────────────────
@@ -71,11 +71,12 @@ export async function POST(request: NextRequest) {
     // else — there is no override here for double-booking, and when the season/blocked/min-stay
     // gap above is closed, this flag must not be extended to cover those either. Those are not
     // preferences: waiving them books a guest into an occupied site or a closed campground.
-    const { data: horizonSettings } = await supabase
+    const { data: gateSettings } = await supabase
       .from('settings')
-      // NAMED COLUMN — the tenant must have max_advance_days already, or this read errors and no
-      // staff booking can be created at all. See db/2026-08-17-booking-horizon.sql.
-      .select('max_advance_days')
+      // NAMED COLUMNS — the tenant must have max_advance_days already, or this read errors and no
+      // staff booking can be created at all. See db/2026-08-17-booking-horizon.sql. The season
+      // columns have existed since the original schema.
+      .select('max_advance_days, season_start, season_end, closed_season_message')
       .limit(1)
       .single()
 
@@ -83,12 +84,40 @@ export async function POST(request: NextRequest) {
       // Same slack as /api/payment and /api/availability: the server has no park timezone, so it
       // refuses only what is unambiguously past the window. See HORIZON_SERVER_SLACK_DAYS.
       const today = new Date().toISOString().split('T')[0]
-      const horizon = checkHorizon(arrival_date, horizonSettings, today, HORIZON_SERVER_SLACK_DAYS)
+      const horizon = checkHorizon(arrival_date, gateSettings, today, HORIZON_SERVER_SLACK_DAYS)
       if (!horizon.bookable) {
         return NextResponse.json(
           // `reason` so the booking pages can tell this apart from a double-booking and offer the
           // override, rather than showing a dead end with a date the operator cannot book.
           { error: horizon.message, reason: 'beyond-horizon' },
+          { status: 400 }
+        )
+      }
+    }
+
+    // ── THE CLOSED SEASON, WITH ITS OWN OPERATOR OVERRIDE ───────────────────────────────────
+    //
+    // WHOLE STAY, not just the arrival: every night from arrival to departure-1 must fall inside
+    // the open season. The public path had the arrival-only version of this check and it was a
+    // live hole — a stay starting in season and running past closing was accepted and charged.
+    // The staff path had no season check at all, which is how a wizard booking of October 20 to
+    // December 31 was taken against a season ending October 31.
+    //
+    // A SEPARATE FLAG from override_horizon, deliberately. They are different severities and
+    // different rules: the horizon is the park's preference about how far ahead it takes online
+    // bookings; a closed season means the park is shut. An operator waiving one has not waived
+    // the other, and a single combined flag would make that impossible to express.
+    //
+    // Waives the SEASON ONLY. The double-booking check below still runs, and no override reaches
+    // it — waiving that would put a guest in an occupied site. When blocked dates and min-stay are
+    // finally enforced here, neither of these flags may be extended to cover them.
+    if (!override_season) {
+      const season = checkSeasonSpan(arrival_date, departure_date, gateSettings)
+      if (!season.bookable) {
+        return NextResponse.json(
+          // `reason` so the booking pages can tell this apart from a horizon refusal or a
+          // double-booking and offer the right override rather than a dead end.
+          { error: season.message, reason: 'out-of-season' },
           { status: 400 }
         )
       }
