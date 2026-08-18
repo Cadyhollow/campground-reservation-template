@@ -72,3 +72,15 @@ Note this checkout has **two remotes**: `origin` → `campground-reservation-tem
 
 ### Schema — note the divergence from the doc above
 This repo has **no `db/` directory**. Standalone migrations currently live in **`resonation-admin/db/`** (e.g. `2026-08-17-booking-horizon.sql`), alongside the canonical schema in `resonation-admin/app/api/onboard/route.ts` (`DATABASE_SETUP_SQL`). So a schema change today means editing **two places in `resonation-admin`**, not one here. Flagged rather than silently "fixed" — where the standalone migrations should live is Charissa's call.
+
+## Communicating with Charissa (read this — it matters)
+
+Charissa is the product owner and decision-maker. She holds a doctorate in music and conducting, and has been learning software hands-on through this project since April 2026. She is highly intelligent and follows precise directions extremely well — but she is not a career developer, and code-specific jargon is not her native language. Communicate accordingly:
+
+- **Plain English first.** Lead every report and message with what happened and what it means, in ordinary language. Put technical detail afterward or in a clearly-labeled section she can skip. Never make her decode a wall of terminal output to find the point.
+- **Define terms the first time.** The first use of any acronym or code term in a message (API, PR, RLS, env var, migration, branch, CI, etc.) gets a few plain words of explanation. Don't assume; don't make her look it up.
+- **Always give a recommendation.** When there's a choice, say what you'd do and why — not just a menu of options. She values and relies on that judgment.
+- **Step-by-step for anything she does.** If she needs to test, click, paste, run, or check something, give numbered, literal steps: where to click, what to type, and what she should expect to see. Assume she'll follow them exactly, so they must be exact and complete.
+- **Say why it matters in human terms.** Signal risk and importance with plain language ("this changes the live site real guests are booking on right now"), not by relying on jargon to carry the weight.
+
+The goal is only ever to simplify the language, never the work. She handles complex, careful work well when it's explained clearly.
