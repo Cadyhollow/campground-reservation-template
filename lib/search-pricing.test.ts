@@ -23,7 +23,9 @@ import {
   feeAppliesToSiteType,
   searchFeeCents,
   summarizeSiteFees,
+  extraGuestFeeCents,
   type SearchFee,
+  type SearchOccupancySettings,
 } from './search-pricing.ts'
 
 const pct = (amount: number, applies_to = 'all'): SearchFee =>
@@ -126,6 +128,131 @@ test('THE REGRESSION: the search card agrees with the checkout quote', () => {
   const doubled = summarizeSiteFees([pct(6), flat(10)], 'rv_site', search.totalPrice)
   assert.notEqual(doubled.totalPrice, quoteTotal)
   assert.ok(doubled.totalPrice > quoteTotal, 'compounding must overcharge, which is what 409d')
+})
+
+// ── THE EXTRA-GUEST FEE ───────────────────────────────────────────────────────────────────────
+//
+// The card ignored this entirely, so any booking above the park's base occupancy was quoted low
+// and grew at checkout. Unlike the double-count it never errored — the checkout page and
+// /api/payment agreed with each other, so nothing was refused; the guest was just told the wrong
+// price. Every expression below mirrors lib/booking-quote.ts:171-177, defaults included.
+
+// 2 adults + 2 children included; $15 per extra adult per night, $7.50 per extra child per night.
+const occ: SearchOccupancySettings = {
+  base_occupancy_adults: 2,
+  base_occupancy_children: 2,
+  extra_adult_fee: 1500,
+  extra_child_fee: 750,
+}
+
+test('under base occupancy costs nothing extra', () => {
+  assert.equal(extraGuestFeeCents(occ, 1, 0, 2), 0)
+})
+
+test('exactly at base occupancy costs nothing extra', () => {
+  // The boundary. `Math.max(0, adults - baseAdults)` must be 0 here, not 1.
+  assert.equal(extraGuestFeeCents(occ, 2, 2, 2), 0)
+})
+
+test('one extra adult is charged per night', () => {
+  assert.equal(extraGuestFeeCents(occ, 3, 2, 2), 3000)   // 1 x $15 x 2 nights
+})
+
+test('one extra child is charged per night, at the child rate', () => {
+  assert.equal(extraGuestFeeCents(occ, 2, 3, 2), 1500)   // 1 x $7.50 x 2 nights
+})
+
+test('extra adults and extra children are charged together', () => {
+  assert.equal(extraGuestFeeCents(occ, 4, 3, 2), 7500)   // (2 x $15 + 1 x $7.50) x 2
+})
+
+test('the extra-guest fee scales with nights', () => {
+  assert.equal(extraGuestFeeCents(occ, 3, 2, 1), 1500)
+  assert.equal(extraGuestFeeCents(occ, 3, 2, 5), 7500)
+  assert.equal(extraGuestFeeCents(occ, 3, 2, 0), 0)
+})
+
+test('adults over but children under does not net off', () => {
+  // A party of 3 adults and 0 children still pays for the extra adult; the unused child
+  // allowance is not a credit.
+  assert.equal(extraGuestFeeCents(occ, 3, 0, 2), 3000)
+})
+
+test('missing occupancy settings default to 2 and 2, matching the booking quote', () => {
+  // booking-quote.ts uses `?? 2` for both. lib/pricing.ts uses `?? 0` for the admin wizard —
+  // copying THAT default here would charge every 1-adult search for an extra guest.
+  const noBase: SearchOccupancySettings = { extra_adult_fee: 1500, extra_child_fee: 750 }
+  assert.equal(extraGuestFeeCents(noBase, 2, 2, 2), 0)
+  assert.equal(extraGuestFeeCents(noBase, 3, 2, 2), 3000)
+})
+
+test('missing per-guest rates cost nothing', () => {
+  const noRates: SearchOccupancySettings = { base_occupancy_adults: 2, base_occupancy_children: 2 }
+  assert.equal(extraGuestFeeCents(noRates, 9, 9, 3), 0)
+})
+
+test('null and undefined settings are safe', () => {
+  assert.equal(extraGuestFeeCents(null, 4, 3, 2), 0)
+  assert.equal(extraGuestFeeCents(undefined, 4, 3, 2), 0)
+})
+
+// ── THE EXTRA GUEST FEE INSIDE THE FEE BASE ───────────────────────────────────────────────────
+
+test('a percentage fee is charged on the stay PLUS the extra guests', () => {
+  // The subtlety that makes or breaks the match: booking-quote.ts:189 computes a site fee on
+  // `site.total_price + extraGuestFee`. Taxing the stay alone here would leave the card short by
+  // the tax on the guest fee — $4.50 in the reproduction — even with the fee itself included.
+  const stay = 11000, egf = 7500
+  const { breakdown, feesTotal, totalPrice } = summarizeSiteFees([pct(6), flat(10)], 'rv_site', stay, egf)
+  assert.equal(breakdown[0].amount, 1110)             // 6% of 18500, NOT 6% of 11000 (660)
+  assert.equal(feesTotal, 1110 + 1000)
+  assert.equal(totalPrice, stay + egf + feesTotal)    // 20610
+})
+
+test('a flat fee does not change when extra guests are added', () => {
+  assert.equal(summarizeSiteFees([flat(10)], 'rv_site', 11000, 7500).feesTotal, 1000)
+})
+
+test('omitting the extra-guest argument is the same as zero', () => {
+  // Keeps every caller that predates this parameter behaving exactly as it did.
+  const withZero = summarizeSiteFees([pct(6), flat(10)], 'rv_site', 11000, 0)
+  const omitted = summarizeSiteFees([pct(6), flat(10)], 'rv_site', 11000)
+  assert.deepEqual(omitted, withZero)
+  assert.equal(omitted.totalPrice, 12660)
+})
+
+test('totalPrice reports the extra-guest fee it contains', () => {
+  const r = summarizeSiteFees([], 'rv_site', 11000, 7500)
+  assert.equal(r.extraGuestFee, 7500)
+  assert.equal(r.totalPrice - r.extraGuestFee - r.feesTotal, 11000)
+})
+
+test('THE REGRESSION: the card matches checkout for a party above occupancy', () => {
+  // The full reproduction, as arithmetic. 2 nights at $55, 4 adults + 3 children against a 2/2
+  // base, a 6% tax and a $10 flat fee.
+  //
+  // Before the fix the card said $126.60 and checkout said $206.10.
+  const nightlyRate = 5500, nights = 2, adults = 4, children = 3
+  const stayOnly = nightlyRate * nights
+
+  const egf = extraGuestFeeCents(occ, adults, children, nights)
+  const card = summarizeSiteFees([pct(6), flat(10)], 'rv_site', stayOnly, egf)
+
+  // What computeBookingQuote will produce, by its own expressions (booking-quote.ts:177, :189, :212).
+  const quoteExtraGuest = (Math.max(0, adults - 2) * 1500 + Math.max(0, children - 2) * 750) * nights
+  const quoteFeeBase = stayOnly + quoteExtraGuest
+  const quoteFees = Math.round(quoteFeeBase * 6 / 100) + 10 * 100
+  const quoteTotal = stayOnly + quoteExtraGuest + quoteFees
+
+  assert.equal(egf, quoteExtraGuest, 'the guest fee must match the quote')
+  assert.equal(card.totalPrice, quoteTotal, 'search card and checkout total must agree')
+  assert.equal(card.totalPrice, 20610)
+
+  // And the shape of the old failure, pinned: ignoring the guest fee understates the card by the
+  // fee AND the tax on it.
+  const ignoringGuests = summarizeSiteFees([pct(6), flat(10)], 'rv_site', stayOnly, 0)
+  assert.equal(ignoringGuests.totalPrice, 12660)
+  assert.equal(quoteTotal - ignoringGuests.totalPrice, 7950)  // $75.00 + $4.50 tax on it
 })
 
 // ── DEGENERATE INPUTS ─────────────────────────────────────────────────────────────────────────

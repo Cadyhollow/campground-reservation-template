@@ -330,8 +330,48 @@ type PricedSite = {
   nights: number
   base_price: number
   fees_total: number
+  extra_guest_fee: number
   total_price: number
   fees_breakdown?: Array<{ name: string; type: string; amount: number }>
+}
+
+// 2 adults + 2 children included; $15 per extra adult per night, $7.50 per extra child per night.
+// Pinned rather than read so the assertions below can state exact figures.
+const BASE_OCCUPANCY = {
+  base_occupancy_adults: 2,
+  base_occupancy_children: 2,
+  extra_adult_fee: 1500,
+  extra_child_fee: 750,
+}
+
+// Pins the occupancy settings the extra-guest fee is computed from, and puts them back. Same
+// shape as withHorizon() below, and for the same reason: these tests assert an exact number, so
+// they must not depend on whatever the tenant happens to have configured.
+async function withOccupancy<T>(
+  occ: {
+    base_occupancy_adults: number
+    base_occupancy_children: number
+    extra_adult_fee: number
+    extra_child_fee: number
+  },
+  fn: () => Promise<T>,
+): Promise<T> {
+  const { data: before } = await supabase
+    .from('settings')
+    .select('id, base_occupancy_adults, base_occupancy_children, extra_adult_fee, extra_child_fee')
+    .limit(1).single()
+  if (!before) throw new Error('no settings row on this tenant')
+  await supabase.from('settings').update(occ).eq('id', before.id)
+  try {
+    return await fn()
+  } finally {
+    await supabase.from('settings').update({
+      base_occupancy_adults: before.base_occupancy_adults,
+      base_occupancy_children: before.base_occupancy_children,
+      extra_adult_fee: before.extra_adult_fee,
+      extra_child_fee: before.extra_child_fee,
+    }).eq('id', before.id)
+  }
 }
 
 // Both fee shapes, because they broke differently: the percentage compounded, the flat one was
@@ -360,10 +400,13 @@ test('payment: a booking on a tenant WITH fees is not refused, and search matche
     return t.skip('sample week falls outside the configured season')
   }
 
-  await withFees(async () => {
+  // 2 adults / 0 children against a 2/2 base is AT or under occupancy, so this test stays a test
+  // of the fee arithmetic alone. The party above occupancy is the next test.
+  await withOccupancy(BASE_OCCUPANCY, async () => {
+   await withFees(async () => {
     await withHorizon(null, async () => {
       // 1. THE SEARCH — what the guest is shown on the results card.
-      const availRes = await fetch(`${BASE}/api/availability?arrival=${arrival}&departure=${departure}`)
+      const availRes = await fetch(`${BASE}/api/availability?arrival=${arrival}&departure=${departure}&adults=2&children=0`)
       const avail = await availRes.json() as { sites?: PricedSite[] }
       const facts = await fetchDateFacts(supabase, arrival, departure)
       const priced = (avail.sites || []).find(s => checkDateFacts(s.id, facts).bookable)
@@ -379,6 +422,7 @@ test('payment: a booking on a tenant WITH fees is not refused, and search matche
 
       // COUNTED ONCE: the card's total is the stay plus the fees, and no more.
       assert.equal(priced.base_price, priced.nightly_rate * priced.nights, 'base_price must be the stay alone')
+      assert.equal(priced.extra_guest_fee, 0, 'a party at base occupancy must add no guest fee')
       assert.equal(priced.total_price - priced.base_price, priced.fees_total, 'search fees counted twice')
 
       // 2. THE CHECKOUT PAGE — app/book/BookingForm.tsx, arithmetic and all.
@@ -485,6 +529,103 @@ test('payment: a booking on a tenant WITH fees is not refused, and search matche
       )
       assert.equal(rDoubled.status, 409)
     })
+   })
+  })
+})
+
+// The party-above-occupancy case. The search form collects adults and children before it prices
+// anything, but never sent them, so the card priced every party as if it were at base occupancy.
+// Nothing errored — the checkout page and /api/payment agreed with each other — so a guest was
+// simply quoted one number and then shown a higher one.
+//
+// Reproduction this pins: 2 nights at $55, 4 adults + 3 children against a 2/2 base, a 6% tax and
+// a $10 flat fee. The card said $126.60; checkout said $206.10.
+test('payment: a party ABOVE base occupancy is priced the same in search and at checkout', { skip }, async (t) => {
+  const arrival = '2026-08-18', departure = '2026-08-20'
+  const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
+  if (isNightInSeason(arrival, st) === false) {
+    return t.skip('sample week falls outside the configured season')
+  }
+
+  const ADULTS = 4, CHILDREN = 3   // 2 extra adults, 1 extra child
+
+  await withOccupancy(BASE_OCCUPANCY, async () => {
+   await withFees(async () => {
+    await withHorizon(null, async () => {
+      const availRes = await fetch(
+        `${BASE}/api/availability?arrival=${arrival}&departure=${departure}&adults=${ADULTS}&children=${CHILDREN}`)
+      const avail = await availRes.json() as { sites?: PricedSite[] }
+      const facts = await fetchDateFacts(supabase, arrival, departure)
+      const priced = (avail.sites || []).find(s => checkDateFacts(s.id, facts).bookable)
+      if (!priced) return t.skip('the search offered no free site — nothing to price against')
+
+      // The guest fee reached the card at all. This is the whole defect in one assertion.
+      const expectedGuestFee = (2 * 1500 + 1 * 750) * priced.nights
+      assert.equal(
+        priced.extra_guest_fee, expectedGuestFee,
+        'the search card ignored the extra-guest fee',
+      )
+
+      const { data: settings } = await supabase.from('settings').select('*').limit(1).single()
+      const { data: fees } = await supabase
+        .from('fees').select('id, name, type, amount, applies_to, is_active, card_only').eq('is_active', true)
+
+      const quote = computeBookingQuote({
+        site: {
+          site_type: priced.site_type,
+          nightly_rate: priced.nightly_rate,
+          total_price: priced.nightly_rate * priced.nights,   // stay alone, as BookingForm derives it
+          nights: priced.nights,
+        },
+        adults: ADULTS, children: CHILDREN,
+        settings: settings as any, fees: (fees || []) as any,
+        addonSelections: [], discount: null,
+        earlyRequested: false, lateRequested: false, earlyBlocked: false, lateBlocked: false,
+      })
+
+      assert.equal(quote.extraGuestFee, expectedGuestFee, 'the quote disagrees on the guest fee')
+
+      // THE HEADLINE.
+      assert.equal(
+        quote.total, priced.total_price,
+        `search card said ${priced.total_price} but checkout computed ${quote.total}`,
+      )
+
+      // The percentage fee must be charged on the stay PLUS the guests, not the stay alone —
+      // otherwise the card is short by the tax on the guest fee even with the fee itself added.
+      const pctLine = (priced.fees_breakdown || []).find(f => f.name === 'ZZ Test Tax')
+      assert.ok(pctLine, 'the percentage fee is missing from the search breakdown')
+      assert.equal(
+        pctLine.amount,
+        Math.round((priced.base_price + expectedGuestFee) * 6 / 100),
+        'the percentage fee must be computed on the stay plus the extra guests',
+      )
+
+      // And the server still honours it — no false rejection.
+      const r = await post({
+        siteId: priced.id, arrival, departure, nights: priced.nights,
+        adults: ADULTS, children: CHILDREN,
+        nightlyRate: priced.nightly_rate,
+        totalPrice: quote.cashTotal, amountToPay: quote.cashTotal, paymentType: 'full',
+        feesTotal: quote.feesTotal - quote.cardOnlyFeesTotal,
+        extraGuestFee: quote.extraGuestFee, addonTotal: quote.addonTotal,
+        discountAmount: quote.discountAmount, surchargeAmount: 0,
+        lines: quote.emailLines,
+      })
+      const GATE_REASONS = [
+        'missing-dates', 'invalid-range', 'beyond-horizon', 'out-of-season',
+        'blocked', 'double-booked', 'min-stay', 'price-mismatch', 'discount-invalid',
+      ]
+      assert.ok(
+        !GATE_REASONS.includes(r.json.reason),
+        `a party above occupancy was wrongly refused: ${JSON.stringify(r.json)}`,
+      )
+      assert.ok(
+        /authoriz/i.test(String(r.json.error)) || r.json.reason === 'square-unavailable',
+        `expected to reach the payment step, got: ${JSON.stringify(r.json)}`,
+      )
+    })
+   })
   })
 })
 

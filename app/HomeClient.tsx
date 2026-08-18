@@ -18,6 +18,8 @@ type Site = {
   base_rate: number
   nightly_rate: number
   total_price: number
+  /** The party-above-occupancy charge already included in total_price. Same on every card. */
+  extra_guest_fee: number
   nights: number
   min_stay: number
   meets_min_stay: boolean
@@ -178,7 +180,10 @@ export default function HomeClient({
     setSelectedSite(null)
     setOpenCategories(new Set())
 
-    const res = await fetch(`/api/availability?arrival=${arrival}&departure=${departure}&siteType=${siteType}`)
+    // adults/children go with the search so the card can include the extra-guest fee. The form
+    // has always collected them; it just never sent them, so every booking above the park's base
+    // occupancy was quoted low and then grew at checkout.
+    const res = await fetch(`/api/availability?arrival=${arrival}&departure=${departure}&siteType=${siteType}&adults=${adults}&children=${children}`)
     const data = await res.json()
     const fetchedSites: Site[] = data.sites || []
     setSites(fetchedSites)
@@ -354,6 +359,9 @@ export default function HomeClient({
             <div className="text-right">
               <p className="text-[var(--text-primary)] font-bold text-xl">${(site.nightly_rate / 100).toFixed(0)}<span className="text-sm font-normal text-[var(--text-muted)]">/night</span></p>
               <p className="text-sm text-[var(--text-muted)]">${(site.total_price / 100).toFixed(0)} total</p>
+              {site.extra_guest_fee > 0 && (
+                <p className="text-xs text-[var(--text-muted)]">incl. ${(site.extra_guest_fee / 100).toFixed(2)} extra guests</p>
+              )}
             </div>
           </div>
           {site.max_rv_length && <p className="text-[var(--text-muted)] text-sm mb-2">Max RV length: {site.max_rv_length}ft</p>}
@@ -677,7 +685,10 @@ export default function HomeClient({
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-[var(--text-primary)] font-semibold">{siteTypeLabel(selectedSite.site_type)} {selectedSite.site_number} selected</p>
-                  <p className="text-[var(--text-muted)] text-sm">{selectedSite.nights} nights · ${(selectedSite.total_price / 100).toFixed(2)} total</p>
+                  <p className="text-[var(--text-muted)] text-sm">
+                    {selectedSite.nights} nights · ${(selectedSite.total_price / 100).toFixed(2)} total
+                    {selectedSite.extra_guest_fee > 0 && <> · incl. ${(selectedSite.extra_guest_fee / 100).toFixed(2)} extra guests</>}
+                  </p>
                 </div>
                 <button className="px-8 py-3 rounded-xl text-white font-semibold transition-colors"
                   style={{ backgroundColor: 'var(--accent-color)' }}
