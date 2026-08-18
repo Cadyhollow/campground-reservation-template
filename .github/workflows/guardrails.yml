@@ -1,0 +1,126 @@
+# Guardrails — the load-bearing rules from resonation-ops/OPS.md section 4, enforced
+# automatically instead of remembered. Each step below names the rule it enforces and
+# says, in plain language, what to do when it fails.
+#
+# This file is CI configuration only (CI = the checks GitHub runs on a pull request).
+# Nothing imports it, it is not in a Next.js build path, and it never touches a
+# database. Adding it cannot change the running app.
+
+name: guardrails
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  guardrails:
+    name: guardrails
+    runs-on: ubuntu-latest
+    env:
+      BASE: origin/${{ github.base_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch the branch this PR targets
+        run: |
+          git fetch --no-tags --prune origin \
+            "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+
+      - name: Show what this PR changes
+        run: git diff --name-status "$BASE...HEAD"
+
+      # OPS.md section 4, rule 5 — the credential boundary. Real keys are placed by the
+      # human and never committed. .env*.local is exactly where they sit locally, so it
+      # must never reach the repo.
+      - name: "Rule 4.5 — no environment file may be committed"
+        run: |
+          HITS=$(git diff --name-only --diff-filter=ACMR "$BASE...HEAD" \
+                 | grep -E '(^|/)\.env.*\.local$' || true)
+          if [ -n "$HITS" ]; then
+            echo "::error::This pull request adds or changes an environment file. Those hold real keys and must stay on your own machine, never in the repo. See OPS.md section 4, rule 5."
+            echo "$HITS"
+            exit 1
+          fi
+          echo "OK - no .env*.local files in this pull request."
+
+      # OPS.md section 4, rule 5 — no secret-shaped VALUE in the added lines.
+      #
+      # Publishable/anon keys are NOT secret and are allowed. They are also JWTs that
+      # look exactly like a service-role key, so shape alone cannot tell them apart:
+      # a line that carries an anon/publishable marker is let through. That allowlist
+      # is the only thing separating the two, so widening it is a deliberate act.
+      #
+      # This workflow file is excluded from its own scan - it necessarily contains the
+      # patterns it looks for.
+      - name: "Rule 4.5 — no service-role key or long JWT in the diff"
+        run: |
+          # awk, not grep: in GNU grep's default dialect \+ is the "one or more"
+          # operator rather than a literal plus, so the obvious two-grep version of
+          # this silently produced an EMPTY file and the check passed everything.
+          # awk has no such dialect trap. The line count is printed so that a future
+          # silent-empty is visible in the log instead of looking like a clean pass.
+          git diff "$BASE...HEAD" -- . ':(exclude).github/workflows/guardrails.yml' \
+            | awk '/^\+\+\+/ { next } /^\+/ { print }' > /tmp/added.txt
+          echo "added lines scanned: $(wc -l < /tmp/added.txt)"
+          SUSPECT=$(grep -E 'SUPABASE_SERVICE_ROLE_KEY=.|sb_secret_[A-Za-z0-9_-]|eyJ[A-Za-z0-9_-]{40,}' /tmp/added.txt \
+                    | grep -viE 'NEXT_PUBLIC_|ANON_KEY|anon|publishable|sb_publishable_' || true)
+          if [ -n "$SUSPECT" ]; then
+            echo "::error::This pull request looks like it contains a real secret key. Secrets are placed by hand, never committed. If this is a false alarm, say so on the PR rather than working around it. See OPS.md section 4, rule 5."
+            echo "$SUSPECT" | cut -c1-120
+            exit 1
+          fi
+          echo "OK - no secret-shaped values added."
+
+      # OPS.md section 4, rule 1 — the fee model is untouchable. These three files decide
+      # what a guest is actually charged.
+      #
+      # Overridable ON PURPOSE but never by accident: a genuine fee change adds the label
+      # 'allow-fee-model-change' to the pull request, which is a visible, reviewable act.
+      - name: "Rule 4.1 — the fee model is untouchable"
+        env:
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'allow-fee-model-change') }}
+        run: |
+          HITS=$(git diff --name-only "$BASE...HEAD" \
+                 | grep -E '(^|/)lib/(booking-quote|pricing|ledger)\.ts$' || true)
+          if [ -z "$HITS" ]; then
+            echo "OK - fee model untouched."
+            exit 0
+          fi
+          if [ "$LABELLED" = "true" ]; then
+            echo "::warning::Fee-model files changed, allowed by the 'allow-fee-model-change' label:"
+            echo "$HITS"
+            exit 0
+          fi
+          echo "::error::This pull request changes the fee model - the code that decides what a guest pays. If that is genuinely what you want, add the label 'allow-fee-model-change' to this pull request and re-run this check. See OPS.md section 4, rule 1."
+          echo "$HITS"
+          exit 1
+
+      # The pure unit suites only - arithmetic and parsing, no database, no server.
+      # The route suites (api-auth, payment-route, manual-booking-route) are deliberately
+      # NOT here: they start a real Next server and need a real tenant in .env.local.
+      # CI has neither, so they would skip, and a skip that looks like a pass is worse
+      # than not running them. Those stay a human step against the Test Sandbox tenant.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: "Unit tests (no database, no server)"
+        run: |
+          node --conditions=react-server --test --test-concurrency=1 \
+            lib/bookability.test.ts \
+            lib/booking-quote.test.ts \
+            lib/cancellation-policy.test.ts \
+            lib/refundable.test.ts \
+            lib/square-credentials.test.ts \
+            lib/square-env.test.ts \
+            lib/square-refresh-request.test.ts \
+            lib/square-refund-account.test.ts
