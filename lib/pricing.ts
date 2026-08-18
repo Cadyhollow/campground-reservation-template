@@ -219,3 +219,5 @@ export function siteFitsCamper(
   }
   return { fits: true }
 }
+
+// selftest: deliberate fee-model touch, to be discarded
