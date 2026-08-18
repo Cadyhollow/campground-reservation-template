@@ -27,11 +27,21 @@
 // cashTotal and the deposit derives from cashTotal instead. Porting Cady's arithmetic here
 // would change what every campground on this template charges.
 //
-// Self-contained — no imports at all, like lib/bookability.ts and lib/refundable.ts. That is
-// what lets `node --test` exercise the money arithmetic without a bundler or a database.
+// ONE import, and it is deliberate. This file was self-contained until the pet fee, and the
+// property that mattered was never "zero imports" but "no I/O, no bundler, no database" — which
+// is what lets `node --test` exercise the money arithmetic directly. lib/pet-fee.ts is itself
+// pure and imports nothing, so that property is intact.
+//
+// The pet arithmetic lives there rather than here on purpose: it keeps this file's diff small
+// enough to read line by line, which is the only real safety on a change that waives the
+// automated fee-model guard. Nothing else may be imported here without the same argument, and
+// pet-fee.ts must never import back — a cycle between the fee model and the thing it calls would
+// make the protection meaningless.
 //
 // Pure, synchronous and I/O-free on purpose: the caller fetches, this decides. That keeps it
 // runnable from a client component and a route handler alike, and testable without a database.
+
+import { computePetFee } from './pet-fee.ts'
 
 export type QuoteSite = {
   site_type: string
@@ -73,6 +83,21 @@ export type QuoteSettings = {
   deposit_type?: string | null
   deposit_value?: number | null
   card_surcharge_percent?: number | string | null
+  // ── PET FEE ─────────────────────────────────────────────────────────────────────────────────
+  // All optional, and `pets_enabled` false or absent makes every one of them inert — which is the
+  // state every tenant is provisioned in. See lib/pet-fee.ts for the arithmetic.
+  pets_enabled?: boolean | null
+  pet_fee_amount?: number | null
+  pet_fee_per_night?: boolean | null
+  pet_fee_per_pet?: boolean | null
+  pet_max?: number | null
+  pet_rules_text?: string | null
+  pet_rules_require_affirmation?: boolean | null
+  /** Whether the pet fee joins the base that NON-card percentage fees are computed on. */
+  pet_fee_taxable?: boolean | null
+  /** Whether the pet fee joins the base that CARD-ONLY fees are computed on. */
+  pet_fee_surcharged?: boolean | null
+  service_animal_allowed?: boolean | null
 } | null
 
 export type QuoteInput = {
@@ -90,6 +115,22 @@ export type QuoteInput = {
   /** Turnover conflicts — a same-day arrival/departure on this site blocks the extra. */
   earlyBlocked: boolean
   lateBlocked: boolean
+  /**
+   * Pets declared. OPTIONAL, and absent is the only value any caller passes today — every
+   * existing quote is therefore unchanged, byte for byte.
+   */
+  petCount?: number
+  /** A declared service animal: legally not a pet, so the fee is waived. */
+  isServiceAnimal?: boolean
+  /**
+   * Whether the guest ticked the park's pet-rules affirmation.
+   *
+   * Carried on the input but NOT consulted by the arithmetic: a missing affirmation is a reason to
+   * REFUSE a booking, not to reprice it, and quietly zeroing the fee would let a request dodge the
+   * charge by omitting a checkbox. Enforcement belongs at /api/payment and /api/manual-booking, in
+   * a later step; this field exists so the shape is settled before those callers are written.
+   */
+  petRulesAffirmed?: boolean
 }
 
 export type BookingQuote = {
@@ -100,6 +141,17 @@ export type BookingQuote = {
   cardOnlyFeesTotal: number
   earlyFee: number
   lateFee: number
+  /** The pet fee, in cents. 0 whenever pets are off, none were declared, or it is a service animal. */
+  petFee: number
+  /** Pets actually charged for, after the park's cap. Store THIS on the reservation. */
+  petCount: number
+  /**
+   * True when more pets were requested than `pet_max` allows.
+   *
+   * Reported, not acted on. Charging for fewer pets than the guest declared is its own bug, so the
+   * booking routes should refuse — but that is a decision about a request, not arithmetic.
+   */
+  petCapped: boolean
   subtotal: number
   discountAmount: number
   /** Stay total including fees, less discount. */
@@ -176,6 +228,26 @@ export function computeBookingQuote(input: QuoteInput): BookingQuote {
   const extraChildren = Math.max(0, children - baseChildren)
   const extraGuestFee = (extraAdults * extraAdultFee + extraChildren * extraChildFee) * site.nights
 
+  // ── THE PET FEE ───────────────────────────────────────────────────────────────────────────────
+  //
+  // Computed HERE, above calculateFeeAmount, because the fee base below may need it — see the
+  // conditional in calculateFeeAmount and the note on the two toggles there.
+  //
+  // The arithmetic itself is NOT in this file. lib/pet-fee.ts owns it, is pure, imports nothing,
+  // and was reviewed and tested on its own PR before anything could charge for it. That split is
+  // deliberate: it keeps this file's diff small enough to read line by line, which is the only
+  // real safety on a change that carries the fee-model label.
+  //
+  // INERT TODAY. No caller passes petCount, and every tenant is provisioned with pets_enabled
+  // false, so computePetFee returns zero and every expression below behaves exactly as it did
+  // before this existed.
+  const { petFee, petCount, capped: petCapped } = computePetFee({
+    petCount: input.petCount ?? 0,
+    nights: site.nights,
+    isServiceAnimal: input.isServiceAnimal,
+    settings,
+  })
+
   const appliesToSite = (fee: QuoteFee) => {
     if (fee.applies_to === 'all') return true
     return fee.applies_to.split(',').map(s => s.trim()).includes(site.site_type)
@@ -186,7 +258,40 @@ export function computeBookingQuote(input: QuoteInput): BookingQuote {
   }
   const calculateFeeAmount = (fee: QuoteFee): number => {
     let base = 0
-    if (appliesToSite(fee)) base += site.total_price + extraGuestFee
+    if (appliesToSite(fee)) {
+      base += site.total_price + extraGuestFee
+      // ── THE MOST CONSEQUENTIAL LINE IN THE PET FEATURE. READ IT SLOWLY. ──────────────────────
+      //
+      // This is the ENTIRE meaning of the two settings toggles. There is no tax rate stored
+      // anywhere on this platform: reservation "tax" is just a percentage row in the `fees` table
+      // (the Fees screen is literally titled "Taxes & Fees" and suggests "e.g. PA State Tax"), and
+      // the card surcharge on this repo is a `fees` row with card_only set. So "is the pet fee
+      // taxable?" and "does the card surcharge apply to it?" both reduce to the same mechanical
+      // question — does the pet fee join the base this fee is computed on? — and the answer
+      // differs by which KIND of fee is being computed:
+      //
+      //   card_only fee  -> governed by pet_fee_surcharged
+      //   any other fee  -> governed by pet_fee_taxable
+      //
+      // That is why the condition switches on fee.card_only rather than applying one flag to
+      // everything. Collapsing it to a single toggle would silently tie a park's tax treatment to
+      // its card-fee treatment, and those are set by different authorities — a state or county
+      // decides the first, the payment processor and the park's own policy decide the second.
+      //
+      // Both default FALSE, so a park that has not opened the screen taxes and surcharges the pet
+      // fee not at all, and every existing quote is unaffected.
+      //
+      // KNOWN AND ACCEPTED IMPRECISION, worth naming rather than hiding: pet_fee_taxable applies
+      // to every non-card-only percentage fee, not only to ones that are genuinely taxes. A park
+      // with a percentage "resort fee" gets the pet fee in that base too. This matches how
+      // `applies_to` already works on this platform — the park's fee rows are the park's business
+      // — but a park wanting to tax pets while exempting them from a resort fee cannot express
+      // that here. Splitting the flag per fee row is the fix if that ever comes up.
+      //
+      // A flat fee is unaffected either way: its amount does not depend on the base at all (see
+      // the return below), so both toggles are no-ops for flat rows by construction.
+      if (fee.card_only ? settings?.pet_fee_surcharged : settings?.pet_fee_taxable) base += petFee
+    }
     if (appliesToAddons(fee)) base += addonTotal
     if (base === 0) return 0
     if (fee.type === 'percentage') return Math.round(base * fee.amount / 100)
@@ -209,7 +314,10 @@ export function computeBookingQuote(input: QuoteInput): BookingQuote {
     && settings?.late_checkout_enabled && settings?.late_checkout_show_customers)
     ? (settings.late_checkout_price || 0) : 0
 
-  const subtotal = site.total_price + extraGuestFee + addonTotal + earlyFee + lateFee
+  // petFee joins the subtotal, which means it is inside `total` and inside `cashTotal` below, and
+  // therefore inside amount_paid, the refund cap and the cancellation percentage — all by
+  // construction, with no further edits. `total` and `cashTotal` are deliberately untouched.
+  const subtotal = site.total_price + extraGuestFee + addonTotal + earlyFee + lateFee + petFee
 
   const discountAmount = discount
     ? discount.discount_type === 'percent'
@@ -223,7 +331,29 @@ export function computeBookingQuote(input: QuoteInput): BookingQuote {
   // Deposit — always a CASH value; the transaction fee is added per-payment at charge time.
   const realCashFees = feesTotal - cardOnlyFeesTotal
   const proportionalCashFees = site.nights > 0 ? Math.round(realCashFees / site.nights) : 0
-  const firstNightDeposit = site.nightly_rate + proportionalCashFees
+
+  // ── THE PET FEE'S SHARE OF A FIRST-NIGHT DEPOSIT ──────────────────────────────────────────────
+  //
+  // The other three deposit types need no decision: `full` and `percentage` take their share of
+  // `total` automatically, and `flat` is a fixed number the park chose. Only `first_night` has to
+  // answer "how much of the pet fee is due up front?", and there is no arithmetic that settles it
+  // — it is a judgement, so it is written out here rather than falling out of an expression.
+  //
+  // THE RULE: prorate a PER-NIGHT pet fee; collect a flat one in full.
+  //
+  // A per-night pet fee is a nightly charge, so one night's worth belongs in a one-night deposit,
+  // exactly as cash fees are prorated on the line above. A flat pet fee is not a per-night thing
+  // at all — dividing it by the length of the stay would make the same dog cost a different
+  // deposit on a two-night and a ten-night booking, which is arbitrary rather than merely
+  // approximate. A park charging a flat pet fee is charging for the animal being there, so it is
+  // collected with the first payment.
+  //
+  // Both directions are pinned by tests. If this is ever revisited, change it HERE and nowhere
+  // else — `deposit` below reads this value and nothing recomputes it.
+  const petFeeInFirstNight = settings?.pet_fee_per_night
+    ? (site.nights > 0 ? Math.round(petFee / site.nights) : 0)
+    : petFee
+  const firstNightDeposit = site.nightly_rate + proportionalCashFees + petFeeInFirstNight
 
   const depositType = settings?.deposit_type || 'first_night'
   const depositValue = settings?.deposit_value || 0
@@ -258,6 +388,10 @@ export function computeBookingQuote(input: QuoteInput): BookingQuote {
       ? [{ label: `${site.nights} night${site.nights !== 1 ? 's' : ''} × $${(site.nightly_rate / 100).toFixed(2)}`, amount: site.total_price }]
       : []),
     ...(extraGuestFee > 0 ? [{ label: 'Extra guests', amount: extraGuestFee }] : []),
+    // Its own named line, never folded into the site charge or the fee block. A pet fee the guest
+    // cannot find on their confirmation is a support call, and `reservations.pet_fee` exists as a
+    // column precisely so every downstream surface can name it.
+    ...(petFee > 0 ? [{ label: 'Pet fee', amount: petFee }] : []),
     ...feeBreakdown.filter(f => !f.card_only).map(f => ({ label: f.name, amount: f.calculatedAmount })),
     ...addonSelections.filter(a => a.quantity > 0).map(a => ({ label: `${a.name || 'Add-on'} ×${a.quantity}`, amount: a.price * a.quantity })),
     ...(earlyFee > 0 ? [{ label: 'Early check-in', amount: earlyFee }] : []),
@@ -266,7 +400,8 @@ export function computeBookingQuote(input: QuoteInput): BookingQuote {
 
   return {
     extraGuestFee, addonTotal, feeBreakdown, feesTotal, cardOnlyFeesTotal,
-    earlyFee, lateFee, subtotal, discountAmount, total, cashTotal,
+    earlyFee, lateFee, petFee, petCount, petCapped,
+    subtotal, discountAmount, total, cashTotal,
     deposit, depositLabel, depositSubtext,
     showDepositButton: depositType !== 'full',
     emailLines,
