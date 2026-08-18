@@ -267,12 +267,29 @@ export function checkHorizon(
 // booking. That bug was pinned by a test asserting the broken behaviour; this fixes it and the
 // test is inverted.
 //
-// A season is a recurring annual window, so it is decided entirely by month and day:
+// Is this a night the park can be OCCUPIED?
 //
-//   normal (Apr 1 → Oct 31)   in season when  start <= date <= end
-//   wrapped (Nov 1 → Mar 31)  in season when  date >= start OR date <= end
+// A season is a recurring annual window, so it is decided entirely by month and day. The two
+// bounds are NOT symmetric, and that asymmetry is the whole point of this function:
 //
-// Both bounds are inclusive: a park is open ON its first and last day.
+//   season_start  the OPENING day — the first occupiable night, and the first allowed check-in.
+//   season_end    the CLOSING day — the last allowed CHECKOUT. The park takes no check-ins on
+//                 it and nobody sleeps there that night. The last occupiable night is the day
+//                 BEFORE it.
+//
+// So the window is half-open — inclusive of start, exclusive of end:
+//
+//   normal (Apr 1 → Oct 31)   occupiable when  date >= start AND date < end
+//   wrapped (Nov 1 → Mar 31)  occupiable when  date >= start OR  date < end
+//
+// With a season ending October 31 the last occupiable night is October 30, and the last stay a
+// park will take arrives October 30 and checks out October 31.
+//
+// WHY EXCLUSIVE RATHER THAN "end - 1". Decrementing the boundary looks equivalent and is not.
+// A wrapped season ending January 1 would decrement to December 31, and `date <= 1231` is every
+// day of the year — so a winter park would silently go from closed-in-January to open-always.
+// Comparing `< end` has no such edge: for end = January 1, `x < 0101` is simply never true,
+// which is the right answer.
 //
 // Returns null — NOT false — when the season cannot be read at all, so the caller can tell
 // "definitely closed" apart from "no usable season configured".
@@ -296,9 +313,37 @@ export function isNightInSeason(
   const s = monthDayKey(start)
   const e = monthDayKey(end)
 
-  return s <= e
-    ? x >= s && x <= e
-    : x >= s || x <= e
+  // A park that opens and closes on the SAME day has no nights to sell — the one day it is open
+  // is a checkout day. Checked before the comparisons below because they read s > e as a
+  // wrap-around, which would turn a zero-night season into an always-open one.
+  if (s === e) return false
+
+  return s < e
+    ? x >= s && x < e
+    : x >= s || x < e
+}
+
+// The last occupiable night — the day before the closing day. FOR DISPLAY ONLY; the gate above
+// never decrements a boundary (see the note on why). Returns null when there is no readable
+// season, or when the season is the degenerate zero-night one.
+export function seasonLastNight(settings: SeasonSettings | null | undefined): MonthDay | null {
+  if (!settings?.season_start || !settings?.season_end) return null
+  const start = parseMonthDay(settings.season_start)
+  const end = parseMonthDay(settings.season_end)
+  if (!start || !end) return null
+  if (monthDayKey(start) === monthDayKey(end)) return null
+
+  // The calendar day before `end`, wrapping December 31 → and January 1 back to December 31.
+  if (end.day > 1) return { month: end.month, day: end.day - 1 }
+  const month = end.month === 1 ? 12 : end.month - 1
+  return { month, day: DAYS_IN_MONTH[month] }
+}
+
+// "October 30", for the season hint under the arrival picker.
+export function monthDayLabel(md: MonthDay | null): string {
+  if (!md) return ''
+  const name = MONTHS[md.month - 1]
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)} ${md.day}`
 }
 
 // THE SEASON GATE. Every NIGHT of the stay must fall inside the open season.
@@ -310,12 +355,22 @@ export function isNightInSeason(
 // for weeks after the park shut. Arriving October 20 and leaving December 31, against a season
 // ending October 31, was a booking the site would take money for.
 //
-// The unit is the NIGHT, not the calendar day, and the difference is load-bearing at the
-// boundary. A stay occupies the nights arrival … departure-1; the departure day is a checkout,
-// not an occupancy. So with a season ending October 31, arriving October 31 and leaving
-// November 1 is exactly one night — October 31 — and must be ACCEPTED. Validating "through
-// departure" instead would reject a guest checking out on the morning after the last open day,
-// which is a normal booking every park takes.
+// The unit is the NIGHT, not the calendar day. A stay occupies the nights arrival … departure-1;
+// the departure day is a checkout, not an occupancy. Validating "through departure" instead would
+// reject a guest checking out on the morning after their last night, which is a normal booking
+// every park takes.
+//
+// WHERE THE CLOSING DAY SITS. season_end is the last allowed CHECKOUT, not the last occupiable
+// night — see isNightInSeason. So against a season ending October 31:
+//
+//   arrive Oct 30 → depart Oct 31   ACCEPTED — the last stay of the year, checking out on the
+//                                   closing day, which is exactly what the closing day is for.
+//   arrive Oct 31 → depart Nov 1    REFUSED  — that is a check-in ON the closing day, and a night
+//                                   spent in a park that has shut.
+//
+// This reverses what the gate used to do. The earlier reading treated season_end as the last
+// occupiable night, so it accepted an arrival on the closing day and put a guest on a site the
+// night the park closed.
 //
 // Pure: no database, no clock, no Date arithmetic beyond stepping a day at a time.
 export function checkSeasonSpan(

@@ -6,7 +6,7 @@ import type { HomeData } from '@/lib/home-server'
 // Safe to import into the browser bundle: lib/bookability.ts has no imports of its own and no
 // Supabase client — the reason it was written that way. The picker's bound is derived by the SAME
 // arithmetic the server enforces with, so the two cannot drift and offer a date create refuses.
-import { resolveMaxAdvanceDays, horizonLastArrival, isNightInSeason, checkSeasonSpan } from '@/lib/bookability'
+import { resolveMaxAdvanceDays, horizonLastArrival, isNightInSeason, checkSeasonSpan, seasonLastNight, monthDayLabel } from '@/lib/bookability'
 
 type Site = {
   id: string
@@ -94,7 +94,12 @@ export default function HomeClient({
   //
   // What the picker CAN do cheaply is refuse to leave a closed date selected, and say why.
   const seasonConfigured = isNightInSeason(today, settings) !== null
+  // The closing day is a CHECKOUT day, so an arrival on it is out of season like any other closed
+  // date — isNightInSeason already says so, and this flag inherits that for free.
   const arrivalOutOfSeason = seasonConfigured && !!arrival && isNightInSeason(arrival, settings) === false
+  // "Open May 1 through October 11" invites exactly the arrival the server refuses, so the hint
+  // names the last night a guest can actually book instead of leaving them to infer it.
+  const lastNightLabel = monthDayLabel(seasonLastNight(settings))
   const stayOutOfSeason =
     seasonConfigured && !!arrival && !!departure && departure > arrival &&
     !checkSeasonSpan(arrival, departure, settings).bookable
@@ -457,7 +462,9 @@ export default function HomeClient({
                 onChange={e => { setArrival(e.target.value); if (departure && departure <= e.target.value) setDeparture('') }} />
               {arrivalOutOfSeason && (
                 <p className="text-xs mt-1 font-medium" style={{ color: '#b91c1c' }}>
-                  We are closed on this date.
+                  {lastNightLabel
+                    ? `We are closed on this date. The last night you can book is ${lastNightLabel}.`
+                    : 'We are closed on this date.'}
                 </p>
               )}
               {horizonMaxDate && (
@@ -466,6 +473,7 @@ export default function HomeClient({
               {seasonConfigured && !arrivalOutOfSeason && (
                 <p className="text-xs mt-1 text-[var(--text-muted)]">
                   Open {settings.season_start} through {settings.season_end}
+                  {lastNightLabel && <> · last night {lastNightLabel}</>}
                 </p>
               )}
             </div>

@@ -478,10 +478,10 @@ test('payment: a stay wholly inside the season is NOT refused by it', { skip }, 
   })
 })
 
-// THE CHECKOUT BOUNDARY, through the real route. The off-by-one most likely to ship: validating
-// "through departure" instead of "through departure-1" would refuse a guest checking out on the
-// morning after the last open day, which every park takes.
-test('payment: arriving on the last open day and leaving the next is accepted', { skip }, async (t) => {
+// THE CLOSING DAY, through the real route. INVERTED: season_end is the last allowed CHECKOUT, so
+// a check-in ON the closing day is a night in a park that has shut, and must be refused at the
+// charge route rather than merely discouraged in the browser.
+test('payment: CHECKING IN on the closing day is refused, and never reaches Square', { skip }, async (t) => {
   await withHorizon(null, async () => {
     await withSeason('April 1', 'October 31', async () => {
       const arrival = '2026-10-31', departure = '2026-11-01'
@@ -490,8 +490,26 @@ test('payment: arriving on the last open day and leaving the next is accepted', 
 
       const r = await post({ siteId: site.id, arrival, departure, nights: 1 })
 
+      assert.ok(r.gated, `a check-in on the closing day reached Square: ${JSON.stringify(r.json)}`)
+      assert.equal(r.json.reason, 'out-of-season', 'refused by the season gate specifically')
+      assert.equal(r.status, 400)
+    })
+  })
+})
+
+// The counterpart, and the one that keeps the fix from overshooting: the last stay of the year
+// still books. If this ever fails, the park has lost its final night of trade.
+test('payment: THE LAST VALID STAY — arrive the day before closing, check out ON it', { skip }, async (t) => {
+  await withHorizon(null, async () => {
+    await withSeason('April 1', 'October 31', async () => {
+      const arrival = '2026-10-30', departure = '2026-10-31'
+      const site = await aFreeSite(arrival, departure)
+      if (!site) return t.skip('no free site for the boundary range')
+
+      const r = await post({ siteId: site.id, arrival, departure, nights: 1 })
+
       assert.notEqual(r.json.reason, 'out-of-season',
-        `the checkout boundary was wrongly refused: ${JSON.stringify(r.json)}`)
+        `the last valid stay of the season was wrongly refused: ${JSON.stringify(r.json)}`)
     })
   })
 })
@@ -507,7 +525,13 @@ test('availability: the search refuses the same past-closing stay the route does
 
       const res2 = await fetch(`${BASE}/api/availability?arrival=2026-10-31&departure=2026-11-01`)
       const json2: any = await res2.json()
-      assert.notEqual(json2.closed, true, 'the checkout boundary must remain searchable')
+      assert.equal(json2.closed, true, 'search must not offer a check-in on the closing day')
+
+      // And the last valid stay stays searchable, or search and create disagree in the other
+      // direction — advertising nothing for a night the route would happily sell.
+      const res3 = await fetch(`${BASE}/api/availability?arrival=2026-10-30&departure=2026-10-31`)
+      const json3: any = await res3.json()
+      assert.notEqual(json3.closed, true, 'the last valid stay must remain searchable')
     })
   })
 })
