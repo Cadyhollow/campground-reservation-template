@@ -37,6 +37,9 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { createClient } from '@supabase/supabase-js'
 import { fetchDateFacts, checkDateFacts, isNightInSeason, addDays } from './bookability.ts'
+// READ-ONLY here. The fee-configured test below runs the browser's arithmetic so it can post the
+// figures /book would post; it does not modify the quote, and this file is not fee-model code.
+import { computeBookingQuote } from './booking-quote.ts'
 
 const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
 const ENV_PATH = resolvePath(REPO_ROOT, '.env.local')
@@ -297,6 +300,192 @@ test('payment: a legitimate booking is NOT refused — it reaches the charge', {
     /authoriz/i.test(String(r.json.error)) || r.json.reason === 'square-unavailable',
     `expected to reach the payment step, got: ${JSON.stringify(r.json)}`
   )
+})
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// A TENANT THAT HAS CONFIGURED FEES
+//
+// The test above sources its price from /api/availability, which is honest about the real flow
+// but has one blind spot: it can only prove what the tenant's own data exercises, and every
+// tenant is provisioned with NO `fees` rows. So on a fresh tenant the search and the checkout
+// agree trivially, and the arithmetic that only runs when a fee exists is never touched.
+//
+// That blind spot hid a live defect. /api/availability returned `total_price` with fees already
+// inside it; HomeClient put that in the /book URL; BookingForm took it as the stay base and
+// lib/booking-quote.ts applied every fee to it a SECOND time. /api/payment derives its base as
+// nightlyRate x nights with no fees, so the two disagreed and the pricing chokepoint answered
+// "Pricing has changed since this page was loaded" — the first owner to add a tax row could take
+// no online booking at all. It also read a flat fee's DOLLARS as cents.
+//
+// This test closes the blind spot the only way it can be closed: by giving the tenant fees of
+// both kinds for the duration of the test, running the real browser path against them, and
+// putting the rows back afterwards.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+// The subset of a /api/availability site row these assertions read.
+type PricedSite = {
+  id: string
+  site_type: string
+  nightly_rate: number
+  nights: number
+  base_price: number
+  fees_total: number
+  total_price: number
+  fees_breakdown?: Array<{ name: string; type: string; amount: number }>
+}
+
+// Both fee shapes, because they broke differently: the percentage compounded, the flat one was
+// off by 100x. Removed by id in a finally, so a failing assertion cannot leave the test tenant
+// quietly charging a cleaning fee nobody configured.
+async function withFees<T>(fn: () => Promise<T>): Promise<T> {
+  const { data: rows, error } = await supabase.from('fees').insert([
+    // Stored exactly as app/admin/fees/page.tsx writes them: `parseFloat` of what the owner
+    // typed, so the flat fee's `amount` is DOLLARS.
+    { name: 'ZZ Test Tax', type: 'percentage', amount: 6, applies_to: 'all', is_active: true, card_only: false },
+    { name: 'ZZ Test Cleaning', type: 'flat', amount: 10, applies_to: 'all', is_active: true, card_only: false },
+  ]).select('id')
+  if (error) throw new Error(`could not seed test fees: ${error.message}`)
+  const ids = (rows || []).map((r: { id: string }) => r.id)
+  try {
+    return await fn()
+  } finally {
+    if (ids.length) await supabase.from('fees').delete().in('id', ids)
+  }
+}
+
+test('payment: a booking on a tenant WITH fees is not refused, and search matches checkout', { skip }, async (t) => {
+  const arrival = '2026-08-18', departure = '2026-08-20'
+  const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
+  if (isNightInSeason(arrival, st) === false) {
+    return t.skip('sample week falls outside the configured season')
+  }
+
+  await withFees(async () => {
+    await withHorizon(null, async () => {
+      // 1. THE SEARCH — what the guest is shown on the results card.
+      const availRes = await fetch(`${BASE}/api/availability?arrival=${arrival}&departure=${departure}`)
+      const avail = await availRes.json() as { sites?: PricedSite[] }
+      const facts = await fetchDateFacts(supabase, arrival, departure)
+      const priced = (avail.sites || []).find(s => checkDateFacts(s.id, facts).bookable)
+      if (!priced) return t.skip('the search offered no free site — nothing to price against')
+
+      // The fees actually reached the card. If this fails the rest proves nothing.
+      assert.ok(priced.fees_total > 0, 'the seeded fees did not reach the search card')
+
+      // UNITS: a $10 flat fee is 1000 cents. It used to arrive as 10.
+      const flatLine = (priced.fees_breakdown || []).find(f => f.name === 'ZZ Test Cleaning')
+      assert.ok(flatLine, 'the flat fee is missing from the search breakdown')
+      assert.equal(flatLine.amount, 1000, 'a $10 flat fee must be 1000 cents on the search card')
+
+      // COUNTED ONCE: the card's total is the stay plus the fees, and no more.
+      assert.equal(priced.base_price, priced.nightly_rate * priced.nights, 'base_price must be the stay alone')
+      assert.equal(priced.total_price - priced.base_price, priced.fees_total, 'search fees counted twice')
+
+      // 2. THE CHECKOUT PAGE — app/book/BookingForm.tsx, arithmetic and all.
+      const { data: settings } = await supabase.from('settings').select('*').limit(1).single()
+      const { data: fees } = await supabase
+        .from('fees').select('id, name, type, amount, applies_to, is_active, card_only').eq('is_active', true)
+
+      const quote = computeBookingQuote({
+        site: {
+          site_type: priced.site_type,
+          nightly_rate: priced.nightly_rate,
+          // DERIVED, exactly as BookingForm does it. Passing priced.total_price here is the
+          // original bug, and it is what this whole test exists to keep out.
+          total_price: priced.nightly_rate * priced.nights,
+          nights: priced.nights,
+        },
+        adults: 2, children: 0,
+        settings: settings as any, fees: (fees || []) as any,
+        addonSelections: [], discount: null,
+        earlyRequested: false, lateRequested: false, earlyBlocked: false, lateBlocked: false,
+      })
+
+      // THE HEADLINE: the number on the search card is the number at checkout.
+      assert.equal(
+        quote.total, priced.total_price,
+        `search card said ${priced.total_price} but checkout computed ${quote.total}`,
+      )
+
+      // 3. THE CHARGE — post what BookingForm posts for "Pay in Full".
+      const surchargeAmount = quote.cashTotal > 0
+        ? Math.round(quote.cashTotal * quote.cardOnlyFeesTotal / quote.cashTotal) : 0
+      const r = await post({
+        siteId: priced.id, arrival, departure, nights: priced.nights,
+        nightlyRate: priced.nightly_rate,
+        totalPrice: quote.cashTotal,
+        amountToPay: quote.cashTotal,
+        paymentType: 'full',
+        feesTotal: quote.feesTotal - quote.cardOnlyFeesTotal,
+        extraGuestFee: quote.extraGuestFee, addonTotal: quote.addonTotal,
+        discountAmount: quote.discountAmount, surchargeAmount,
+        lines: quote.emailLines,
+      })
+
+      // THE REGRESSION, precisely: the pricing chokepoint did not turn this away. Before the fix
+      // this was a 409 with reason 'price-mismatch'.
+      assert.notEqual(
+        r.json.reason, 'price-mismatch',
+        `a fee-configured booking was refused as a price mismatch: ${JSON.stringify(r.json)}`,
+      )
+      // And no OTHER gate refused it either.
+      const GATE_REASONS = [
+        'missing-dates', 'invalid-range', 'beyond-horizon', 'out-of-season',
+        'blocked', 'double-booked', 'min-stay', 'price-mismatch', 'discount-invalid',
+      ]
+      assert.ok(
+        !GATE_REASONS.includes(r.json.reason),
+        `a fee-configured booking was wrongly refused by a gate: ${JSON.stringify(r.json)}`,
+      )
+      // It reached the payment step. Same evidence the test above accepts, and the same reason:
+      // the invalid token means no card can be charged, and the reservation insert is downstream
+      // of a successful charge, so nothing is written.
+      assert.ok(
+        /authoriz/i.test(String(r.json.error)) || r.json.reason === 'square-unavailable',
+        `expected to reach the payment step, got: ${JSON.stringify(r.json)}`,
+      )
+
+      // 4. THE OTHER DIRECTION — the bug's exact signature, pinned.
+      //
+      // Recompute the way /book USED to: the fees-inclusive `total_price` as the stay base. The
+      // server must still refuse this, because it is an overcharge. Asserting it here does two
+      // things: it proves the numbers above are not passing by luck (a route that accepted
+      // anything would pass step 3 too), and it names the failure a future reader will see in
+      // the logs if the client ever regresses.
+      const doubled = computeBookingQuote({
+        site: {
+          site_type: priced.site_type,
+          nightly_rate: priced.nightly_rate,
+          total_price: priced.total_price,   // <-- fees already inside. The bug.
+          nights: priced.nights,
+        },
+        adults: 2, children: 0,
+        settings: settings as any, fees: (fees || []) as any,
+        addonSelections: [], discount: null,
+        earlyRequested: false, lateRequested: false, earlyBlocked: false, lateBlocked: false,
+      })
+      assert.ok(
+        doubled.total > quote.total,
+        'compounding the fees must overcharge, or this test is not exercising the bug',
+      )
+      const rDoubled = await post({
+        siteId: priced.id, arrival, departure, nights: priced.nights,
+        nightlyRate: priced.nightly_rate,
+        totalPrice: doubled.cashTotal,
+        amountToPay: doubled.cashTotal,
+        paymentType: 'full',
+        feesTotal: doubled.feesTotal - doubled.cardOnlyFeesTotal,
+        extraGuestFee: doubled.extraGuestFee, addonTotal: doubled.addonTotal,
+        discountAmount: doubled.discountAmount, surchargeAmount: 0,
+        lines: doubled.emailLines,
+      })
+      assert.equal(
+        rDoubled.json.reason, 'price-mismatch',
+        `the double-counted total should still be refused, got: ${JSON.stringify(rDoubled.json)}`,
+      )
+      assert.equal(rDoubled.status, 409)
+    })
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────

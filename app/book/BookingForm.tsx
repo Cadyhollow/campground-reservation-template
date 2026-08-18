@@ -172,6 +172,9 @@ export default function BookingForm({
   const [horizonMessage, setHorizonMessage] = useState('')
   const [seasonMessage, setSeasonMessage] = useState('')
 
+  const siteNightlyRate = parseInt(searchParams.get('nightlyRate') || '0')
+  const siteNights = parseInt(searchParams.get('nights') || '0')
+
   const site = {
     id: searchParams.get('siteId') || '',
     site_number: searchParams.get('siteNumber') || '',
@@ -179,9 +182,24 @@ export default function BookingForm({
     amp_service: searchParams.get('ampService') || '',
     hookups: searchParams.get('hookups') || '',
     max_rv_length: searchParams.get('maxLength') ? parseInt(searchParams.get('maxLength')!) : null,
-    nightly_rate: parseInt(searchParams.get('nightlyRate') || '0'),
-    total_price: parseInt(searchParams.get('totalPrice') || '0'),
-    nights: parseInt(searchParams.get('nights') || '0'),
+    nightly_rate: siteNightlyRate,
+    // DERIVED, not read from the URL — this is the stay alone, and it is the base the quote
+    // computes fees ON (lib/booking-quote.ts:189).
+    //
+    // It used to be `?totalPrice=`, which /api/availability fills with a FEES-INCLUSIVE total.
+    // So every configured fee was charged twice here: once inside this number and again by
+    // computeBookingQuote. /api/payment derives its own base as nightlyRate × nights with no
+    // fees, so the two disagreed and the pricing chokepoint rejected the booking with
+    // "Pricing has changed since this page was loaded" — a park that added a single tax row
+    // could take no online booking at all.
+    //
+    // Deriving it rather than reading a corrected parameter is the point: this is the same
+    // expression /api/payment uses (`serverNightlyRate * serverNights`), so the two bases are
+    // equal by construction and no URL — stale, shared or hand-edited — can drive them apart.
+    // It is also the last place a price from the address bar reached the quote at all; see the
+    // set-your-own-price note at the top of lib/booking-quote.ts.
+    total_price: siteNightlyRate * siteNights,
+    nights: siteNights,
   }
 
   const arrival = searchParams.get('arrival') || ''

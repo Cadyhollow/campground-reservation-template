@@ -12,6 +12,7 @@ import {
   HORIZON_SERVER_SLACK_DAYS,
   DEFAULT_CLOSED_MESSAGE,
 } from '@/lib/bookability'
+import { summarizeSiteFees } from '@/lib/search-pricing'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -133,27 +134,25 @@ export async function GET(request: NextRequest) {
 
     const basePrice = nightlyRate * nights
 
-    const applicableFees = (fees || []).filter(fee =>
-      fee.applies_to === 'all' || fee.applies_to === site.site_type
-    )
-
-    const feeBreakdown = applicableFees.map(fee => ({
-      name: fee.name,
-      type: fee.type,
-      amount: fee.type === 'percentage'
-        ? parseFloat((basePrice * fee.amount / 100).toFixed(2))
-        : parseFloat(fee.amount.toFixed(2)),
-    }))
-
-    const feesTotal = feeBreakdown.reduce((sum, f) => sum + f.amount, 0)
+    // Fee lines for the card, in INTEGER CENTS, with the same CSV `applies_to` matching the
+    // booking quote uses. Both used to be wrong here and both were invisible until an owner added
+    // a fee row — see lib/search-pricing.ts, which is where they are now unit-tested.
+    const { breakdown: feeBreakdown, feesTotal } = summarizeSiteFees(fees, site.site_type, basePrice)
 
     return {
       ...site,
       nightly_rate: nightlyRate,
+      // THE STAY ALONE — nightly × nights, no fees. This is the figure the booking quote treats
+      // as the base it computes fees ON (see lib/booking-quote.ts:189), so anything else here
+      // gets fees applied to fees. /api/payment derives exactly this, as
+      // `serverNightlyRate * serverNights`.
       base_price: basePrice,
       fees_breakdown: feeBreakdown,
       fees_total: feesTotal,
-      total_price: parseFloat((basePrice + feesTotal).toFixed(2)),
+      // DISPLAY ONLY — what the search card shows as "$X total" so the guest sees a number that
+      // includes fees rather than a stay price that grows at checkout. Deliberately NOT the
+      // quote's base: /book derives that from nightly_rate × nights for itself.
+      total_price: basePrice + feesTotal,
       nights,
       min_stay: minStay,
       meets_min_stay: nights >= minStay,

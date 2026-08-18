@@ -226,7 +226,11 @@ export default function HomeClient({
       hookups: selectedSite.hookups,
       maxLength: selectedSite.max_rv_length?.toString() || '',
       nightlyRate: selectedSite.nightly_rate.toString(),
-      totalPrice: selectedSite.total_price.toString(),
+      // NO `totalPrice`. It used to carry this card's FEES-INCLUSIVE total, which /book then
+      // treated as the stay base and applied every fee to a second time. /book now derives the
+      // stay itself from nightlyRate × nights — the same expression /api/payment uses — so
+      // there is nothing left for this parameter to say that is not already here, and a link
+      // that still carries one from an older session is simply ignored rather than mispriced.
       nights: selectedSite.nights.toString(),
       arrival, departure,
       adults: adults.toString(),
