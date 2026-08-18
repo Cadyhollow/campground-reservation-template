@@ -12,7 +12,7 @@ import {
   HORIZON_SERVER_SLACK_DAYS,
   DEFAULT_CLOSED_MESSAGE,
 } from '@/lib/bookability'
-import { summarizeSiteFees } from '@/lib/search-pricing'
+import { summarizeSiteFees, extraGuestFeeCents } from '@/lib/search-pricing'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -25,13 +25,33 @@ export async function GET(request: NextRequest) {
   const departure = searchParams.get('departure')
   const siteType = searchParams.get('siteType')
 
+  // The party the search form already collected. Used ONLY to price the card — the guest counts
+  // that actually get charged are re-read from the request by /api/payment, which recomputes the
+  // whole quote server-side. A crafted `?adults=99` therefore shows a bigger number to whoever
+  // crafted it and changes nothing else.
+  //
+  // `null` when absent or unparseable, and resolved to the park's OWN base occupancy once settings
+  // are in hand (below) so that a caller which omits them — an older client, a hand-typed URL —
+  // gets the same "no extra guests" card it got before this existed. Defaulting to a hardcoded 2
+  // would be wrong for any park whose base occupancy is not 2.
+  const parseGuests = (raw: string | null): number | null => {
+    if (raw === null || raw.trim() === '') return null
+    const n = parseInt(raw, 10)
+    return Number.isFinite(n) && n >= 0 ? n : null
+  }
+  const requestedAdults = parseGuests(searchParams.get('adults'))
+  const requestedChildren = parseGuests(searchParams.get('children'))
+
   if (!arrival || !departure) {
     return NextResponse.json({ error: 'Missing dates' }, { status: 400 })
   }
 
+  // NAMED COLUMNS. The four occupancy columns are original to the schema — they are not a new
+  // migration — but they must stay in this list: PostgREST errors on a column it cannot find, and
+  // this read gates the whole search.
   const { data: settings } = await supabase
     .from('settings')
-    .select('season_start, season_end, closed_season_message, max_advance_days')
+    .select('season_start, season_end, closed_season_message, max_advance_days, base_occupancy_adults, base_occupancy_children, extra_adult_fee, extra_child_fee')
     .limit(1)
     .single()
 
@@ -123,6 +143,13 @@ export async function GET(request: NextRequest) {
     .select('*')
     .eq('is_active', true)
 
+  // The extra-guest fee, once — it depends on the party and the nights, not on the site, so every
+  // card carries the same figure. Omitted counts resolve to the park's base occupancy, which makes
+  // this exactly 0.
+  const adults = requestedAdults ?? (settings?.base_occupancy_adults ?? 2)
+  const children = requestedChildren ?? (settings?.base_occupancy_children ?? 2)
+  const extraGuestFee = extraGuestFeeCents(settings, adults, children, nights)
+
   const sitesWithPricing = availableSites.map(site => {
     const applicableRules = pricingRules?.filter(rule => ruleAppliesToSite(rule, site)) || []
 
@@ -137,22 +164,29 @@ export async function GET(request: NextRequest) {
     // Fee lines for the card, in INTEGER CENTS, with the same CSV `applies_to` matching the
     // booking quote uses. Both used to be wrong here and both were invisible until an owner added
     // a fee row — see lib/search-pricing.ts, which is where they are now unit-tested.
-    const { breakdown: feeBreakdown, feesTotal } = summarizeSiteFees(fees, site.site_type, basePrice)
+    //
+    // The extra-guest fee is passed in because it belongs in the percentage fee BASE, not just in
+    // the total — lib/booking-quote.ts:189 taxes `site.total_price + extraGuestFee`.
+    const { breakdown: feeBreakdown, feesTotal, totalPrice } =
+      summarizeSiteFees(fees, site.site_type, basePrice, extraGuestFee)
 
     return {
       ...site,
       nightly_rate: nightlyRate,
-      // THE STAY ALONE — nightly × nights, no fees. This is the figure the booking quote treats
-      // as the base it computes fees ON (see lib/booking-quote.ts:189), so anything else here
-      // gets fees applied to fees. /api/payment derives exactly this, as
+      // THE STAY ALONE — nightly × nights, no fees, no guests. This is the figure the booking
+      // quote treats as the base it computes fees ON (see lib/booking-quote.ts:189), so anything
+      // else here gets fees applied to fees. /api/payment derives exactly this, as
       // `serverNightlyRate * serverNights`.
       base_price: basePrice,
       fees_breakdown: feeBreakdown,
       fees_total: feesTotal,
-      // DISPLAY ONLY — what the search card shows as "$X total" so the guest sees a number that
-      // includes fees rather than a stay price that grows at checkout. Deliberately NOT the
-      // quote's base: /book derives that from nightly_rate × nights for itself.
-      total_price: basePrice + feesTotal,
+      // What the party above base occupancy adds. Same for every card; surfaced per-site so the
+      // results list can name it rather than letting the total silently jump.
+      extra_guest_fee: extraGuestFee,
+      // DISPLAY ONLY — stay + extra guests + fees, so the card shows the number the guest will
+      // actually see at checkout. Deliberately NOT the quote's base: /book derives that from
+      // nightly_rate × nights for itself.
+      total_price: totalPrice,
       nights,
       min_stay: minStay,
       meets_min_stay: nights >= minStay,
