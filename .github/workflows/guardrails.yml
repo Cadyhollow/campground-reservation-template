@@ -119,6 +119,7 @@ jobs:
             lib/bookability.test.ts \
             lib/booking-quote.test.ts \
             lib/cancellation-policy.test.ts \
+            lib/pet-fee.test.ts \
             lib/refundable.test.ts \
             lib/search-pricing.test.ts \
             lib/square-credentials.test.ts \
