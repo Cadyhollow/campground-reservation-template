@@ -120,6 +120,7 @@ jobs:
             lib/booking-quote.test.ts \
             lib/cancellation-policy.test.ts \
             lib/refundable.test.ts \
+            lib/search-pricing.test.ts \
             lib/square-credentials.test.ts \
             lib/square-env.test.ts \
             lib/square-refresh-request.test.ts \

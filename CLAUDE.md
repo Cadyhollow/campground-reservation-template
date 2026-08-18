@@ -17,8 +17,10 @@ The **blueprint** every new ResoNation client is cloned from. It has no deployme
 - Schema changes go in the **canonical schema** (`resonation-admin`) **and** a standalone `db/` migration, defined identically.
 
 ## Testing
-- Route tests run against the **Test Sandbox** tenant (`odcbxxxjdijdwkdyxaeg`) via `.env.local`. Never point them at a production DB.
+- Route tests run against the **Test Sandbox** tenant — Supabase project `test-sandbox-do-not-delete` = **`odcbxxxjdijdwkdyxaeg`** — via `.env.local`. Never point them at a production DB.
+- **That is the only test tenant, and the ref is not guessable — copy it from this line.** Older session notes name a throwaway probe project `ktvgycjzpydspiogcidc`; **it does not exist** (checked against the Supabase account, 2026-08-18). If a project ref is not written down here, confirm it with `list_projects` before using it — do not reconstruct one from memory.
 - Tests must be hermetic — pin the settings they depend on (see `withGates()`); don't rely on the tenant's ambient config.
+- **A fresh tenant has no `fees` rows, so fee arithmetic is untested by default.** Anything touching what a guest is charged needs a tenant with a percentage fee AND a flat fee configured — see `withFees()` in `lib/payment-route.test.ts`. A search/checkout mismatch hid behind this for months.
 
 ## Gates (what needs Charissa — never do these autonomously)
 - Merging to `main`, deleting anything, handling real secrets/passwords, real-money/hardware tests, product-scope calls. Build on a branch and stop for review.
