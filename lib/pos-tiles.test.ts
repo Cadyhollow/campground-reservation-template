@@ -60,6 +60,79 @@ test('the watermark stays faint enough that the contrast analysis holds', () => 
   assert.ok(alpha <= 0.12, `watermark opacity is ${alpha}; above 0.12 more palette colours lose AA under the name`)
 })
 
+test('the watermark can never grow into the name band, at any tile size', () => {
+  // THE GEOMETRIC GUARANTEE, recomputed from the shipped CSS rather than trusted.
+  //
+  // The watermark lightens what it covers, so white text sitting ON it loses contrast — three
+  // palette colours fall below AA there. Rather than fade the letter until that stops mattering
+  // (it would take ~0.058, which is invisible), the letter is sized so the name never reaches it.
+  //
+  // This reads the real values out of globals.css and replays the geometry across every tile
+  // height the grid can produce. If someone changes the name's type, the padding, or the sizing
+  // formula, the two drift apart and this fails — which is the only thing standing between a
+  // future tweak and a silent contrast regression.
+  const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8')
+  const block = (sel: string) => {
+    const i = css.indexOf(sel + ' {')
+    return css.slice(i, css.indexOf('}', i))
+  }
+  const num = (src: string, prop: string) =>
+    Number(new RegExp(prop + ':\\s*(-?[0-9.]+)').exec(src)?.[1])
+
+  const tile = block('.pos-cat-tile')
+  const name = block('.pos-cat-name')
+  const ghost = block('.pos-cat-ghost')
+
+  const padding = num(tile, 'padding')                 // 14px, top and bottom
+  const nameSize = num(name, 'font-size')              // 15px
+  const nameLine = num(name, 'line-height')            // 1.2
+  const ghostTop = num(ghost, 'top')                   // -14px
+  const formula = /min\((\d+)px,\s*calc\(([0-9.]+)cqh\s*-\s*([0-9.]+)px\)\)/.exec(ghost)
+  assert.ok(formula, 'could not read the watermark sizing formula from globals.css')
+  const [, capPx, cqhPct, offsetPx] = formula!.map(Number) as unknown as number[]
+
+  // A capital's line box measures about 1.06x its font size in the shipped face — taken from a
+  // browser measurement of the rendered glyph, and deliberately generous.
+  const GLYPH_BOX = 1.06
+  // Two lines is the worst case; the name clamps there.
+  const nameBand = 2 * nameSize * nameLine
+
+  for (let H = 140; H <= 220; H++) {
+    const contentH = H - 2 * padding                   // cqh is the CONTENT box, not the border box
+    const fontSize = Math.min(capPx, (cqhPct / 100) * contentH - offsetPx)
+    const glyphBottom = ghostTop + GLYPH_BOX * fontSize
+    const nameTop = H - padding - nameBand
+    assert.ok(
+      glyphBottom <= nameTop,
+      `at a ${H}px tile the watermark reaches ${glyphBottom.toFixed(1)}px but the name starts at ${nameTop.toFixed(1)}px`,
+    )
+  }
+})
+
+test('the watermark keeps its full size on the tiles that do not need shrinking', () => {
+  // The other half of the bargain: the fix must not quietly shrink tiles that were fine. Measured
+  // panel widths produce 141-204px tiles, and only the ~151px case ever overlapped.
+  const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8')
+  const i = css.indexOf('.pos-cat-ghost {')
+  const ghost = css.slice(i, css.indexOf('}', i))
+  const f = /min\((\d+)px,\s*calc\(([0-9.]+)cqh\s*-\s*([0-9.]+)px\)\)/.exec(ghost)!
+  const [, capPx, cqhPct, offsetPx] = f.map(Number) as unknown as number[]
+  const at = (H: number) => Math.min(capPx, (cqhPct / 100) * (H - 28) - offsetPx)
+
+  // Sizes seen across the three real POS panels. Compared within half a pixel rather than for
+  // exact equality: at 162px the formula lands on 117.96px, which is the cap to four decimal
+  // places and identical once rasterised. Demanding exactness there would be asserting about
+  // floating point, not about what anyone can see.
+  for (const H of [162, 163, 165, 171, 188, 204]) {
+    assert.ok(
+      Math.abs(at(H) - capPx) < 0.5,
+      `a ${H}px tile should keep the full ${capPx}px letter, got ${at(H).toFixed(2)}`,
+    )
+  }
+  // And the one that genuinely overlapped does shrink.
+  assert.ok(at(151) < capPx, 'the 151px tile should scale its letter down')
+})
+
 // ── COLOUR IS PINNED TO THE CATEGORY, NOT ITS POSITION ────────────────────────────────────────
 
 test('the same name always gets the same colour', () => {

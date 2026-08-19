@@ -257,6 +257,10 @@ input, select, textarea {
   /* A new stacking context, so the watermark letter's z-index cannot escape the tile and paint
      over a neighbour. */
   isolation: isolate;
+  /* Makes the tile a size container so the watermark can be sized against its height (cqh).
+     Safe here because the tile's own size never depends on its contents — the width comes from
+     the grid track and the height from aspect-ratio. */
+  container-type: size;
   aspect-ratio: 1 / 1;
   border: none;
   border-radius: 18px;
@@ -320,7 +324,36 @@ input, select, textarea {
   left: -6px;
   z-index: 1;
   pointer-events: none;
-  font-size: 118px;
+
+  /* ── THE NO-OVERLAP SIZE ───────────────────────────────────────────────────────────────────
+     118px until the tile is too short to hold both the letter and a two-line name, then exactly
+     as large as still fits. That is what keeps the name off the watermark on every tile, which
+     is what makes its contrast safe without touching the 0.12 opacity.
+
+     Where the second term comes from — it is geometry, not a guess:
+
+       the glyph starts at top:-14px and its line box is ~1.06x the font size
+       the name band is 2 lines x 15px x 1.2 = 36px, sitting 14px above the bottom
+
+       no overlap  =>  -14 + 1.06F  <=  H - 50  =>  F <= 0.944H - 34
+
+     THE UNIT IS THE CONTENT BOX, NOT THE BORDER BOX. 100cqh is the container's content height,
+     so with 14px of padding top and bottom it is H - 28, not H. Substituting Hc = H - 28 turns
+     the bound into F <= 0.944Hc - 8. Getting this wrong is silent: the letter simply comes out
+     far too small, which is how it was caught here.
+
+     94cqh - 8px is that bound with a hair of margin. Measured across the real panel widths,
+     tiles come out 151-204px: every size from 162px up keeps the full 118px, and only the 151px
+     case (the wide folio panel at four columns) scales down — which is precisely the case that
+     was overlapping.
+
+     A flat 68cqh was the first proposal and is NOT equivalent: it starts shrinking below 174px,
+     so it would have quietly reduced the letter on most real tiles including ones with no
+     overlap at all.
+
+     IF THE NAME'S TYPE CHANGES, THIS CONSTANT GOES STALE. lib/pos-tiles.test.ts recomputes the
+     bound from the shipped values and fails if they drift apart. */
+  font-size: min(118px, calc(94cqh - 8px));
   line-height: 1;
   font-weight: 800;
   letter-spacing: -2px;
