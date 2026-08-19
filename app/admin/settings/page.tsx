@@ -102,6 +102,23 @@ const defaultSettings = {
   deposit_type: 'first_night',
   deposit_value: 0,
   custom_payment_methods: [] as string[],
+  // ── PETS ────────────────────────────────────────────────────────────────────────────────────
+  // pets_enabled is the master switch: while it is false, NOTHING else here is rendered, so a
+  // park that does not take pets never sees the feature at all.
+  pets_enabled: false,
+  // Held as a STRING for the same reason extra_adult_fee is: the input is dollars and the column
+  // is cents, and a half-typed "1." must not become 0 mid-keystroke.
+  pet_fee_amount: '0.00',
+  pet_fee_per_night: false,
+  pet_fee_per_pet: false,
+  // String, so '' can mean "no limit" distinctly from a typed 0 — both save as 0, but the field
+  // should not show a 0 the owner never entered.
+  pet_max: '',
+  pet_rules_text: '',
+  pet_rules_require_affirmation: false,
+  pet_fee_taxable: false,
+  pet_fee_surcharged: false,
+  service_animal_allowed: true,
 }
 
 export default function SettingsPage() {
@@ -120,6 +137,13 @@ export default function SettingsPage() {
   // itself, stays out of the save payload, AND can't run an upload that would write to a
   // column that isn't there yet (which would fail the write and orphan the uploaded file).
   const [hasHeroColumn, setHasHeroColumn] = useState(false)
+  // Same pattern, and here it is not a nicety. The pet columns exist in the canonical schema and
+  // on the Test Sandbox, but were DELIBERATELY not applied to live tenants — see
+  // resonation-admin/db/2026-08-18-pet-fee.sql. This page sends ONE payload containing every
+  // column, and one unknown column fails the whole UPDATE: without this guard, shipping the pet
+  // section would stop an existing park from saving its phone number. Detected from the loaded
+  // row, so it self-activates the moment a tenant is migrated, with no code change.
+  const [hasPetColumns, setHasPetColumns] = useState(false)
   const [earlyPriceInput, setEarlyPriceInput] = useState('0.00')
   const [latePriceInput, setLatePriceInput] = useState('0.00')
   const [uploadingLogo, setUploadingLogo] = useState(false)
@@ -146,6 +170,7 @@ export default function SettingsPage() {
       setPlan(data.plan || 'trailhead')
       setHasThemeColumn('theme' in data)
       setHasHeroColumn('hero_image_url' in data)
+      setHasPetColumns('pets_enabled' in data)
       setForm({
         park_name: data.park_name || '',
         park_tagline: data.park_tagline || '',
@@ -200,6 +225,21 @@ export default function SettingsPage() {
         waiver_text: data.waiver_text || '',
         maintenance_mode: data.maintenance_mode || false,
         maintenance_message: data.maintenance_message || 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
+        pets_enabled: data.pets_enabled || false,
+        pet_fee_amount: ((data.pet_fee_amount || 0) / 100).toFixed(2),
+        pet_fee_per_night: data.pet_fee_per_night || false,
+        pet_fee_per_pet: data.pet_fee_per_pet || false,
+        // Explicit null check rather than `||`: 0 means "no limit" and is a real stored value,
+        // but it should read back as blank so the owner sees the same thing they left.
+        pet_max: data.pet_max === null || data.pet_max === undefined || data.pet_max === 0
+          ? ''
+          : String(data.pet_max),
+        pet_rules_text: data.pet_rules_text || '',
+        pet_rules_require_affirmation: data.pet_rules_require_affirmation || false,
+        pet_fee_taxable: data.pet_fee_taxable || false,
+        pet_fee_surcharged: data.pet_fee_surcharged || false,
+        // Defaults ON when absent. A park must opt OUT of honouring service animals, never in.
+        service_animal_allowed: data.service_animal_allowed !== false,
         deposit_type: data.deposit_type || 'first_night',
         deposit_value: data.deposit_value || 0,
         custom_payment_methods: data.custom_payment_methods || [],
@@ -450,6 +490,44 @@ export default function SettingsPage() {
       }
     }
 
+    // ── PET VALIDATION ─────────────────────────────────────────────────────────────────────
+    //
+    // Only when the tenant HAS the columns and the owner has switched pets on — a park with the
+    // feature off cannot be blocked by a field it has never seen.
+    //
+    // Blocks the save rather than coercing, for the reason at the top of this function: one
+    // payload carries every column, so a quietly-corrected value would ride along with the
+    // owner's real edits and nothing would show it had been changed.
+    let petAmountCents = 0
+    let petMaxValue = 0
+    if (hasPetColumns && form.pets_enabled) {
+      const rawAmount = String(form.pet_fee_amount ?? '').trim()
+      const amount = rawAmount === '' ? 0 : Number(rawAmount)
+      if (!Number.isFinite(amount) || amount < 0) {
+        toast.error('Pet fee must be a positive amount, or 0.')
+        return
+      }
+      petAmountCents = Math.round(amount * 100)
+
+      const rawMax = String(form.pet_max ?? '').trim()
+      if (rawMax !== '') {
+        const n = Number(rawMax)
+        if (!Number.isInteger(n) || n < 0) {
+          toast.error('Max pets must be a whole number, or blank for no limit.')
+          return
+        }
+        petMaxValue = n
+      }
+
+      // A per-pet or per-night mode multiplies the amount, so leaving the amount at zero while
+      // switching a mode on is almost certainly a half-finished setup rather than a park that
+      // means to charge nothing. Caught here rather than discovered by a guest seeing $0.00.
+      if (petAmountCents === 0 && (form.pet_fee_per_night || form.pet_fee_per_pet)) {
+        toast.error('Enter a pet fee amount, or turn off "per night" and "per pet".')
+        return
+      }
+    }
+
     setSaving(true)
     const payload = {
       park_name: form.park_name,
@@ -507,6 +585,25 @@ export default function SettingsPage() {
       deposit_type: form.deposit_type,
       deposit_value: form.deposit_value || 0,
       custom_payment_methods: form.custom_payment_methods || [],
+      // Only written when the tenant has the columns — see hasPetColumns above. On a tenant
+      // without them this spreads to nothing and the save behaves exactly as it did before the
+      // pet feature existed.
+      ...(hasPetColumns ? {
+        pets_enabled: form.pets_enabled,
+        pet_fee_amount: petAmountCents,
+        pet_fee_per_night: form.pet_fee_per_night,
+        pet_fee_per_pet: form.pet_fee_per_pet,
+        // 0 = no limit, which is also what a blank field means. See the column comment in the
+        // migration: 0 must never be read as "no pets allowed".
+        pet_max: petMaxValue,
+        // NULL rather than '' when blank, matching the column's default and keeping "never
+        // written" distinguishable from "deliberately cleared".
+        pet_rules_text: form.pet_rules_text.trim() === '' ? null : form.pet_rules_text,
+        pet_rules_require_affirmation: form.pet_rules_require_affirmation,
+        pet_fee_taxable: form.pet_fee_taxable,
+        pet_fee_surcharged: form.pet_fee_surcharged,
+        service_animal_allowed: form.service_animal_allowed,
+      } : {}),
     }
     if (settingsId) {
       const { error } = await supabase.from('settings').update(payload).eq('id', settingsId)
@@ -524,6 +621,26 @@ export default function SettingsPage() {
   // What the owner's number actually means today, in dates. A park owner thinks in "next
   // September", not in "412 days", so the field shows both. Recomputed on every render rather than
   // memoized — it is one date addition, and it must not go stale as they type.
+  // Spells out, in a sentence, what the amount and the two switches actually add up to.
+  //
+  // "per pet" and "per night" read as alternatives rather than as multipliers, so an owner can
+  // easily set both and be surprised by the total. Worked through on a concrete 2-pet, 3-night
+  // stay, the four modes are unmistakable — and this is the only place the owner sees the
+  // arithmetic before a guest does.
+  const petModeSentence = (() => {
+    const dollars = Number(String(form.pet_fee_amount ?? '').trim())
+    if (!Number.isFinite(dollars) || dollars <= 0) return 'Enter an amount to see how it will be charged.'
+    const money = (n: number) => `$${n.toFixed(2)}`
+    const per = form.pet_fee_per_pet, night = form.pet_fee_per_night
+    const example = dollars * (per ? 2 : 1) * (night ? 3 : 1)
+    const basis =
+      per && night ? `${money(dollars)} per pet, per night`
+      : per ? `${money(dollars)} per pet for the whole stay`
+      : night ? `${money(dollars)} per night, no matter how many pets`
+      : `${money(dollars)} once for the whole stay, no matter how many pets`
+    return `${basis}. A guest bringing 2 pets for 3 nights would pay ${money(example)}.`
+  })()
+
   const horizonPreviewDays = resolveMaxAdvanceDays(form.max_advance_days)
   const horizonPreviewDate = horizonPreviewDays === null
     ? null
@@ -1064,6 +1181,176 @@ export default function SettingsPage() {
               )}
             </div>
           </div>
+
+          {/* ── PETS ────────────────────────────────────────────────────────────────────────
+              Hidden entirely on a tenant whose settings table has no pet columns (see
+              hasPetColumns): showing controls that cannot be saved is worse than showing none.
+
+              THE MASTER SWITCH IS THE WHOLE DESIGN OF THIS SECTION. When "Do you charge a pet
+              fee?" is off, that single question is the ONLY pet thing on the page — no amount,
+              no rules box, no toggles. A park that does not take pets should never have to read
+              past one line to establish that. */}
+          {hasPetColumns && (
+            <>
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">Pets</h3>
+              <p className="text-sm text-gray-500 mb-4">Charge for pets, set your rules, and choose which sites allow them.</p>
+
+              <div className="flex items-center justify-between mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Do you charge a pet fee?</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {form.pets_enabled
+                      ? 'Guests will be asked whether they are bringing pets.'
+                      : 'Leave this off if you do not take pets, or do not charge for them. Nothing pet-related will appear to guests.'}
+                  </p>
+                </div>
+                <button type="button" onClick={() => setForm({ ...form, pets_enabled: !form.pets_enabled })}
+                  className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-4"
+                  style={{ backgroundColor: form.pets_enabled ? '#15803d' : '#d1d5db' }}>
+                  <span className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
+                    style={{ transform: form.pets_enabled ? 'translateX(28px)' : 'translateX(0px)' }} />
+                </button>
+              </div>
+
+              {form.pets_enabled && (
+                <div className="mb-6 space-y-4">
+                  {/* Amount + the two switches that produce all four charging modes. The live
+                      sentence below them is deliberate: "per pet" and "per night" are easy to
+                      read as alternatives rather than as multipliers, and an owner should be able
+                      to see what a 2-pet, 3-night stay costs without doing the arithmetic. */}
+                  <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <label className="block text-sm font-medium text-gray-900 mb-2">Pet fee</label>
+                    <div className="relative max-w-[12rem]">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                      <input type="number" min="0" step="0.01"
+                        className="w-full border border-gray-200 rounded-lg pl-7 pr-3 py-2 text-sm"
+                        value={form.pet_fee_amount}
+                        onChange={e => setForm({ ...form, pet_fee_amount: e.target.value })} />
+                    </div>
+
+                    <div className="mt-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm text-gray-900">Charge it per night</p>
+                          <p className="text-xs text-gray-500">Off = one charge for the whole stay.</p>
+                        </div>
+                        <button type="button" onClick={() => setForm({ ...form, pet_fee_per_night: !form.pet_fee_per_night })}
+                          className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-3"
+                          style={{ backgroundColor: form.pet_fee_per_night ? '#15803d' : '#d1d5db' }}>
+                          <span className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition duration-200"
+                            style={{ transform: form.pet_fee_per_night ? 'translateX(20px)' : 'translateX(0px)' }} />
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm text-gray-900">Charge it per pet</p>
+                          <p className="text-xs text-gray-500">Off = one charge no matter how many pets.</p>
+                        </div>
+                        <button type="button" onClick={() => setForm({ ...form, pet_fee_per_pet: !form.pet_fee_per_pet })}
+                          className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-3"
+                          style={{ backgroundColor: form.pet_fee_per_pet ? '#15803d' : '#d1d5db' }}>
+                          <span className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition duration-200"
+                            style={{ transform: form.pet_fee_per_pet ? 'translateX(20px)' : 'translateX(0px)' }} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <p className="mt-3 text-xs text-gray-600 bg-white border border-gray-200 rounded-lg px-3 py-2">
+                      {petModeSentence}
+                    </p>
+                  </div>
+
+                  {/* Max pets. The note is not decoration: 0 read as "no pets allowed" is the
+                      single most likely misreading of this field, and it is the value every park
+                      starts with. */}
+                  <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <label className="block text-sm font-medium text-gray-900 mb-1">Maximum pets per booking</label>
+                    <input type="number" min="0" step="1" placeholder="No limit"
+                      className="w-full max-w-[12rem] border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                      value={form.pet_max}
+                      onChange={e => setForm({ ...form, pet_max: e.target.value })} />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Leave blank (or 0) for <strong>no limit</strong>. This does not mean &ldquo;no pets&rdquo; &mdash; to stop taking pets altogether, switch the question above off.
+                    </p>
+                  </div>
+
+                  {/* Rules + affirmation. */}
+                  <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <label className="block text-sm font-medium text-gray-900 mb-1">Pet rules</label>
+                    <p className="text-xs text-gray-500 mb-2">Shown to guests who tell you they are bringing a pet.</p>
+                    <textarea rows={4}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                      placeholder="e.g. Pets must be leashed at all times and never left unattended."
+                      value={form.pet_rules_text}
+                      onChange={e => setForm({ ...form, pet_rules_text: e.target.value })} />
+                    <div className="flex items-center justify-between mt-3">
+                      <div>
+                        <p className="text-sm text-gray-900">Require guests to agree to these rules</p>
+                        <p className="text-xs text-gray-500">They must tick a box before booking. The time they agreed is recorded.</p>
+                      </div>
+                      <button type="button" onClick={() => setForm({ ...form, pet_rules_require_affirmation: !form.pet_rules_require_affirmation })}
+                        className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-3"
+                        style={{ backgroundColor: form.pet_rules_require_affirmation ? '#15803d' : '#d1d5db' }}>
+                        <span className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition duration-200"
+                          style={{ transform: form.pet_rules_require_affirmation ? 'translateX(20px)' : 'translateX(0px)' }} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Tax and card surcharge. These vary by state and county, so the platform
+                      stores no rate and takes no view — the park ticks what applies to it. */}
+                  <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-3">
+                    <p className="text-sm font-medium text-gray-900">Tax &amp; card fees</p>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-gray-900">Include the pet fee in taxes and percentage fees</p>
+                        <p className="text-xs text-gray-500">Your percentage-based fees will be calculated on the stay <em>plus</em> the pet fee. Tax rules vary by state and county &mdash; check yours.</p>
+                      </div>
+                      <button type="button" onClick={() => setForm({ ...form, pet_fee_taxable: !form.pet_fee_taxable })}
+                        className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-3"
+                        style={{ backgroundColor: form.pet_fee_taxable ? '#15803d' : '#d1d5db' }}>
+                        <span className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition duration-200"
+                          style={{ transform: form.pet_fee_taxable ? 'translateX(20px)' : 'translateX(0px)' }} />
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-gray-900">Apply the card surcharge to the pet fee</p>
+                        <p className="text-xs text-gray-500">Your card-processing fee will be calculated on the stay <em>plus</em> the pet fee.</p>
+                      </div>
+                      <button type="button" onClick={() => setForm({ ...form, pet_fee_surcharged: !form.pet_fee_surcharged })}
+                        className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-3"
+                        style={{ backgroundColor: form.pet_fee_surcharged ? '#15803d' : '#d1d5db' }}>
+                        <span className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition duration-200"
+                          style={{ transform: form.pet_fee_surcharged ? 'translateX(20px)' : 'translateX(0px)' }} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Service animals. Defaults ON, and the note says why — an owner switching it
+                      off should know what they are switching off. */}
+                  <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-gray-900">Honor service animals</p>
+                        <p className="text-xs text-gray-500">Waives the pet fee and lets the guest book any site. Under the ADA a service animal is not a pet, and US campgrounds are generally required to accommodate one &mdash; leave this on unless you have taken advice.</p>
+                      </div>
+                      <button type="button" onClick={() => setForm({ ...form, service_animal_allowed: !form.service_animal_allowed })}
+                        className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-3"
+                        style={{ backgroundColor: form.service_animal_allowed ? '#15803d' : '#d1d5db' }}>
+                        <span className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition duration-200"
+                          style={{ transform: form.service_animal_allowed ? 'translateX(20px)' : 'translateX(0px)' }} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-gray-500">
+                    Next: mark which of your sites allow pets on the <a href="/admin/sites" className="text-green-700 underline">Sites</a> page. Guests bringing pets are only shown sites you have marked.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
 
           <h3 className="text-lg font-semibold text-gray-900 mb-1">Maintenance Mode</h3>
           <p className="text-sm text-gray-500 mb-4">When enabled, guests will see your message instead of the booking form. The admin panel remains accessible.</p>
