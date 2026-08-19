@@ -10,6 +10,11 @@ import { createBrowserSupabase } from '@/lib/supabase-browser'
 const supabase = createBrowserSupabase()
 import { ymd } from '@/lib/transactions'
 import { planAtLeast, normalizePlan } from '@/lib/plan'
+// The seasonal tracker keys off the caller's ROLE, not off the owner/staff view toggle — see the
+// note at the banner. useRole fails closed (null until known, and null on error), so the banner
+// stays hidden rather than flashing for someone who should not see it.
+import { useRole } from '@/lib/use-role'
+import { atLeast } from '@/lib/roles'
 import Image from 'next/image'
 import Link from 'next/link'
 import {
@@ -59,6 +64,7 @@ export default function AdminDashboard() {
   const [arrivalsDate, setArrivalsDate] = useState<string>(() => ymd(new Date()))
   const [loading, setLoading] = useState(true)
   const [dashboardView, setDashboardView] = useState<'owner'|'staff'>('staff')
+  const { role } = useRole()
   const [slideOut, setSlideOut] = useState<'arrivals'|'departures'|null>(null)
   const [departuresToday, setDeparturesToday] = useState<any[]>([])
   const [walkinCountToday, setWalkinCountToday] = useState(0)
@@ -478,7 +484,16 @@ export default function AdminDashboard() {
 
       {/* Owner-only seasonal contracts card — summit-gated. Hidden for staff view,
           non-summit plans, and when there are no seasonal campers. */}
-      {dashboardView === 'owner' && planAtLeast(plan, 'summit') && seasonalStats && seasonalStats.total > 0 && (
+      {/* Shown to MANAGERS as well as owners (decided 2026-08-19). Managers can now do everything
+          with a seasonal contract — create, send, chase, sign — so they are the people who would
+          act on "12 of 49 unsigned"; an owner-only banner told the one person who mostly would
+          not. `atLeast` rather than an equality check, so owners keep seeing it.
+
+          `dashboardView` is a display toggle, not a permission — it is how an owner chooses to
+          look at the staff view — so the ROLE is what this keys off. The screen it links to is
+          manager-gated, and a staff member seeing a link they cannot open would be worse than not
+          seeing the banner. */}
+      {atLeast(role, 'manager') && planAtLeast(plan, 'summit') && seasonalStats && seasonalStats.total > 0 && (
         <Link href="/admin/seasonals" className="block mb-8">
           <div className="rounded-xl border p-4 shadow-sm hover:shadow-md transition-all flex items-center justify-between"
             style={{ background: seasonalStats.unsigned > 0 ? '#fffbeb' : '#f0fdf4', borderColor: seasonalStats.unsigned > 0 ? '#fde68a' : '#bbf7d0' }}>

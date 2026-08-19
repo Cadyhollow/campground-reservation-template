@@ -53,6 +53,13 @@ const PAGE_ROLES: [string, Role][] = [
   ['/admin/settings', 'owner'],
   ['/admin/users', 'owner'],
 
+  // Seasonal management. MANAGER (decided 2026-08-19), and listed here deliberately rather than
+  // left to the 'staff' default this map falls back to.
+  //
+  // Cady never listed it, so on that park the page is staff-reachable while its own Create, Edit
+  // and Send buttons 403 on a staff member — a screen more open than its own actions. Listing it
+  // is what stops the same thing happening to every Summit client.
+  ['/admin/seasonals', 'manager'],
   ['/admin/reports', 'manager'],
   ['/admin/transactions', 'manager'],
   ['/admin/send-email', 'manager'],
