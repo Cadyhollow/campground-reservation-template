@@ -13,7 +13,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { computePetFee, type PetFeeSettings } from './pet-fee.ts'
+import { computePetFee, checkPetBooking, type PetFeeSettings, type PetPolicySettings } from './pet-fee.ts'
 
 // $25, and the four modes selected by the two toggles.
 const FLAT: PetFeeSettings = { pets_enabled: true, pet_fee_amount: 2500 }
@@ -238,4 +238,171 @@ test('the same input always gives the same answer, and the input is not mutated'
   const b = computePetFee({ petCount: 5, nights: 3, settings: frozen })
   assert.deepEqual(a, b)
   assert.deepEqual(frozen, settings)
+})
+
+// ── THE BOOKING POLICY ────────────────────────────────────────────────────────────────────────
+// checkPetBooking decides whether a booking carrying pets may proceed at all. It REFUSES rather
+// than adjusting: clamping five dogs to a cap of two would bill a guest for a booking they did not
+// ask for and let them arrive with animals the park never agreed to.
+
+const policy = (over: Partial<PetPolicySettings> = {}): PetPolicySettings =>
+  ({ pets_enabled: true, pet_fee_amount: 2500, ...over })
+
+test('policy: a park with pets disabled records no pets and refuses nothing', () => {
+  // Also the state of every un-migrated tenant, where pets_enabled is absent rather than false.
+  for (const s of [{ pets_enabled: false }, {}, null as unknown as PetPolicySettings]) {
+    const v = checkPetBooking(s as PetPolicySettings, { petCount: 3, sitePetFriendly: false })
+    assert.deepEqual(v, { ok: true, petCount: 0, isServiceAnimal: false })
+  }
+})
+
+test('policy: a booking with no pets passes everything', () => {
+  const v = checkPetBooking(policy({ pet_max: 1, pet_rules_require_affirmation: true }), {
+    petCount: 0, sitePetFriendly: false,
+  })
+  assert.deepEqual(v, { ok: true, petCount: 0, isServiceAnimal: false })
+})
+
+// ── THE CAP ───────────────────────────────────────────────────────────────────────────────────
+
+test('policy: over the cap is REFUSED, not silently reduced', () => {
+  const v = checkPetBooking(policy({ pet_max: 2 }), { petCount: 5, sitePetFriendly: true })
+  assert.equal(v.ok, false)
+  if (v.ok) return
+  assert.equal(v.reason, 'pet-max')
+  assert.match(v.message, /up to 2 pets/)
+})
+
+test('policy: exactly at the cap is allowed', () => {
+  const v = checkPetBooking(policy({ pet_max: 2 }), { petCount: 2, sitePetFriendly: true })
+  assert.equal(v.ok, true)
+  if (!v.ok) return
+  assert.equal(v.petCount, 2)
+})
+
+test('policy: a cap of 1 is worded in the singular', () => {
+  const v = checkPetBooking(policy({ pet_max: 1 }), { petCount: 2, sitePetFriendly: true })
+  assert.equal(v.ok, false)
+  if (v.ok) return
+  assert.match(v.message, /allows 1 pet per site/)
+})
+
+test('policy: pet_max 0 or absent imposes no cap', () => {
+  for (const pet_max of [0, null, undefined]) {
+    const v = checkPetBooking(policy({ pet_max } as Partial<PetPolicySettings>), { petCount: 9, sitePetFriendly: true })
+    assert.equal(v.ok, true, `pet_max ${String(pet_max)} refused`)
+  }
+})
+
+// ── THE RULES AFFIRMATION ─────────────────────────────────────────────────────────────────────
+
+test('policy: a required affirmation that is missing is REFUSED', () => {
+  const v = checkPetBooking(policy({ pet_rules_require_affirmation: true }), {
+    petCount: 1, sitePetFriendly: true,
+  })
+  assert.equal(v.ok, false)
+  if (v.ok) return
+  assert.equal(v.reason, 'pet-rules')
+})
+
+test('policy: a required affirmation that is given passes', () => {
+  const v = checkPetBooking(policy({ pet_rules_require_affirmation: true }), {
+    petCount: 1, petRulesAffirmed: true, sitePetFriendly: true,
+  })
+  assert.equal(v.ok, true)
+})
+
+test('policy: no affirmation is demanded when the park does not require one', () => {
+  const v = checkPetBooking(policy(), { petCount: 1, sitePetFriendly: true })
+  assert.equal(v.ok, true)
+})
+
+// ── THE SITE RESTRICTION ──────────────────────────────────────────────────────────────────────
+
+test('policy: pets on a non-pet-friendly site are REFUSED', () => {
+  const v = checkPetBooking(policy(), { petCount: 1, sitePetFriendly: false })
+  assert.equal(v.ok, false)
+  if (v.ok) return
+  assert.equal(v.reason, 'pet-site')
+})
+
+test('policy: a staff override waives the site restriction', () => {
+  const v = checkPetBooking(policy(), { petCount: 1, sitePetFriendly: false, allowPetSiteOverride: true })
+  assert.equal(v.ok, true)
+})
+
+test('policy: the override waives ONLY the site restriction', () => {
+  // It must not become a skeleton key. The cap and the affirmation are the park's rules about the
+  // booking itself, not about which site it lands on.
+  const overCap = checkPetBooking(policy({ pet_max: 1 }), {
+    petCount: 4, sitePetFriendly: false, allowPetSiteOverride: true,
+  })
+  assert.equal(overCap.ok, false)
+  if (!overCap.ok) assert.equal(overCap.reason, 'pet-max')
+
+  const noAffirm = checkPetBooking(policy({ pet_rules_require_affirmation: true }), {
+    petCount: 1, sitePetFriendly: false, allowPetSiteOverride: true,
+  })
+  assert.equal(noAffirm.ok, false)
+  if (!noAffirm.ok) assert.equal(noAffirm.reason, 'pet-rules')
+})
+
+test('policy: a missing pet_friendly column is treated as unrestricted, not forbidden', () => {
+  // undefined means the tenant has no such column. Refusing every site would take a park offline;
+  // a column that IS present and false is a real refusal, asserted above.
+  const v = checkPetBooking(policy(), { petCount: 1, sitePetFriendly: undefined })
+  assert.equal(v.ok, true)
+})
+
+// ── THE SERVICE-ANIMAL WAIVER ─────────────────────────────────────────────────────────────────
+
+test('policy: a service animal bypasses the cap, the affirmation and the site restriction', () => {
+  const v = checkPetBooking(policy({ pet_max: 1, pet_rules_require_affirmation: true }), {
+    petCount: 3, isServiceAnimal: true, sitePetFriendly: false,
+  })
+  assert.deepEqual(v, { ok: true, petCount: 0, isServiceAnimal: true })
+})
+
+test('policy: a park that has opted out of honouring service animals treats one as a pet', () => {
+  // service_animal_allowed false means "do not waive". The animal is then subject to the fee, the
+  // cap and the site restriction like any other pet — which is what the Settings copy promises.
+  const v = checkPetBooking(policy({ service_animal_allowed: false }), {
+    petCount: 1, isServiceAnimal: true, sitePetFriendly: false,
+  })
+  assert.equal(v.ok, false)
+  if (v.ok) return
+  assert.equal(v.reason, 'pet-site')
+})
+
+test('policy: the RESOLVED service-animal flag is what feeds the fee', () => {
+  // The value returned here is what must be passed to computePetFee — never the raw request
+  // field, or a park that opted out would still hand out free stays.
+  const optedOut = checkPetBooking(policy({ service_animal_allowed: false }), {
+    petCount: 1, isServiceAnimal: true, sitePetFriendly: true,
+  })
+  assert.equal(optedOut.ok, true)
+  if (!optedOut.ok) return
+  assert.equal(optedOut.isServiceAnimal, false)
+  assert.equal(optedOut.petCount, 1)
+  // And the fee follows from it.
+  assert.equal(computePetFee({ petCount: optedOut.petCount, nights: 2, isServiceAnimal: optedOut.isServiceAnimal, settings: policy({ service_animal_allowed: false }) }).petFee, 2500)
+})
+
+// ── UNTRUSTED INPUT ───────────────────────────────────────────────────────────────────────────
+
+test('policy: junk pet counts are treated as no pets, never as a refusal', () => {
+  for (const bad of [NaN, -3, Infinity, '2', true, null, undefined, {}, []]) {
+    const v = checkPetBooking(policy({ pet_max: 1 }), {
+      petCount: bad as unknown as number, sitePetFriendly: false,
+    })
+    assert.equal(v.ok, true, `petCount ${String(bad)} was refused`)
+    if (v.ok) assert.equal(v.petCount, 0)
+  }
+})
+
+test('policy: a fractional count is floored before the cap is applied', () => {
+  // 2.9 floors to 2, which is within a cap of 2 — the cap must not see 2.9 and refuse.
+  const v = checkPetBooking(policy({ pet_max: 2 }), { petCount: 2.9, sitePetFriendly: true })
+  assert.equal(v.ok, true)
+  if (v.ok) assert.equal(v.petCount, 2)
 })

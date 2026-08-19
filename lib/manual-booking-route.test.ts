@@ -113,6 +113,13 @@ async function withGates(gates: Gates, fn: () => Promise<void>) {
   }
 }
 
+// Value-returning sibling, for tests that need the result back out of the wrapper.
+async function withGatesValue<T>(gates: Gates, fn: () => Promise<T>): Promise<T> {
+  let out!: T
+  await withGates(gates, async () => { out = await fn() })
+  return out
+}
+
 // Kept as thin, explicit wrappers so each test still reads as being about one gate — but both are
 // always pinned underneath.
 async function withHorizon(days: number | null, fn: () => Promise<void>) {
@@ -402,4 +409,162 @@ test('manual-booking: the two overrides are separate — season does not waive t
     assert.equal(r.json.reason, 'beyond-horizon',
       `the season override wrongly waived the booking window: ${JSON.stringify(r.json)}`)
   })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// PETS ON THE STAFF PATH
+//
+// This is the only route that INSERTS a reservation without a card, so it is where the four
+// pet columns can actually be proven to persist.
+//
+// DATES ARE FAR OUT (600+ days) and stepped, deliberately: the horizon and season tests above
+// create real reservations in the near future on the same sites, and a pet test landing on one of
+// those dates fails as a double-booking rather than for anything to do with pets. It also carries the staff site override —
+// the known-guest exception — which the public path must never honour.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+const PET_SETTINGS = {
+  pets_enabled: true, pet_fee_amount: 2500,
+  pet_fee_per_night: false, pet_fee_per_pet: true,
+  pet_max: 2, pet_rules_text: 'Pets must be leashed.',
+  pet_rules_require_affirmation: false,
+  pet_fee_taxable: false, pet_fee_surcharged: false, service_animal_allowed: true,
+}
+
+async function withPets<T>(
+  over: Record<string, unknown>,
+  fn: (s: { petSite: string; noPetSite: string }) => Promise<T>,
+): Promise<T | 'no-pet-columns'> {
+  const { data: before } = await supabase.from('settings').select('*').limit(1).single()
+  if (!before || !('pets_enabled' in before)) return 'no-pet-columns'
+  const { data: sites } = await supabase
+    .from('sites').select('id, pet_friendly').eq('is_available', true).order('display_order')
+  if (!sites || sites.length < 2) return 'no-pet-columns'
+  const petSite = sites[0].id, noPetSite = sites[1].id
+  const prior = sites.map((x: { id: string; pet_friendly: boolean }) => [x.id, x.pet_friendly] as const)
+
+  await supabase.from('settings').update({ ...PET_SETTINGS, ...over }).eq('id', before.id)
+  await supabase.from('sites').update({ pet_friendly: true }).eq('id', petSite)
+  await supabase.from('sites').update({ pet_friendly: false }).eq('id', noPetSite)
+  try {
+    return await fn({ petSite, noPetSite })
+  } finally {
+    const restore: Record<string, unknown> = {}
+    for (const k of Object.keys(PET_SETTINGS)) restore[k] = (before as Record<string, unknown>)[k]
+    await supabase.from('settings').update(restore).eq('id', before.id)
+    for (const [id, flag] of prior) await supabase.from('sites').update({ pet_friendly: flag }).eq('id', id)
+  }
+}
+
+test('manual-booking: the pet fee and count are STORED, computed by the server', { skip }, async (t) => {
+  const out = await withPets({}, async ({ petSite }) => {
+    return withGatesValue({ horizon: null }, async () => {
+      const arrival = isoPlus(600), departure = isoPlus(602)
+      // The body claims a nonsense pet_fee. The route must ignore it and derive its own.
+      const r = await book({
+        site_id: petSite, arrival_date: arrival, departure_date: departure,
+        base_nightly_rate: 5000, total_price: 10000,
+        pet_count: 2, pet_fee: 999999, is_service_animal: false,
+      })
+      if (!r.json.reservationId) return { r, row: null }
+      const { data: row } = await supabase
+        .from('reservations')
+        .select('pet_count, pet_fee, pet_rules_affirmed_at, is_service_animal')
+        .eq('id', r.json.reservationId).single()
+      return { r, row }
+    })
+  })
+  if (out === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  assert.equal(out.r.status, 200, `booking failed: ${JSON.stringify(out.r.json)}`)
+  assert.ok(out.row, 'no reservation row')
+  assert.equal(out.row!.pet_count, 2)
+  assert.equal(out.row!.pet_fee, 5000, 'the server must compute 2 x $25, not trust the body')
+  assert.equal(out.row!.is_service_animal, false)
+  assert.equal(out.row!.pet_rules_affirmed_at, null, 'no affirmation was required, so none is stamped')
+})
+
+test('manual-booking: the affirmation timestamp is stamped when the park requires one', { skip }, async (t) => {
+  const out = await withPets({ pet_rules_require_affirmation: true }, async ({ petSite }) => {
+    return withGatesValue({ horizon: null }, async () => {
+      const r = await book({
+        site_id: petSite, arrival_date: isoPlus(603), departure_date: isoPlus(605),
+        base_nightly_rate: 5000, total_price: 10000,
+        pet_count: 1, pet_rules_affirmed: true,
+      })
+      if (!r.json.reservationId) return { r, row: null }
+      const { data: row } = await supabase.from('reservations')
+        .select('pet_count, pet_rules_affirmed_at').eq('id', r.json.reservationId).single()
+      return { r, row }
+    })
+  })
+  if (out === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  assert.equal(out.r.status, 200, `booking failed: ${JSON.stringify(out.r.json)}`)
+  assert.ok(out.row!.pet_rules_affirmed_at, 'the affirmation should have been stamped')
+})
+
+test('manual-booking: staff are refused over the cap, and without a required affirmation', { skip }, async (t) => {
+  const out = await withPets({ pet_max: 2, pet_rules_require_affirmation: true }, async ({ petSite }) => {
+    return withGatesValue({ horizon: null }, async () => {
+      const overCap = await book({
+        site_id: petSite, arrival_date: isoPlus(606), departure_date: isoPlus(608),
+        base_nightly_rate: 5000, total_price: 10000, pet_count: 5, pet_rules_affirmed: true,
+      })
+      const noAffirm = await book({
+        site_id: petSite, arrival_date: isoPlus(609), departure_date: isoPlus(611),
+        base_nightly_rate: 5000, total_price: 10000, pet_count: 1,
+      })
+      return { overCap, noAffirm }
+    })
+  })
+  if (out === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  assert.equal(out.overCap.json.reason, 'pet-max')
+  assert.equal(out.noAffirm.json.reason, 'pet-rules')
+})
+
+test('manual-booking: the site override is the known-guest exception, and waives ONLY that', { skip }, async (t) => {
+  const out = await withPets({ pet_max: 1 }, async ({ noPetSite }) => {
+    return withGatesValue({ horizon: null }, async () => {
+      // Refused without it...
+      const refused = await book({
+        site_id: noPetSite, arrival_date: isoPlus(612), departure_date: isoPlus(614),
+        base_nightly_rate: 5000, total_price: 10000, pet_count: 1,
+      })
+      // ...allowed with it...
+      const allowed = await book({
+        site_id: noPetSite, arrival_date: isoPlus(615), departure_date: isoPlus(617),
+        base_nightly_rate: 5000, total_price: 10000, pet_count: 1, override_pet_site: true,
+      })
+      // ...but it is not a skeleton key: the cap still bites.
+      const stillCapped = await book({
+        site_id: noPetSite, arrival_date: isoPlus(618), departure_date: isoPlus(620),
+        base_nightly_rate: 5000, total_price: 10000, pet_count: 4, override_pet_site: true,
+      })
+      return { refused, allowed, stillCapped }
+    })
+  })
+  if (out === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  assert.equal(out.refused.json.reason, 'pet-site')
+  assert.equal(out.allowed.status, 200, `override did not work: ${JSON.stringify(out.allowed.json)}`)
+  assert.equal(out.stillCapped.json.reason, 'pet-max', 'the override must not waive the cap')
+})
+
+test('manual-booking: a service animal is stored as such, free, and on any site', { skip }, async (t) => {
+  const out = await withPets({ pet_max: 1, pet_rules_require_affirmation: true }, async ({ noPetSite }) => {
+    return withGatesValue({ horizon: null }, async () => {
+      const r = await book({
+        site_id: noPetSite, arrival_date: isoPlus(621), departure_date: isoPlus(623),
+        base_nightly_rate: 5000, total_price: 10000,
+        pet_count: 1, is_service_animal: true,   // no affirmation, non-pet site, over the cap
+      })
+      if (!r.json.reservationId) return { r, row: null }
+      const { data: row } = await supabase.from('reservations')
+        .select('pet_count, pet_fee, is_service_animal').eq('id', r.json.reservationId).single()
+      return { r, row }
+    })
+  })
+  if (out === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  assert.equal(out.r.status, 200, `service animal refused: ${JSON.stringify(out.r.json)}`)
+  assert.equal(out.row!.is_service_animal, true)
+  assert.equal(out.row!.pet_fee, 0, 'a service animal must be free')
+  assert.equal(out.row!.pet_count, 0, 'a service animal is not a pet')
 })

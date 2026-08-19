@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { requireRole } from '@/lib/require-role'
 import { checkHorizon, checkSeasonSpan, HORIZON_SERVER_SLACK_DAYS } from '@/lib/bookability'
+import { checkPetBooking, computePetFee } from '@/lib/pet-fee'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -57,6 +58,14 @@ export async function POST(request: NextRequest) {
       override_horizon,
       // The same, for a stay with nights outside the park's open season.
       override_season,
+      // Pets, as entered by the operator. The fee is recomputed server-side below; the counts
+      // and flags are checked against the park's own policy.
+      pet_count,
+      is_service_animal,
+      pet_rules_affirmed,
+      // The staff waiver for putting a guest with pets on a site not marked pet-friendly — the
+      // known-guest exception. Waives ONLY that restriction, never the cap or the affirmation.
+      override_pet_site,
     } = body
 
     // ── THE BOOKING HORIZON, WITH AN OPERATOR OVERRIDE ──────────────────────────────────────
@@ -123,6 +132,56 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // ── THE PET GATE ──────────────────────────────────────────────────────────────────────────
+    //
+    // The same lib/pet-fee.ts decision the public path runs, so the two cannot drift — with one
+    // addition: an operator may waive the pet-SITE restriction for a known guest, exactly as they
+    // may waive the horizon and the season. It waives nothing else.
+    //
+    // Unlike the dates, the pet FEE is recomputed here rather than trusted from the body. This
+    // route otherwise takes the staff pages' totals as given (see the note at the top of the
+    // file), but a brand-new charge is worth deriving server-side from the moment it exists
+    // rather than inheriting that debt.
+    //
+    // Entirely dead on a tenant without the pet columns: select('*') keeps the read safe there,
+    // `pets_enabled` is absent, and checkPetBooking answers "no pets".
+    const { data: petSettings } = await supabase.from('settings').select('*').limit(1).single()
+    let petFields: Record<string, unknown> = {}
+    if (petSettings?.pets_enabled) {
+      const { data: petSite } = await supabase
+        .from('sites').select('pet_friendly').eq('id', site_id).single()
+
+      const verdict = checkPetBooking(petSettings, {
+        petCount: Number(pet_count) || 0,
+        isServiceAnimal: !!is_service_animal,
+        petRulesAffirmed: !!pet_rules_affirmed,
+        sitePetFriendly: petSite?.pet_friendly,
+        allowPetSiteOverride: !!override_pet_site,
+      })
+      if (!verdict.ok) {
+        return NextResponse.json({ error: verdict.message, reason: verdict.reason }, { status: 400 })
+      }
+
+      const nights = Math.max(0, Math.round(
+        (new Date(departure_date).getTime() - new Date(arrival_date).getTime()) / 86400000))
+      const { petFee, petCount: chargedPets } = computePetFee({
+        petCount: verdict.petCount,
+        nights,
+        isServiceAnimal: verdict.isServiceAnimal,
+        settings: petSettings,
+      })
+
+      petFields = {
+        pet_count: chargedPets,
+        pet_fee: petFee,
+        pet_rules_affirmed_at:
+          petSettings.pet_rules_require_affirmation && pet_rules_affirmed && chargedPets > 0
+            ? new Date().toISOString()
+            : null,
+        is_service_animal: verdict.isServiceAnimal,
+      }
+    }
+
     // Check availability
     const { data: conflicts } = await supabase
       .from('reservations')
@@ -168,6 +227,9 @@ export async function POST(request: NextRequest) {
         square_payment_id: null,
         waiver_signed: false,
         notes,
+        // Spreads to nothing on a tenant without the pet columns — an unknown column would fail
+        // the whole insert and lose the booking.
+        ...petFields,
       })
       .select()
       .single()

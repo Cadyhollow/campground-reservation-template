@@ -92,6 +92,9 @@ const NONE: PetFeeResult = { petFee: 0, petCount: 0, capped: false }
  *
  * Fractional input is FLOORED rather than rounded: 2.9 pets is 2 pets. Rounding up would charge
  * for an animal nobody declared.
+ *
+ * Shared with checkPetBooking below, deliberately: if the cap and the charge normalised counts
+ * differently, a request could pass the cap and then be billed for a different number of animals.
  */
 function wholeCount(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 0
@@ -140,4 +143,129 @@ export function computePetFee(input: PetFeeInput): PetFeeResult {
   if (settings.pet_fee_per_night) petFee *= wholeCount(input.nights)
 
   return { petFee, petCount, capped }
+}
+
+// ── THE BOOKING POLICY ────────────────────────────────────────────────────────────────────────
+//
+// computePetFee above answers "what does this cost?". This answers "may this be booked at all?" —
+// the cap, the rules affirmation, and the pet-site restriction.
+//
+// WHY THIS IS HERE AND NOT IN lib/bookability.ts. checkBookability is the natural chokepoint and
+// was the first choice, but its settings read names its columns explicitly, and it gates EVERY
+// booking on both routes. The pet columns are deliberately absent from live tenants
+// (resonation-admin/db/2026-08-18-pet-fee.sql), and PostgREST errors on a column it cannot find —
+// so naming a pet column there would stop all bookings on every un-migrated park. The same is
+// true of the named `sites` select in /api/payment.
+//
+// So the DECISION lives here, pure and shared, and each route feeds it from its own tolerant
+// reads. One implementation, no drift, and no landmine in the universal chokepoint. The cost is
+// that the routes must remember to call it — which is what the route tests are for.
+
+export type PetPolicySettings = PetFeeSettings & {
+  pet_rules_require_affirmation?: boolean | null
+  service_animal_allowed?: boolean | null
+}
+
+export type PetBookingRequest = {
+  /** What the guest declared. Untrusted. */
+  petCount: number
+  isServiceAnimal?: boolean
+  petRulesAffirmed?: boolean
+  /** The chosen site's pet_friendly flag. `undefined` when the tenant has no such column. */
+  sitePetFriendly?: boolean | null
+  /** Staff waiver of the pet-site restriction ONLY. Never set by the public path. */
+  allowPetSiteOverride?: boolean
+}
+
+export type PetBookingRefusal = {
+  ok: false
+  reason: 'pet-max' | 'pet-rules' | 'pet-site'
+  message: string
+}
+
+export type PetBookingVerdict =
+  | {
+      ok: true
+      /** Pets to charge for and to STORE. 0 for a service animal — it is not a pet. */
+      petCount: number
+      /**
+       * The service-animal waiver as RESOLVED, which is not the same as what was declared: a park
+       * that has switched `service_animal_allowed` off has opted out of waiving, so a declared
+       * service animal is treated as an ordinary pet — fee, cap and site restriction all apply.
+       *
+       * computePetFee deliberately does not know about that setting; it waives whenever it is told
+       * the animal is a service animal. Resolving it here keeps the calculator simple and keeps
+       * the policy in one place. Pass THIS value to computePetFee, never the raw request field.
+       */
+      isServiceAnimal: boolean
+    }
+  | PetBookingRefusal
+
+/**
+ * Whether a booking carrying pets may proceed.
+ *
+ * REFUSES rather than silently adjusting. Clamping a party of five dogs to the park's maximum of
+ * two and charging for two would bill a guest for a booking they did not ask for and let them
+ * arrive with animals the park never agreed to — so an over-cap request is an error, not a
+ * discount. Same for a missing affirmation: quietly zeroing the fee would let a crafted request
+ * dodge the charge by omitting a checkbox.
+ */
+export function checkPetBooking(
+  settings: PetPolicySettings,
+  request: PetBookingRequest,
+): PetBookingVerdict {
+  // A park that does not run the feature has no pet policy to enforce and records no pets. This
+  // is also the state of every un-migrated tenant, where `pets_enabled` is not merely false but
+  // absent — so the whole pet path is dead there.
+  if (!settings?.pets_enabled) {
+    return { ok: true, petCount: 0, isServiceAnimal: false }
+  }
+
+  // The waiver applies only if the park honours it. See the note on the field above.
+  const isServiceAnimal = !!request.isServiceAnimal && settings.service_animal_allowed !== false
+
+  // A service animal is not a pet: no fee, no cap, no rules affirmation, and no site restriction.
+  // Checked first so none of the gates below can refuse one.
+  if (isServiceAnimal) {
+    return { ok: true, petCount: 0, isServiceAnimal: true }
+  }
+
+  const requested = wholeCount(request.petCount)
+  if (requested === 0) {
+    return { ok: true, petCount: 0, isServiceAnimal: false }
+  }
+
+  // The cap. 0 / null / absent all mean NO limit.
+  const cap = wholeCount(settings.pet_max)
+  if (cap > 0 && requested > cap) {
+    return {
+      ok: false,
+      reason: 'pet-max',
+      message: cap === 1
+        ? 'This campground allows 1 pet per site.'
+        : `This campground allows up to ${cap} pets per site.`,
+    }
+  }
+
+  if (settings.pet_rules_require_affirmation && !request.petRulesAffirmed) {
+    return {
+      ok: false,
+      reason: 'pet-rules',
+      message: 'Please agree to the pet rules before booking.',
+    }
+  }
+
+  // The site restriction. `undefined` means the tenant has no pet_friendly column at all, which
+  // cannot happen while pets_enabled is true on a properly migrated tenant — but if it somehow
+  // does, refusing every site would take the park offline, so an absent column is treated as
+  // "unrestricted" rather than "forbidden". A column that is present and false is a real refusal.
+  if (request.sitePetFriendly === false && !request.allowPetSiteOverride) {
+    return {
+      ok: false,
+      reason: 'pet-site',
+      message: 'That site does not allow pets. Please choose a pet-friendly site.',
+    }
+  }
+
+  return { ok: true, petCount: requested, isServiceAnimal: false }
 }
