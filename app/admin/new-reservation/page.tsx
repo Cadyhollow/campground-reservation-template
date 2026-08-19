@@ -13,6 +13,7 @@ import { useSeasonOverride, SeasonOverrideNotice } from '@/app/components/Season
 // prerender.
 const supabase = createBrowserSupabase()
 import { computePricing, siteFitsCamper } from '@/lib/pricing'
+import { PetInputs, usePetInputs, petBookingFields, emptyPetForm, type PetFormState } from '@/app/components/PetInputs'
 import type { PricingSite, PricingSettings, PricingFee, PricingRule } from '@/lib/pricing'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import { loadSquarePayments } from '@/lib/square-card-client'
@@ -203,6 +204,7 @@ function NewReservationWizardInner() {
     }
   }
 
+  const [petForm, setPetForm] = useState<PetFormState>(emptyPetForm)
   const selectedSite = sites.find(s => s.id === form.site_id) || null
 
   const pricing = useMemo(() => {
@@ -225,8 +227,16 @@ function NewReservationWizardInner() {
       pricingRules: pricingRules as PricingRule[],
       earlyCheckin: form.earlyCheckin,
       lateCheckout: form.lateCheckout,
+      // lib/pricing.ts has been pet-aware since the money-engine change, so passing these makes
+      // the wizard's total include the pet fee by construction rather than by a second sum.
+      petCount: petForm.petCount,
+      isServiceAnimal: petForm.isServiceAnimal,
     })
-  }, [settings, fees, addons, pricingRules, selectedSite, form])
+  }, [settings, fees, addons, pricingRules, selectedSite, form, petForm])
+
+  const petState = usePetInputs(
+    settings as any, petForm, setPetForm, selectedSite as any, pricing?.nights || 0,
+  )
 
   const available = useMemo(
     () => sites.filter(s => !unavailableIds.has(s.id)),
@@ -276,6 +286,12 @@ function NewReservationWizardInner() {
     }
     if (!season.cleared) {
       setError('Some nights of this stay are outside your open season. Go back to Dates & Site and tick "Book outside the open season" to continue.')
+      return
+    }
+    // UX only — /api/manual-booking refuses each of these regardless. Stopped here so the
+    // operator is told at the control they can act on rather than after pressing Save.
+    if (petState.blockedReason) {
+      setError(petState.blockedReason)
       return
     }
     const paidCents = form.amount_paid ? Math.round(parseFloat(form.amount_paid) * 100) : 0
@@ -343,6 +359,7 @@ function NewReservationWizardInner() {
           payment_method: form.payment_method === 'terminal' ? 'card' : form.payment_method, // terminal is a card tender for reporting
           notes: overrideNote,
           addonItems,
+          ...petBookingFields(petState),
         }),
       })
       const data = await res.json()
@@ -685,6 +702,7 @@ function NewReservationWizardInner() {
                 siteClearedNote={siteClearedNote}
                 horizon={horizon}
                 season={season}
+                petState={petState}
               />
             )}
             {step === 2 && (
@@ -729,7 +747,7 @@ function Stepper({ step }: { step: Step }) {
   )
 }
 
-function StepDatesSite({ form, set, available, camper, onSelectSite, siteClearedNote, horizon, season }: any) {
+function StepDatesSite({ form, set, available, camper, onSelectSite, siteClearedNote, horizon, season, petState }: any) {
   const rv = available.filter((s: any) => s.site_type === 'rv_site')
   const fittingRv = rv.filter((s: any) => siteFitsCamper(s, camper).fits)
   const otherRv = rv.filter((s: any) => !siteFitsCamper(s, camper).fits)
@@ -774,6 +792,8 @@ function StepDatesSite({ form, set, available, camper, onSelectSite, siteCleared
           <input type="date" value={form.departure_date} onChange={e => set({ departure_date: e.target.value })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
         </label>
       </div>
+
+      <div className="mb-4"><PetInputs state={petState} /></div>
 
       <div className="border border-gray-200 rounded-lg p-3.5 mb-4">
         <div className="text-[13px] font-medium mb-0.5">Camper details</div>
