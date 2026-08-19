@@ -88,10 +88,6 @@ const defaultSettings = {
   accent_color: '#2D6A4F',
   theme: 'light',
   show_site_map: false,
-  sender_name: '',
-  sender_email: '',
-  reply_to_email: '',
-  use_custom_sender: false,
   season_start: 'May 1',
   season_end: 'October 11',
   closed_season_message: 'We are closed for the season. We look forward to welcoming you back next year!',
@@ -214,10 +210,6 @@ export default function SettingsPage() {
         accent_color: data.accent_color || '#2D6A4F',
         theme: data.theme === 'dark' ? 'dark' : 'light',
         show_site_map: data.show_site_map || false,
-              sender_name: data.sender_name || '',
-        sender_email: data.sender_email || '',
-        reply_to_email: data.reply_to_email || '',
-        use_custom_sender: data.use_custom_sender || false,
         season_start: data.season_start || 'May 1',
         season_end: data.season_end || 'October 11',
         closed_season_message: data.closed_season_message || 'We are closed for the season. We look forward to welcoming you back next year!',
@@ -571,10 +563,6 @@ export default function SettingsPage() {
       // one unknown column fails the whole update and takes every other setting with it.
       ...(hasHeroColumn ? { hero_image_url: form.hero_image_url } : {}),
       show_site_map: form.show_site_map,
-      sender_name: form.sender_name,
-      sender_email: form.sender_email,
-      reply_to_email: form.reply_to_email,
-      use_custom_sender: form.use_custom_sender,
       season_start: form.season_start,
       season_end: form.season_end,
       closed_season_message: form.closed_season_message,
@@ -797,30 +785,31 @@ export default function SettingsPage() {
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Phone</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_phone} onChange={e => setForm({ ...form, park_phone: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Address</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_address} onChange={e => setForm({ ...form, park_address: e.target.value })} /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Website</label><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" value={form.park_website} onChange={e => setForm({ ...form, park_website: e.target.value })} /></div>
-            <div><label className="block text-sm font-medium text-gray-700 mb-1">Sender Name</label><p className="text-xs text-gray-400 mb-1">Name guests see in their inbox</p><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Cady Hollow Campground" value={form.sender_name} onChange={e => setForm({ ...form, sender_name: e.target.value })} /></div>
 
-            {/* Sender Email — Summit only */}
-            {plan === 'summit' && (
-              <div><label className="block text-sm font-medium text-gray-700 mb-1">Sender Email</label><p className="text-xs text-gray-400 mb-1">Must be verified in Resend</p><input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. bookings@cadyhollow.com" value={form.sender_email} onChange={e => setForm({ ...form, sender_email: e.target.value })} /></div>
-            )}
+            {/* THE SENDER FIELDS THAT USED TO BE HERE DID NOTHING — removed 2026-08-19.
+                "Sender Email", "Reply-To Email" and a "Use Custom Sender" switch were collected
+                here and written to `settings`, and NO SENDING CODE EVER READ THEM. An owner could
+                type a sender address, save it successfully, and every email would keep going out
+                from the same place. A control that accepts input and silently discards it is
+                worse than no control.
 
-            <div><label className="block text-sm font-medium text-gray-700 mb-1">Reply-To Email</label><p className="text-xs text-gray-400 mb-1">Where guest replies go</p><input type="email" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g. hello@cadyhollow.com" value={form.reply_to_email} onChange={e => setForm({ ...form, reply_to_email: e.target.value })} /></div>
+                How sending actually works, and why it should stay this way: every email goes out
+                as `"{park_name}" <RESEND_FROM_EMAIL>` with Reply-To set to `settings.park_email`.
+                The address is a ResoNation-owned one, the same for every client; the park's name
+                is what a guest sees, and a reply reaches the park. That is deliberate — a sending
+                domain has to be DNS-verified with the provider, so verifying ONE ResoNation domain
+                covers every client forever, instead of asking each park owner to add DNS records
+                to their own domain before their first confirmation email can go out. One warmed
+                domain also lands in inboxes more reliably than twenty cold ones.
 
-            {/* Use Custom Sender — Summit only */}
-            {plan === 'summit' && (
-              <div className="md:col-span-2 flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
-                <div>
-                  <p className="text-sm font-medium text-gray-900">Use Custom Sender</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{form.use_custom_sender ? 'Emails send from your custom sender email above.' : 'Emails send from the default bookings address.'}</p>
-                </div>
-                <button type="button" onClick={() => setForm({ ...form, use_custom_sender: !form.use_custom_sender })}
-                  className="relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ml-4"
-                  style={{ backgroundColor: form.use_custom_sender ? '#15803d' : '#d1d5db' }}>
-                  <span className="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200"
-                    style={{ transform: form.use_custom_sender ? 'translateX(28px)' : 'translateX(0px)' }} />
-                </button>
-              </div>
-            )}
+                The park's own address is still collected — it is the "Email" field above
+                (`park_email`), which is what Reply-To uses and what guests see as the contact.
+
+                THE DATABASE COLUMNS ARE LEFT IN PLACE (sender_email, reply_to_email,
+                use_custom_sender, sender_name). Dropping columns is not an additive change and
+                would need a migration on every tenant to remove something already inert. If
+                per-client sending domains are ever built, they are still here to use. */}
+
 
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Brand Color</label><div className="flex items-center gap-3"><input type="color" className="w-12 h-10 rounded border border-gray-200 cursor-pointer" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /><input className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" value={form.accent_color} onChange={e => setForm({ ...form, accent_color: e.target.value })} /></div></div>
 
