@@ -106,8 +106,20 @@ export async function getBookingPageData(
     .eq('is_active', true)
     .order('display_order')
 
-  const [{ data: settings }, { data: fees }, { data: addons }] = await Promise.all([
-    settingsQuery, feesQuery, addonsQuery,
+  // THE PET SETTINGS COME FROM A SECOND, TOLERANT READ — deliberately, rather than by adding
+  // pet_* to the named list above.
+  //
+  // That list is named on purpose: the browser used to be handed every column of a table it
+  // displays a handful of fields from, and narrowing it was a security fix worth keeping. But the
+  // pet columns are absent from un-migrated tenants, and PostgREST errors on a column it cannot
+  // find — naming one up there would take /book down entirely on every live park.
+  //
+  // select('*') here is safe because nothing from this row is forwarded wholesale: only the six
+  // pet fields below are picked out, so the browser payload stays as small as it was.
+  const petQuery = supabase.from('settings').select('*').limit(1).single()
+
+  const [{ data: settings }, { data: fees }, { data: addons }, { data: petRow }] = await Promise.all([
+    settingsQuery, feesQuery, addonsQuery, petQuery,
   ])
 
   // Turnover, by the same two comparisons the browser made — so what the checkbox offers is what
@@ -125,8 +137,26 @@ export async function getBookingPageData(
     lateBlocked = (turnover || []).some((r: { arrival_date: string }) => r.arrival_date === departure)
   }
 
+  // Merged onto the settings the form already receives, so BookingForm reads one object. Absent
+  // entirely on a tenant without the columns, which is exactly how the form should see it: no pet
+  // section, no pet fee, nothing to answer.
+  const petSettings = petRow && 'pets_enabled' in petRow
+    ? {
+        pets_enabled: petRow.pets_enabled,
+        pet_fee_amount: petRow.pet_fee_amount,
+        pet_fee_per_night: petRow.pet_fee_per_night,
+        pet_fee_per_pet: petRow.pet_fee_per_pet,
+        pet_max: petRow.pet_max,
+        pet_rules_text: petRow.pet_rules_text,
+        pet_rules_require_affirmation: petRow.pet_rules_require_affirmation,
+        pet_fee_taxable: petRow.pet_fee_taxable,
+        pet_fee_surcharged: petRow.pet_fee_surcharged,
+        service_animal_allowed: petRow.service_animal_allowed,
+      }
+    : {}
+
   return {
-    settings: settings ?? null,
+    settings: settings ? { ...settings, ...petSettings } : (Object.keys(petSettings).length ? petSettings : null),
     fees: (fees || []) as BookFee[],
     addons: (addons || []) as BookAddon[],
     earlyBlocked,

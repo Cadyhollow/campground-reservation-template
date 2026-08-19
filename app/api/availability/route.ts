@@ -41,17 +41,28 @@ export async function GET(request: NextRequest) {
   }
   const requestedAdults = parseGuests(searchParams.get('adults'))
   const requestedChildren = parseGuests(searchParams.get('children'))
+  // Pets the guest says they are bringing, and whether it is a service animal. Display and
+  // filtering only — /api/payment re-decides both before charging anything.
+  const requestedPets = parseGuests(searchParams.get('pets')) ?? 0
+  const isServiceAnimal = searchParams.get('serviceAnimal') === '1'
 
   if (!arrival || !departure) {
     return NextResponse.json({ error: 'Missing dates' }, { status: 400 })
   }
 
-  // NAMED COLUMNS. The four occupancy columns are original to the schema — they are not a new
-  // migration — but they must stay in this list: PostgREST errors on a column it cannot find, and
-  // this read gates the whole search.
+  // select('*'), NOT a named column list — and the reason changed with the pet feature.
+  //
+  // Naming columns was fine while every column named was in every tenant's table. The pet columns
+  // are not: they are deliberately absent from live tenants, and PostgREST errors on a column it
+  // cannot find, which would take the whole search down on every un-migrated park. With '*' a
+  // missing column is simply absent from the row and the readers fall back to their defaults —
+  // the same reasoning lib/settings-server.ts already records.
+  //
+  // Safe to widen here specifically because this row is used only inside this route. It is never
+  // forwarded to the browser; only the derived figures below are.
   const { data: settings } = await supabase
     .from('settings')
-    .select('season_start, season_end, closed_season_message, max_advance_days, base_occupancy_adults, base_occupancy_children, extra_adult_fee, extra_child_fee')
+    .select('*')
     .limit(1)
     .single()
 
@@ -106,6 +117,21 @@ export async function GET(request: NextRequest) {
 
   if (siteType && siteType !== 'all') {
     query = query.eq('site_type', siteType)
+  }
+
+  // ── THE ONE-DIRECTIONAL PET FILTER ──────────────────────────────────────────────────────────
+  //
+  // A guest bringing pets sees ONLY pet-friendly sites. A guest bringing none sees everything —
+  // the filter never runs in that direction, so marking a site pet-friendly never costs it a
+  // booking from someone without a dog.
+  //
+  // A service animal is not a pet and is exempt: it may book any site, so no filter is applied.
+  //
+  // Guarded on pets_enabled, which is absent (falsy) on an un-migrated tenant — so `pet_friendly`
+  // is never named in a query against a table that has no such column.
+  const petFilterActive = !!settings?.pets_enabled && requestedPets > 0 && !isServiceAnimal
+  if (petFilterActive) {
+    query = query.eq('pet_friendly', true)
   }
 
   const { data: sites, error } = await query
@@ -213,5 +239,21 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ sites: sitesWithPricing, closed: false, siteCategories })
+  // The park's pet policy, so the search page and /book can render the question, the limit and
+  // the rules without a second round trip — and so a guest who filtered themselves down to
+  // nothing is told WHY rather than seeing an empty list that reads as "we are full".
+  const pets = settings?.pets_enabled
+    ? {
+        enabled: true,
+        max: settings.pet_max || 0,
+        rulesText: settings.pet_rules_text || '',
+        requireAffirmation: !!settings.pet_rules_require_affirmation,
+        serviceAnimalAllowed: settings.service_animal_allowed !== false,
+        // True when the pet filter is the reason the list is empty. Distinct from `closed` and
+        // from a genuinely full park.
+        filteredToNothing: petFilterActive && sitesWithPricing.length === 0,
+      }
+    : { enabled: false }
+
+  return NextResponse.json({ sites: sitesWithPricing, closed: false, siteCategories, pets })
 }
