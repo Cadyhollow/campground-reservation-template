@@ -61,6 +61,7 @@ const navGroups: NavGroup[] = [
     icon: '👥',
     items: [
       { name: 'Guest Folios', href: '/admin/folios', icon: '🗂️', minPlan: 'summit' as const },
+      { name: 'Seasonals', href: '/admin/seasonals', icon: '⛺', minPlan: 'summit' as const },
       { name: 'Guest Directory', href: '/admin/guests', icon: '📇' },
       { name: 'Send Email', href: '/admin/send-email', icon: '📣', minPlan: 'ridgeline' as const },
     ],

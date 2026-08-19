@@ -8,10 +8,18 @@ import { requireRole } from '@/lib/require-role'
 // Re-emails the EXISTING packet link. Does NOT regenerate tokens, re-render text,
 // or touch document_text — a resent email points at the same frozen documents.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  // STAFF, deliberately kept where Cady had it (decided 2026-08-19). Resending re-mails an
-  // ALREADY FROZEN packet and writes nothing at all — the front desk should be able to help a
-  // camper who lost the link without finding a manager.
-  const denied = await requireRole(request, 'staff')
+  // MANAGER. THIS REVERSES AN EARLIER DECISION, DELIBERATELY AND WITH THE REASON RECORDED.
+  //
+  // Resend was first kept at 'staff' — it re-mails an ALREADY FROZEN packet and writes nothing,
+  // so letting the front desk help a camper who lost their link cost nothing. What that missed is
+  // that Send and Resend share ONE BUTTON SLOT on the camper's page: Send while the contract is a
+  // draft, Resend once it has gone out. There is no other surface for either.
+  //
+  // So a staff-level resend had nowhere to live unless the seasonals screen were opened to staff.
+  // Presented with that, Charissa chose manager-only for the whole area (2026-08-19). Leaving the
+  // ROUTE at staff would have been a gate that nothing enforces and nobody can reach — worse than
+  // either answer. Route and screen now agree.
+  const denied = await requireRole(request, 'manager')
   if (denied) return denied
 
   try {
