@@ -248,45 +248,123 @@ input, select, textarea {
    Used by app/components/PosCategoryTiles.tsx on the three POS pickers.
 
    Here rather than in a <style> tag inside the component: :hover and :focus-visible cannot be
-   inline styles, and a stylesheet is the conventional home for rules three screens share. */
+   inline styles, and a stylesheet is the conventional home for rules three screens share.
+
+   STYLING ONLY. The tile's base colour still arrives as an inline background-color, hashed from
+   the category name — nothing here picks or reorders a colour. */
 .pos-cat-tile {
   position: relative;
+  /* A new stacking context, so the watermark letter's z-index cannot escape the tile and paint
+     over a neighbour. */
+  isolation: isolate;
   aspect-ratio: 1 / 1;
   border: none;
-  border-radius: 16px;
+  border-radius: 18px;
+  /* Clips the oversized letter to the rounded corner — the watermark effect depends on it. */
+  overflow: hidden;
   color: #fff;
   cursor: pointer;
+
+  /* Content sits bottom-left now: the NAME is the label a person reads, and the letter behind it
+     is decoration. Centring both made them compete. */
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 10px 8px;
-  text-align: center;
-  transition: transform 0.12s ease, filter 0.12s ease;
+  justify-content: flex-end;
+  align-items: flex-start;
+  padding: 14px;
+
+  /* A faint sheen laid OVER the category colour — background-image, never background-color, so
+     the hashed colour underneath is untouched. */
+  background-image: linear-gradient(165deg, rgba(255,255,255,0.12), rgba(0,0,0,0.14));
+
+  /* Top-edge highlight plus a soft elevation, so the tile reads as a physical key. */
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.20),
+    0 1px 2px rgba(20,30,25,0.12),
+    0 8px 18px rgba(20,30,25,0.17);
+
+  transition: transform 0.09s ease, box-shadow 0.09s ease;
 }
-.pos-cat-tile:hover { filter: brightness(1.08); }
-.pos-cat-tile:active { transform: scale(0.97); }
-.pos-cat-tile:focus-visible {
-  outline: 3px solid #ffffff;
-  outline-offset: -6px;
-  box-shadow: 0 0 0 3px rgba(0,0,0,0.45);
+
+.pos-cat-tile:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.22),
+    0 2px 4px rgba(20,30,25,0.14),
+    0 14px 26px rgba(20,30,25,0.22);
 }
-.pos-cat-mono {
-  font-size: 38px;
-  font-weight: 800;
+
+/* The press dips the tile back down and turns the elevation inward — a key being pushed. */
+.pos-cat-tile:active {
+  transform: translateY(0);
+  box-shadow:
+    inset 0 2px 6px rgba(0,0,0,0.24),
+    0 1px 2px rgba(20,30,25,0.14);
+}
+
+/* THE WATERMARK LETTER. Decorative only — aria-hidden in the component, and pointer-events:none
+   so it can never intercept a tap meant for the tile.
+
+   OPACITY 0.12, NOT 0.16. The letter lightens whatever it sits behind, and on the smallest tiles a
+   two-line name can overlap it — white text over a lightened tile loses contrast. Dropping to 0.12
+   takes the palette colours that fall below WCAG AA in that overlap from EIGHT to THREE
+   (#1f7a86, #2f6f6a, #94631a), and the worst case from 3.72:1 to 4.01:1.
+
+   It does NOT make it always-AA, and lowering the opacity further cannot: all twelve colours only
+   clear 4.5:1 at about 0.058, which is close to invisible and would lose the watermark entirely.
+   The route to always-AA is geometric — stop the name and the glyph overlapping — not optical.
+   See the note in app/components/PosCategoryTiles.tsx. */
+.pos-cat-ghost {
+  position: absolute;
+  top: -14px;
+  left: -6px;
+  z-index: 1;
+  pointer-events: none;
+  font-size: 118px;
   line-height: 1;
-  letter-spacing: 0.02em;
+  font-weight: 800;
+  letter-spacing: -2px;
+  color: rgba(255,255,255,0.12);
 }
+
+/* THE NAME — now the prominent element, sitting above the watermark. */
 .pos-cat-name {
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.25;
-  /* Two lines, then ellipsis — a long category name must not stretch the square. */
+  position: relative;
+  z-index: 2;
+  text-align: left;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #fff;
+  /* Carries the name over the lightest part of the watermark without tinting the text itself. */
+  text-shadow: 0 1px 2px rgba(0,0,0,0.18);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   word-break: break-word;
   width: 100%;
+}
+
+/* THE FOCUS RING, drawn as a pseudo-element rather than an outline.
+   An outline is painted with the element's own background, so the watermark letter at z-index 1
+   would sit on top of it and eat the ring. This rides at z-index 3, above everything. */
+.pos-cat-tile:focus-visible { outline: none; }
+.pos-cat-tile:focus-visible::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  z-index: 3;
+  pointer-events: none;
+  border-radius: 12px;
+  border: 3px solid #ffffff;
+  box-shadow: 0 0 0 3px rgba(0,0,0,0.45);
+}
+
+/* Someone who has asked their system for less motion gets the depth and the watermark, but
+   nothing that moves. */
+@media (prefers-reduced-motion: reduce) {
+  .pos-cat-tile { transition: none; }
+  .pos-cat-tile:hover,
+  .pos-cat-tile:active { transform: none; }
 }
