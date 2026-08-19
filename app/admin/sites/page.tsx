@@ -24,6 +24,8 @@ type Site = {
   display_order: number
   photo_url: string | null
   photo_url_2: string | null
+  /** Optional: tenants that predate the pet migration have no such column. */
+  pet_friendly?: boolean
 }
 
 type Category = {
@@ -43,6 +45,7 @@ const emptySite = {
   display_order: 0,
   photo_url: null as string | null,
   photo_url_2: null as string | null,
+  pet_friendly: false,
 }
 
 export default function SitesPage() {
@@ -60,13 +63,27 @@ export default function SitesPage() {
   const [photo2File, setPhoto2File] = useState<File | null>(null)
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
   const [siteCategories, setSiteCategories] = useState<Record<string, number[]>>({})
+  // Whether this tenant's `sites` table has pet_friendly at all. The pet migration was
+  // deliberately not applied to live tenants (resonation-admin/db/2026-08-18-pet-fee.sql), and
+  // writing a column that does not exist fails the WHOLE site save — which would stop an owner
+  // editing a rate. Detected from a loaded row, so it self-activates once a tenant is migrated.
+  const [hasPetColumn, setHasPetColumn] = useState(false)
+  // The park's master switch, read only so this page can tell whether the pet controls are worth
+  // showing and whether the "no pet-friendly sites" warning is relevant.
+  const [petsEnabled, setPetsEnabled] = useState(false)
 
   useEffect(() => { fetchSites(); fetchCategories() }, [])
 
   async function fetchSites() {
     const { data } = await supabase.from('sites').select('*').order('display_order')
     setSites(data || [])
+    if (data && data.length > 0) setHasPetColumn('pet_friendly' in data[0])
     setLoading(false)
+
+    // select('*'), not a named column list: on a tenant without the pet columns a named
+    // `pets_enabled` would make PostgREST error and this read return nothing.
+    const { data: st } = await supabase.from('settings').select('*').limit(1).single()
+    setPetsEnabled(!!st?.pets_enabled)
     // Fetch site_categories for all sites
     const { data: sc } = await supabase.from('site_categories').select('*')
     if (sc) {
@@ -116,6 +133,7 @@ export default function SitesPage() {
       display_order: site.display_order,
       photo_url: site.photo_url || null,
       photo_url_2: site.photo_url_2 || null,
+      pet_friendly: site.pet_friendly || false,
     })
     setSelectedCategories(siteCategories[site.id] || [])
     setPhoto1File(null)
@@ -150,6 +168,9 @@ export default function SitesPage() {
       display_order: form.display_order,
       photo_url,
       photo_url_2,
+      // Guarded — see hasPetColumn. Spreads to nothing on a tenant without the column, so the
+      // save behaves exactly as it did before the pet feature existed.
+      ...(hasPetColumn ? { pet_friendly: form.pet_friendly } : {}),
     }
 
     let siteId = editingSite?.id
@@ -246,6 +267,24 @@ export default function SitesPage() {
         </div>
       </div>
 
+      {/* ── THE SILENT-TRAP GUARD ────────────────────────────────────────────────────────────
+          sites.pet_friendly defaults to FALSE, so the moment an owner switches pets on in
+          Settings, every site is pet-hostile until they mark some. Without this banner the only
+          symptom is guests with pets seeing "no sites available" — which looks like the park
+          being full, not like a setting nobody finished. That is the whole reason this exists.
+
+          Shown only when pets are actually on and nothing is marked, so it disappears the
+          instant it stops being true. */}
+      {hasPetColumn && petsEnabled && sites.length > 0 && !sites.some(s => s.pet_friendly) && (
+        <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-semibold text-amber-900">Pets are enabled, but no sites are marked pet-friendly.</p>
+          <p className="text-sm text-amber-800 mt-1">
+            Guests bringing pets will see <strong>no availability at all</strong> until at least one site is marked.
+            Edit a site below and switch on &ldquo;Allows pets&rdquo;.
+          </p>
+        </div>
+      )}
+
       {/* Category Manager */}
       {showCategoryForm && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
@@ -331,6 +370,15 @@ export default function SitesPage() {
               <button type="button" onClick={() => setForm({ ...form, is_available: !form.is_available })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.is_available ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}><span style={{ position: 'absolute', top: '3px', left: form.is_available ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} /></button>
               <label htmlFor="is_available" className="text-sm font-medium text-gray-700">Available for booking</label>
             </div>
+            {/* Hidden entirely until the tenant has the column AND the park charges for pets —
+                a park with pets off has no use for a per-site pet flag, and offering one would
+                imply the feature is active when it is not. */}
+            {hasPetColumn && petsEnabled && (
+              <div className="flex items-center gap-3">
+                <button type="button" onClick={() => setForm({ ...form, pet_friendly: !form.pet_friendly })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.pet_friendly ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}><span style={{ position: 'absolute', top: '3px', left: form.pet_friendly ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} /></button>
+                <label className="text-sm font-medium text-gray-700">Allows pets</label>
+              </div>
+            )}
             <div className="md:col-span-2 lg:col-span-3">
               <label className="block text-sm font-medium text-gray-700 mb-1">Description (optional)</label>
               <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Any extra details customers should know..." value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} />
@@ -413,6 +461,11 @@ export default function SitesPage() {
                     {ampLabel(site.amp_service)} · {hookupLabel(site.hookups)}{site.max_rv_length ? ` · Max ${site.max_rv_length}ft` : ''}
                   </p>
                   <p className="text-sm font-semibold text-green-700 mt-0.5">${(site.base_rate / 100).toFixed(2)}/night</p>
+                  {/* Only meaningful while pets are on; shown per-site so the owner can scan the
+                      list and see which sites a guest with a dog will actually be offered. */}
+                  {hasPetColumn && petsEnabled && site.pet_friendly && (
+                    <span className="inline-block text-xs bg-amber-50 text-amber-800 border border-amber-200 rounded-full px-2 py-0.5 mt-1">🐾 Allows pets</span>
+                  )}
                   {siteCategories[site.id]?.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1">
                       {siteCategories[site.id].map(catId => {
