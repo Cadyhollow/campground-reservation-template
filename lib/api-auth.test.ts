@@ -161,6 +161,24 @@ const GATED: [string, string, string][] = [
   // Seasonal back-port, step 2. Staff-gated AND Summit-gated in the handler; the role gate is
   // what this suite asserts.
   ['POST', '/api/guest-notes', 'staff'],
+
+  // Seasonal back-port, step 3. Every one is ALSO Summit-gated in its handler; this suite asserts
+  // the ROLE gate, which is the half that must hold on every plan.
+  //
+  // The split is deliberate (decided 2026-08-19): reads and the guest record are staff, anything
+  // that creates or changes a CONTRACT is manager — and `resend` stays at staff because it
+  // re-mails an already frozen packet and writes nothing.
+  ['GET',   '/api/seasonals/list', 'staff'],
+  ['GET',   '/api/seasonals/unsigned-count', 'staff'],
+  ['POST',  '/api/seasonals/guest', 'staff'],
+  ['GET',   '/api/seasonals/guest/00000000-0000-0000-0000-000000000000', 'staff'],
+  ['POST',  '/api/seasonal-contracts/[id]/resend'.replace('[id]', '00000000-0000-0000-0000-000000000000'), 'staff'],
+
+  ['POST',  '/api/seasonal-contracts/create', 'manager'],
+  ['POST',  '/api/seasonal-contracts/clone', 'manager'],
+  ['PATCH', '/api/seasonal-contracts/00000000-0000-0000-0000-000000000000', 'manager'],
+  ['POST',  '/api/seasonal-contracts/00000000-0000-0000-0000-000000000000/send', 'manager'],
+  ['POST',  '/api/seasonal-contracts/00000000-0000-0000-0000-000000000000/sign-now', 'manager'],
   ['POST', '/api/receipt', 'staff'],
   ['POST', '/api/send-waiver', 'staff'],
   ['POST', '/api/sync-guests', 'staff'],
