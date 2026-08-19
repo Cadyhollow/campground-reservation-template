@@ -269,6 +269,16 @@ test('a Staff session reaches a staff-level route', { skip: skipStaff }, async (
 // unauthenticated camper is turned away at the door.
 const PUBLIC: [string, string][] = [
   ['POST', '/api/payment'],
+  // Seasonal back-port, step 4. The camper's signing packet — reached from an emailed link, by
+  // someone who has no admin login and never will. These are the ONLY unauthenticated surface the
+  // seasonal feature has, so they are asserted here deliberately: a future sweep that gated all
+  // of /api/* would silently stop every seasonal camper signing their agreement, and this is what
+  // would fail instead.
+  //
+  // They are addressed by packet_id, a randomUUID() minted at freeze time — a bearer link, the
+  // same model as the existing /api/sign/[token] flow.
+  ['GET',  '/api/packet/00000000-0000-0000-0000-000000000000'],
+  ['POST', '/api/packet/00000000-0000-0000-0000-000000000000/sign'],
   ['GET', '/api/availability?arrival=2026-08-18&departure=2026-08-20'],
   ['GET', '/api/cancellation-policy?arrival=2026-08-18'],
 ]
