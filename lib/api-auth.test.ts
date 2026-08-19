@@ -157,6 +157,7 @@ const GATED: [string, string, string][] = [
   ['POST', '/api/guests/balances', 'staff'],
   ['POST', '/api/manual-booking', 'staff'],
   ['GET', '/api/profiles/assignable', 'staff'],
+  ['POST', '/api/tasks/generate', 'staff'],
   ['POST', '/api/receipt', 'staff'],
   ['POST', '/api/send-waiver', 'staff'],
   ['POST', '/api/sync-guests', 'staff'],

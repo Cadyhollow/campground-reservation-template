@@ -26,6 +26,7 @@ type Site = {
   photo_url_2: string | null
   /** Optional: tenants that predate the pet migration have no such column. */
   pet_friendly?: boolean
+  needs_prep?: boolean
 }
 
 type Category = {
@@ -46,6 +47,7 @@ const emptySite = {
   photo_url: null as string | null,
   photo_url_2: null as string | null,
   pet_friendly: false,
+  needs_prep: false,
 }
 
 export default function SitesPage() {
@@ -68,9 +70,16 @@ export default function SitesPage() {
   // writing a column that does not exist fails the WHOLE site save — which would stop an owner
   // editing a rate. Detected from a loaded row, so it self-activates once a tenant is migrated.
   const [hasPetColumn, setHasPetColumn] = useState(false)
+  // Whether this tenant's `sites` table has needs_prep — the phase-2 To-Do column. Exactly the
+  // same reasoning as hasPetColumn directly above: the phase-2 migration is deliberately not
+  // applied to live tenants, and writing a column that does not exist fails the WHOLE site save.
+  const [hasPrepColumn, setHasPrepColumn] = useState(false)
   // The park's master switch, read only so this page can tell whether the pet controls are worth
   // showing and whether the "no pet-friendly sites" warning is relevant.
   const [petsEnabled, setPetsEnabled] = useState(false)
+  // The park's check-in prep master switch, read only so this page can tell whether the
+  // "no sites marked" warning is relevant. Set from the same settings read as petsEnabled.
+  const [checkinPrepEnabled, setCheckinPrepEnabled] = useState(false)
 
   useEffect(() => { fetchSites(); fetchCategories() }, [])
 
@@ -78,12 +87,14 @@ export default function SitesPage() {
     const { data } = await supabase.from('sites').select('*').order('display_order')
     setSites(data || [])
     if (data && data.length > 0) setHasPetColumn('pet_friendly' in data[0])
+    if (data && data.length > 0) setHasPrepColumn('needs_prep' in data[0])
     setLoading(false)
 
     // select('*'), not a named column list: on a tenant without the pet columns a named
     // `pets_enabled` would make PostgREST error and this read return nothing.
     const { data: st } = await supabase.from('settings').select('*').limit(1).single()
     setPetsEnabled(!!st?.pets_enabled)
+    setCheckinPrepEnabled(!!st?.checkin_prep_enabled)
     // Fetch site_categories for all sites
     const { data: sc } = await supabase.from('site_categories').select('*')
     if (sc) {
@@ -134,6 +145,7 @@ export default function SitesPage() {
       photo_url: site.photo_url || null,
       photo_url_2: site.photo_url_2 || null,
       pet_friendly: site.pet_friendly || false,
+      needs_prep: site.needs_prep || false,
     })
     setSelectedCategories(siteCategories[site.id] || [])
     setPhoto1File(null)
@@ -171,6 +183,8 @@ export default function SitesPage() {
       // Guarded — see hasPetColumn. Spreads to nothing on a tenant without the column, so the
       // save behaves exactly as it did before the pet feature existed.
       ...(hasPetColumn ? { pet_friendly: form.pet_friendly } : {}),
+      // Guarded the same way — see hasPrepColumn.
+      ...(hasPrepColumn ? { needs_prep: form.needs_prep } : {}),
     }
 
     let siteId = editingSite?.id
@@ -285,6 +299,24 @@ export default function SitesPage() {
         </div>
       )}
 
+      {/* ── THE SAME SILENT-TRAP GUARD, FOR CHECK-IN PREP ────────────────────────────────────
+          sites.needs_prep defaults to FALSE, so the moment an owner switches check-in prep on in
+          the To-Do board's Manage reminders view, NOTHING happens until they mark some sites.
+          Without this banner the only symptom is no prep tasks ever appearing — which looks like
+          a broken feature rather than a setting nobody finished.
+
+          Shown only while it is true, so it disappears the instant a site is marked. */}
+      {hasPrepColumn && checkinPrepEnabled && sites.length > 0 && !sites.some(s => s.needs_prep) && (
+        <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-semibold text-amber-900">Check-in prep is on, but no sites are marked as needing prep.</p>
+          <p className="text-sm text-amber-800 mt-1">
+            No prep tasks will appear on the To-Do board until at least one site is marked.
+            Edit a site below and switch on &ldquo;Needs prep before check-in&rdquo; — usually your cabins and
+            rooms, rarely tent or RV sites.
+          </p>
+        </div>
+      )}
+
       {/* Category Manager */}
       {showCategoryForm && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
@@ -377,6 +409,18 @@ export default function SitesPage() {
               <div className="flex items-center gap-3">
                 <button type="button" onClick={() => setForm({ ...form, pet_friendly: !form.pet_friendly })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.pet_friendly ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}><span style={{ position: 'absolute', top: '3px', left: form.pet_friendly ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} /></button>
                 <label className="text-sm font-medium text-gray-700">Allows pets</label>
+              </div>
+            )}
+            {/* Phase-2 To-Do: does this site need preparing before a guest arrives?
+                Shown whenever the tenant has the column, WITHOUT requiring check-in prep to be
+                switched on first — unlike the pet flag above. That is deliberate: a park should
+                be able to mark its cabins before turning the feature on, because the alternative
+                is switching it on, getting nothing, and having no way to see why. The banner at
+                the top of this page covers the other order. */}
+            {hasPrepColumn && (
+              <div className="flex items-center gap-3">
+                <button type="button" role="switch" aria-checked={!!form.needs_prep} aria-label="Needs prep before check-in" onClick={() => setForm({ ...form, needs_prep: !form.needs_prep })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.needs_prep ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}><span style={{ position: 'absolute', top: '3px', left: form.needs_prep ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} /></button>
+                <label className="text-sm font-medium text-gray-700">Needs prep before check-in</label>
               </div>
             )}
             <div className="md:col-span-2 lg:col-span-3">
