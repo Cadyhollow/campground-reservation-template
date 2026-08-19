@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { Resend } from 'resend'
 import { checkBookability, nightsBetween, ruleAppliesToSite } from '@/lib/bookability'
 import { computeBookingQuote, checkDiscount, resolveNightlyRate, cardOnlyFeeShare } from '@/lib/booking-quote'
+import { checkPetBooking } from '@/lib/pet-fee'
 import { sendConfirmationEmails } from '@/lib/confirmation-email'
 import { getSquareCredentials, SquareCredentialsError } from '@/lib/square-credentials'
 
@@ -45,6 +46,12 @@ export async function POST(request: NextRequest) {
       signatureData,
       feesTotal = 0,
       cardOnlyFeesTotal = 0,
+      // Pets, as declared by the guest. Untrusted like everything else here: the fee is
+      // recomputed from the database below and the policy is enforced server-side, so a crafted
+      // request can neither dodge the charge nor exceed the park's limits.
+      petCount = 0,
+      isServiceAnimal = false,
+      petRulesAffirmed = false,
       surchargeAmount = 0,
       // Itemized cash lines built by the booking page, in the same { label, amount } shape
       // lib/pricing produces for the admin wizard. Passed straight through to the email.
@@ -100,6 +107,41 @@ export async function POST(request: NextRequest) {
       supabase.from('settings').select('*').limit(1).single(),
       supabase.from('fees').select('*').eq('is_active', true),
     ])
+
+    // ── THE PET GATE ──────────────────────────────────────────────────────────────────────
+    //
+    // Runs BEFORE the Square call, like every other gate here, so a refusal means no card was
+    // touched. The park's cap, its rules affirmation and its pet-site restriction are all decided
+    // by lib/pet-fee.ts, shared with /api/manual-booking so the two cannot drift.
+    //
+    // ENTIRELY DEAD on a tenant without the pet columns: `pets_enabled` is not merely false there
+    // but absent, so checkPetBooking returns "no pets" and the pet_friendly read below never runs.
+    // That is deliberate — the migration is not on live tenants yet, and a named read of a missing
+    // column would fail every booking.
+    let petVerdictCount = 0
+    let petIsServiceAnimal = false
+    if (settingsRow?.pets_enabled) {
+      // Read separately and only here, rather than widening the named `sites` select above:
+      // that select runs for EVERY booking on every tenant, and naming pet_friendly there would
+      // break each park that has not been migrated.
+      const { data: petSite } = await supabase
+        .from('sites').select('pet_friendly').eq('id', siteId).single()
+
+      const verdict = checkPetBooking(settingsRow, {
+        petCount: Number(petCount) || 0,
+        isServiceAnimal: !!isServiceAnimal,
+        petRulesAffirmed: !!petRulesAffirmed,
+        sitePetFriendly: petSite?.pet_friendly,
+        // NEVER set on the public path. The staff override exists only at /api/manual-booking,
+        // behind requireRole — a camper cannot assert their way past a site restriction.
+        allowPetSiteOverride: false,
+      })
+      if (!verdict.ok) {
+        return NextResponse.json({ error: verdict.message, reason: verdict.reason }, { status: 400 })
+      }
+      petVerdictCount = verdict.petCount
+      petIsServiceAnimal = verdict.isServiceAnimal
+    }
 
     // Add-on prices come from the DB keyed by the requested ids, so a request cannot set the
     // price of a firewood bundle. An id that is not an active add-on is dropped entirely.
@@ -159,6 +201,10 @@ export async function POST(request: NextRequest) {
       earlyRequested: !!earlyCheckin,
       lateRequested: !!lateCheckout,
       earlyBlocked, lateBlocked,
+      // The RESOLVED values from the gate above, not the request's. A park that has opted out of
+      // honouring service animals has its declared service animal priced as an ordinary pet.
+      petCount: petVerdictCount,
+      isServiceAnimal: petIsServiceAnimal,
     })
 
     // What this payment collects, by the SERVER's reading of the deposit rules. The fee is
@@ -284,6 +330,27 @@ export async function POST(request: NextRequest) {
       payment_method: 'card', // online bookings are always paid by card
       square_payment_id: squarePaymentId,
       waiver_signed: waiverSigned || false,
+      // ── PETS, AS BOOKED ────────────────────────────────────────────────────────────────────
+      //
+      // GUARDED, and this guard is the most consequential one in the file. The insert happens
+      // AFTER the card has been charged: a payload naming a column the tenant does not have
+      // fails the insert, and the guest is left charged with no reservation — the exact
+      // "charged but no booking" case the retry and the failed_bookings alert below exist to
+      // catch. So on an un-migrated tenant this spreads to nothing.
+      //
+      // Every value is the SERVER's, from the gate above. pet_fee comes from the quote, so what
+      // is stored is what was charged.
+      ...(settingsRow && 'pets_enabled' in settingsRow ? {
+        pet_count: quote.petCount,
+        pet_fee: quote.petFee,
+        // Stamped only when the park actually asked for an affirmation and the guest gave one.
+        // NULL otherwise, so "not asked" stays distinguishable from "declined".
+        pet_rules_affirmed_at:
+          settingsRow.pet_rules_require_affirmation && petRulesAffirmed && quote.petCount > 0
+            ? new Date().toISOString()
+            : null,
+        is_service_animal: petIsServiceAnimal,
+      } : {}),
     }
 
     // Insert the reservation, retrying once on a transient failure. Brief Supabase

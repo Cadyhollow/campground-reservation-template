@@ -40,6 +40,7 @@ import { fetchDateFacts, checkDateFacts, isNightInSeason, addDays } from './book
 // READ-ONLY here. The fee-configured test below runs the browser's arithmetic so it can post the
 // figures /book would post; it does not modify the quote, and this file is not fee-model code.
 import { computeBookingQuote } from './booking-quote.ts'
+import { computePetFee } from './pet-fee.ts'
 
 const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
 const ENV_PATH = resolvePath(REPO_ROOT, '.env.local')
@@ -627,6 +628,220 @@ test('payment: a party ABOVE base occupancy is priced the same in search and at 
     })
    })
   })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// PETS — THE CRAFTED-REQUEST CASES
+//
+// The guest UI does not exist yet, so every request below is exactly what an attacker would send:
+// hand-built JSON asserting pets, or asserting nothing while bringing them. That is the point.
+// Client-side gating is UX; these prove the SERVER refuses, which is the only thing that holds.
+//
+// The park's pet settings and the sites' pet_friendly flags are pinned for the duration of each
+// test and restored in a finally, so a failing assertion cannot leave the tenant charging for
+// pets nobody configured.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+const PET_SETTINGS = {
+  pets_enabled: true,
+  pet_fee_amount: 2500,
+  pet_fee_per_night: false,
+  pet_fee_per_pet: true,
+  pet_max: 2,
+  pet_rules_text: 'Pets must be leashed.',
+  pet_rules_require_affirmation: false,
+  pet_fee_taxable: false,
+  pet_fee_surcharged: false,
+  service_animal_allowed: true,
+}
+
+/**
+ * Pins the park's pet policy and marks exactly one site pet-friendly, returning both site ids.
+ * Skips the whole test when the tenant has no pet columns — an un-migrated tenant is a valid
+ * state, not a failure.
+ */
+async function withPets<T>(
+  over: Record<string, unknown>,
+  fn: (sites: { petSite: string; noPetSite: string }) => Promise<T>,
+): Promise<T | 'no-pet-columns'> {
+  const { data: before } = await supabase.from('settings').select('*').limit(1).single()
+  if (!before || !('pets_enabled' in before)) return 'no-pet-columns'
+
+  const { data: allSites } = await supabase
+    .from('sites').select('id, pet_friendly').eq('is_available', true).order('display_order')
+  if (!allSites || allSites.length < 2) return 'no-pet-columns'
+  const petSite = allSites[0].id
+  const noPetSite = allSites[1].id
+  const priorFlags = allSites.map((s: { id: string; pet_friendly: boolean }) => [s.id, s.pet_friendly] as const)
+
+  await supabase.from('settings').update({ ...PET_SETTINGS, ...over }).eq('id', before.id)
+  await supabase.from('sites').update({ pet_friendly: false }).eq('id', noPetSite)
+  await supabase.from('sites').update({ pet_friendly: true }).eq('id', petSite)
+  try {
+    return await fn({ petSite, noPetSite })
+  } finally {
+    const restore: Record<string, unknown> = {}
+    for (const k of Object.keys(PET_SETTINGS)) restore[k] = (before as Record<string, unknown>)[k]
+    await supabase.from('settings').update(restore).eq('id', before.id)
+    for (const [id, flag] of priorFlags) {
+      await supabase.from('sites').update({ pet_friendly: flag }).eq('id', id)
+    }
+  }
+}
+
+/** The quote a legitimate booking would produce, so a test can post the RIGHT number. */
+async function petQuote(siteId: string, arrival: string, departure: string, pets: {
+  petCount?: number; isServiceAnimal?: boolean
+}) {
+  const { data: site } = await supabase.from('sites').select('*').eq('id', siteId).single()
+  const { data: settings } = await supabase.from('settings').select('*').limit(1).single()
+  const { data: fees } = await supabase.from('fees').select('*').eq('is_active', true)
+  const nights = Math.round((new Date(departure).getTime() - new Date(arrival).getTime()) / 86400000)
+  return computeBookingQuote({
+    site: { site_type: site!.site_type, nightly_rate: site!.base_rate, total_price: site!.base_rate * nights, nights },
+    adults: 2, children: 0, settings: settings as any, fees: (fees || []) as any,
+    addonSelections: [], discount: null,
+    earlyRequested: false, lateRequested: false, earlyBlocked: false, lateBlocked: false,
+    petCount: pets.petCount ?? 0, isServiceAnimal: pets.isServiceAnimal,
+  })
+}
+
+const PET_ARRIVAL = '2026-08-18', PET_DEPARTURE = '2026-08-20'
+
+test('pets: a request that declares pets but pays the no-pet price is REFUSED', { skip }, async (t) => {
+  // THE FEE-DODGE. The server recomputes the quote from the database, so asserting pets while
+  // paying the stay-only total cannot succeed.
+  const r = await withPets({}, async ({ petSite }) => {
+    const stayOnly = await petQuote(petSite, PET_ARRIVAL, PET_DEPARTURE, { petCount: 0 })
+    return withHorizonValue(null, () => post({
+      siteId: petSite, arrival: PET_ARRIVAL, departure: PET_DEPARTURE, nights: 2,
+      nightlyRate: 5500,
+      totalPrice: stayOnly.cashTotal, amountToPay: stayOnly.cashTotal, paymentType: 'full',
+      petCount: 2,          // <- brings two dogs
+    }))
+  })
+  if (r === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  assert.equal(r.json.reason, 'price-mismatch', `the pet fee was dodged: ${JSON.stringify(r.json)}`)
+  assert.equal(r.status, 409)
+})
+
+test('pets: declaring MORE pets than the park allows is refused, and never reaches Square', { skip }, async (t) => {
+  const r = await withPets({ pet_max: 2 }, async ({ petSite }) => {
+    const q = await petQuote(petSite, PET_ARRIVAL, PET_DEPARTURE, { petCount: 5 })
+    return withHorizonValue(null, () => post({
+      siteId: petSite, arrival: PET_ARRIVAL, departure: PET_DEPARTURE, nights: 2,
+      nightlyRate: 5500, totalPrice: q.cashTotal, amountToPay: q.cashTotal, paymentType: 'full',
+      petCount: 5,
+    }))
+  })
+  if (r === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  assert.ok(r.gated, `over-cap request reached Square: ${JSON.stringify(r.json)}`)
+  assert.equal(r.json.reason, 'pet-max')
+  assert.equal(r.status, 400)
+})
+
+test('pets: a pet on a site that does not allow pets is refused', { skip }, async (t) => {
+  const r = await withPets({}, async ({ noPetSite }) => {
+    const q = await petQuote(noPetSite, PET_ARRIVAL, PET_DEPARTURE, { petCount: 1 })
+    return withHorizonValue(null, () => post({
+      siteId: noPetSite, arrival: PET_ARRIVAL, departure: PET_DEPARTURE, nights: 2,
+      nightlyRate: 5500, totalPrice: q.cashTotal, amountToPay: q.cashTotal, paymentType: 'full',
+      petCount: 1,
+    }))
+  })
+  if (r === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  assert.ok(r.gated, `pet-site request reached Square: ${JSON.stringify(r.json)}`)
+  assert.equal(r.json.reason, 'pet-site')
+})
+
+test('pets: the public path cannot assert the staff site override', { skip }, async (t) => {
+  // override_pet_site is honoured only at /api/manual-booking, behind requireRole. A camper
+  // sending it must still be refused.
+  const r = await withPets({}, async ({ noPetSite }) => {
+    const q = await petQuote(noPetSite, PET_ARRIVAL, PET_DEPARTURE, { petCount: 1 })
+    return withHorizonValue(null, () => post({
+      siteId: noPetSite, arrival: PET_ARRIVAL, departure: PET_DEPARTURE, nights: 2,
+      nightlyRate: 5500, totalPrice: q.cashTotal, amountToPay: q.cashTotal, paymentType: 'full',
+      petCount: 1, override_pet_site: true, allowPetSiteOverride: true, overridePetSite: true,
+    }))
+  })
+  if (r === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  assert.equal(r.json.reason, 'pet-site', `a camper waived the site restriction: ${JSON.stringify(r.json)}`)
+})
+
+test('pets: a required rules affirmation cannot be skipped', { skip }, async (t) => {
+  const r = await withPets({ pet_rules_require_affirmation: true }, async ({ petSite }) => {
+    const q = await petQuote(petSite, PET_ARRIVAL, PET_DEPARTURE, { petCount: 1 })
+    return withHorizonValue(null, () => post({
+      siteId: petSite, arrival: PET_ARRIVAL, departure: PET_DEPARTURE, nights: 2,
+      nightlyRate: 5500, totalPrice: q.cashTotal, amountToPay: q.cashTotal, paymentType: 'full',
+      petCount: 1,           // no petRulesAffirmed
+    }))
+  })
+  if (r === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  assert.ok(r.gated, `unaffirmed request reached Square: ${JSON.stringify(r.json)}`)
+  assert.equal(r.json.reason, 'pet-rules')
+})
+
+test('pets: a legitimate pet booking is NOT refused, and the fee is in the charge', { skip }, async (t) => {
+  // The counterpart that makes the refusals meaningful: a gate that rejected everything would
+  // pass every test above.
+  const out = await withPets({ pet_rules_require_affirmation: true }, async ({ petSite }) => {
+    const q = await petQuote(petSite, PET_ARRIVAL, PET_DEPARTURE, { petCount: 2 })
+    const r = await withHorizonValue(null, () => post({
+      siteId: petSite, arrival: PET_ARRIVAL, departure: PET_DEPARTURE, nights: 2,
+      nightlyRate: 5500, totalPrice: q.cashTotal, amountToPay: q.cashTotal, paymentType: 'full',
+      petCount: 2, petRulesAffirmed: true,
+    }))
+    return { r, q }
+  })
+  if (out === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  const { r, q } = out
+  assert.equal(q.petFee, 5000, 'the quote should carry 2 x $25')
+  const GATE_REASONS = ['missing-dates','invalid-range','beyond-horizon','out-of-season','blocked','double-booked','min-stay','price-mismatch','discount-invalid','pet-max','pet-rules','pet-site']
+  assert.ok(!GATE_REASONS.includes(r.json.reason), `a legitimate pet booking was refused: ${JSON.stringify(r.json)}`)
+  assert.ok(
+    /authoriz/i.test(String(r.json.error)) || r.json.reason === 'square-unavailable',
+    `expected to reach the payment step, got: ${JSON.stringify(r.json)}`,
+  )
+})
+
+test('pets: a service animal is free, and may book a site that does not allow pets', { skip }, async (t) => {
+  const out = await withPets({ pet_max: 1, pet_rules_require_affirmation: true }, async ({ noPetSite }) => {
+    const q = await petQuote(noPetSite, PET_ARRIVAL, PET_DEPARTURE, { petCount: 1, isServiceAnimal: true })
+    const r = await withHorizonValue(null, () => post({
+      siteId: noPetSite, arrival: PET_ARRIVAL, departure: PET_DEPARTURE, nights: 2,
+      nightlyRate: 5500, totalPrice: q.cashTotal, amountToPay: q.cashTotal, paymentType: 'full',
+      petCount: 1, isServiceAnimal: true,   // no affirmation, non-pet site, over the cap of 1
+    }))
+    return { r, q }
+  })
+  if (out === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  const { r, q } = out
+  assert.equal(q.petFee, 0, 'a service animal must be free')
+  assert.ok(
+    !['pet-max','pet-rules','pet-site','price-mismatch'].includes(r.json.reason),
+    `a service animal was refused: ${JSON.stringify(r.json)}`,
+  )
+})
+
+test('pets: with the feature OFF, a request asserting pets changes nothing', { skip }, async (t) => {
+  // The dormant state every park is in. Pet fields in the body must be inert, not merely
+  // harmless — a park with pets off must not start charging because a request said "petCount".
+  const r = await withPets({ pets_enabled: false }, async ({ noPetSite }) => {
+    const q = await petQuote(noPetSite, PET_ARRIVAL, PET_DEPARTURE, { petCount: 0 })
+    assert.equal(q.petFee, 0)
+    return withHorizonValue(null, () => post({
+      siteId: noPetSite, arrival: PET_ARRIVAL, departure: PET_DEPARTURE, nights: 2,
+      nightlyRate: 5500, totalPrice: q.cashTotal, amountToPay: q.cashTotal, paymentType: 'full',
+      petCount: 3, isServiceAnimal: false,
+    }))
+  })
+  if (r === 'no-pet-columns') return t.skip('tenant has no pet columns')
+  assert.ok(
+    !['pet-max','pet-rules','pet-site','price-mismatch'].includes(r.json.reason),
+    `a pets-off park was disturbed by pet fields: ${JSON.stringify(r.json)}`,
+  )
 })
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
