@@ -206,6 +206,14 @@ export default function BookingForm({
   const departure = searchParams.get('departure') || ''
   const adults = parseInt(searchParams.get('adults') || '2')
   const children = parseInt(searchParams.get('children') || '0')
+  // Carried from the search, where the question is asked. Re-decided server-side before any
+  // charge — /api/payment recomputes the fee and re-checks the cap, the rules and the site.
+  const petsRequested = Math.max(0, parseInt(searchParams.get('pets') || '0') || 0)
+  const isServiceAnimal = searchParams.get('serviceAnimal') === '1'
+  const petsEnabled = !!settings?.pets_enabled
+  const petCount = petsEnabled && !isServiceAnimal ? petsRequested : 0
+  const petRulesRequired = petsEnabled && !!settings?.pet_rules_require_affirmation && petCount > 0
+  const [petRulesAffirmed, setPetRulesAffirmed] = useState(false)
 
   // Security PR 7-1: settings, fees and add-ons arrive as props from the server component.
   // They were three publishable-key reads on mount, and under the locked-down schema the `anon`
@@ -441,11 +449,13 @@ export default function BookingForm({
     earlyRequested: earlyChecked,
     lateRequested: lateChecked,
     earlyBlocked, lateBlocked,
+    petCount,
+    isServiceAnimal: petsEnabled && isServiceAnimal,
   })
 
   const {
     extraGuestFee, addonTotal, feeBreakdown, feesTotal, cardOnlyFeesTotal,
-    earlyFee, lateFee, discountAmount, total, emailLines,
+    earlyFee, lateFee, petFee, discountAmount, total, emailLines,
     cashTotal, deposit, depositLabel, depositSubtext, showDepositButton,
   } = quote
   const realCashFees = feesTotal - cardOnlyFeesTotal
@@ -467,6 +477,12 @@ export default function BookingForm({
     if (!form.guest_name.trim()) { alert('Please enter your name.'); return }
     if (!form.guest_email.trim() || !form.guest_email.includes('@')) { alert('Please enter a valid email.'); return }
     if (!form.guest_phone.trim()) { alert('Please enter your phone number.'); return }
+    // UX only — /api/payment refuses an unaffirmed booking regardless. Stopping here means the
+    // guest is told at the checkbox they can act on, not after entering a card.
+    if (petRulesRequired && !petRulesAffirmed) {
+      alert('Please agree to the pet rules before continuing.')
+      return
+    }
     if (isRvSite) {
       if (!form.camper_type) { alert('Please select your camper type.'); return }
       if (!form.camper_length || parseInt(form.camper_length) < 1) { alert('Please enter your camper length.'); return }
@@ -523,6 +539,9 @@ export default function BookingForm({
           nights: site.nights,
           waiverSigned: waiverSigned,
           signatureData,
+          petCount,
+          isServiceAnimal: petsEnabled && isServiceAnimal,
+          petRulesAffirmed,
         }),
       })
 
@@ -780,6 +799,48 @@ export default function BookingForm({
                 </div>
               )}
 
+              {/* ── PETS ────────────────────────────────────────────────────────────────────
+                  Shown only when the park runs the feature AND this booking actually involves an
+                  animal. The COUNT is not editable here on purpose: it was answered at search
+                  time and it decided which sites were offered, so changing it at checkout could
+                  leave a guest on a site their pets are not allowed on. To change it they go
+                  back and search again. */}
+              {petsEnabled && (petCount > 0 || isServiceAnimal) && (
+                <div className="rounded-2xl p-6 mb-6" style={{ backgroundColor: 'var(--surface-card)' }}>
+                  <h3 className="text-[var(--text-primary)] font-medium mb-3">
+                    {isServiceAnimal ? 'Service animal' : `Pets (${petCount})`}
+                  </h3>
+
+                  {isServiceAnimal ? (
+                    <p className="text-sm text-[var(--text-muted)]">
+                      No pet fee applies, and you may book any site.
+                    </p>
+                  ) : (
+                    <p className="text-sm text-[var(--text-muted)] mb-3">
+                      {petFee > 0
+                        ? <>A pet fee of <span className="text-[var(--text-primary)] font-medium">${(petFee / 100).toFixed(2)}</span> is included in your total below.</>
+                        : 'No pet fee applies to this stay.'}
+                    </p>
+                  )}
+
+                  {settings?.pet_rules_text && (
+                    <div className="mt-3 rounded-lg p-4 bg-[var(--surface-input)]">
+                      <p className="text-xs text-[var(--text-muted)] whitespace-pre-line">{settings.pet_rules_text}</p>
+                    </div>
+                  )}
+
+                  {petRulesRequired && (
+                    <label className="flex items-start gap-3 mt-4 cursor-pointer">
+                      <input type="checkbox" className="mt-1" checked={petRulesAffirmed}
+                        onChange={e => setPetRulesAffirmed(e.target.checked)} />
+                      <span className="text-sm text-[var(--text-muted)]">
+                        I have read and agree to the pet rules above.
+                      </span>
+                    </label>
+                  )}
+                </div>
+              )}
+
               {/* Discount Code */}
               <div className="pt-4 border-t border-[var(--border)] mb-6">
                 <h3 className="text-[var(--text-primary)] font-medium mb-3">Discount Code</h3>
@@ -866,6 +927,7 @@ export default function BookingForm({
                   <span>${(site.total_price / 100).toFixed(2)}</span>
                 </div>
                 {extraGuestFee > 0 && <div className="flex justify-between text-[var(--text-muted)]"><span>Extra guest fees</span><span>${(extraGuestFee / 100).toFixed(2)}</span></div>}
+                {petFee > 0 && <div className="flex justify-between text-[var(--text-muted)]"><span>Pet fee</span><span>${(petFee / 100).toFixed(2)}</span></div>}
                 {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
                   const addon = addons.find(a => a.id === id)
                   if (!addon) return null
@@ -972,6 +1034,12 @@ export default function BookingForm({
                   </div>
                 )
               })}
+              {petFee > 0 && (
+                <div className="flex justify-between">
+                  <p className="text-[var(--text-muted)]">Pet fee</p>
+                  <p className="text-[var(--text-primary)] font-medium">${(petFee / 100).toFixed(2)}</p>
+                </div>
+              )}
               {earlyFee > 0 && (
                 <div className="flex justify-between">
                   <p className="text-[var(--text-muted)]">Early Check-In</p>

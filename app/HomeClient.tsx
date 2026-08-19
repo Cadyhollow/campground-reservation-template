@@ -49,6 +49,12 @@ export default function HomeClient({
   const [adults, setAdults] = useState(2)
   const [children, setChildren] = useState(0)
   const [siteType, setSiteType] = useState('all')
+  // Pets, asked at SEARCH time rather than at checkout — the filter below can only be
+  // one-directional if the answer is known before the sites are chosen from.
+  const [pets, setPets] = useState(0)
+  const [serviceAnimal, setServiceAnimal] = useState(false)
+  const [petPolicy, setPetPolicy] = useState<any>(null)
+  const [petFilteredToNothing, setPetFilteredToNothing] = useState(false)
   const [sites, setSites] = useState<Site[]>([])
   const [loading, setLoading] = useState(false)
   const [selectedSite, setSelectedSite] = useState<Site | null>(null)
@@ -183,7 +189,7 @@ export default function HomeClient({
     // adults/children go with the search so the card can include the extra-guest fee. The form
     // has always collected them; it just never sent them, so every booking above the park's base
     // occupancy was quoted low and then grew at checkout.
-    const res = await fetch(`/api/availability?arrival=${arrival}&departure=${departure}&siteType=${siteType}&adults=${adults}&children=${children}`)
+    const res = await fetch(`/api/availability?arrival=${arrival}&departure=${departure}&siteType=${siteType}&adults=${adults}&children=${children}&pets=${pets}&serviceAnimal=${serviceAnimal ? '1' : '0'}`)
     const data = await res.json()
     const fetchedSites: Site[] = data.sites || []
     setSites(fetchedSites)
@@ -192,6 +198,8 @@ export default function HomeClient({
     // reaching here means the two disagreed — a stale settings prop in the browser, or a search
     // fired before the page had settings. The server's answer wins, and the guest sees the same
     // wording either way.
+    setPetPolicy(data.pets?.enabled ? data.pets : null)
+    setPetFilteredToNothing(!!data.pets?.filteredToNothing)
     if (data.outOfWindow) setOutOfWindow(data.horizonMessage || null)
     // The route's own season verdict. `closed` now reflects the WHOLE STAY, so it fires for a
     // stay that begins in season and runs past closing, not just an out-of-season arrival.
@@ -240,6 +248,11 @@ export default function HomeClient({
       arrival, departure,
       adults: adults.toString(),
       children: children.toString(),
+      // Carried so /book can price the stay and show the park's rules. Both are re-decided by
+      // /api/payment from the database before anything is charged — these are the guest's
+      // answer travelling with them, never the authority on it.
+      pets: pets.toString(),
+      serviceAnimal: serviceAnimal ? '1' : '0',
     })
     window.location.href = `/book?${params.toString()}`
   }
@@ -516,6 +529,31 @@ export default function HomeClient({
                 </div>
               </div>
             </div>
+            {/* Asked here, before the search runs, because the results are filtered on the
+                answer. A park with pets switched off never sees this. */}
+            {settings?.pets_enabled && (
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Pets</label>
+                <input type="number" min={0} max={settings.pet_max > 0 ? settings.pet_max : 20}
+                  className="themed-input w-full border rounded-lg px-3 py-2 text-sm"
+                  value={serviceAnimal ? 0 : pets}
+                  disabled={serviceAnimal}
+                  onChange={e => setPets(Math.max(0, parseInt(e.target.value) || 0))} />
+                {settings.pet_max > 0 && !serviceAnimal && (
+                  <p className="text-xs text-[var(--text-muted)] mt-0.5">Up to {settings.pet_max} per site</p>
+                )}
+                {settings.service_animal_allowed !== false && (
+                  <label className="flex items-start gap-2 mt-2 cursor-pointer">
+                    <input type="checkbox" className="mt-0.5" checked={serviceAnimal}
+                      onChange={e => { setServiceAnimal(e.target.checked); if (e.target.checked) setPets(0) }} />
+                    <span className="text-xs text-[var(--text-muted)]">
+                      I&rsquo;m travelling with a service animal
+                      <span className="block text-[var(--text-muted)] opacity-75">No pet fee, and any site may be booked.</span>
+                    </span>
+                  </label>
+                )}
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-[var(--text-muted)] mb-1">Site Type</label>
               <select className="themed-input w-full border rounded-lg px-3 py-2 text-sm" value={siteType} onChange={e => setSiteType(e.target.value)}>
@@ -608,8 +646,23 @@ export default function HomeClient({
             </div>
           ) : sites.length === 0 ? (
             <div className="rounded-2xl p-12 text-center" style={{ backgroundColor: 'var(--surface-card)' }}>
-              <p className="text-[var(--text-primary)] text-lg font-semibold mb-2">No sites available</p>
-              <p className="text-[var(--text-muted)]">Try different dates or a different site type.</p>
+              {/* A pets search that filtered itself down to nothing gets its OWN message. Left
+                  as the generic line it would read as "the park is full", and the guest would
+                  try other dates forever — the sites are there, they just do not take pets. */}
+              {petFilteredToNothing ? (
+                <>
+                  <p className="text-[var(--text-primary)] text-lg font-semibold mb-2">No pet-friendly sites available</p>
+                  <p className="text-[var(--text-muted)]">
+                    We have sites free for these dates, but none of them accept pets.
+                    Try different dates, or contact us{settings?.park_phone ? ` on ${settings.park_phone}` : ''} — we may be able to help.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-[var(--text-primary)] text-lg font-semibold mb-2">No sites available</p>
+                  <p className="text-[var(--text-muted)]">Try different dates or a different site type.</p>
+                </>
+              )}
             </div>
           ) : (
             <>
