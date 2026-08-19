@@ -995,10 +995,24 @@ function ReservationsPageInner() {
                           // wizard bookings don't, so fall back to the folio's payments.
                           const r: any = selected
                           const resendSurcharge = r.surcharge_amount || selectedFolioSurcharge || 0
-                          const nightlyRate = r.base_nightly_rate || (nights > 0 ? Math.round(((r.total_price || 0) - (r.extra_guest_fee_total || 0) - (r.addons_total || 0) - (r.early_checkin_fee || 0) - (r.late_checkout_fee || 0) - (r.fees_total || 0)) / nights) : 0)
+                          // (r.pet_fee || 0) subtracted here as well as below: on a row with no
+                          // stored base_nightly_rate this fallback derives the nightly figure by
+                          // removing every known component, and leaving the pet fee in would
+                          // inflate the per-night rate the guest is shown.
+                          const nightlyRate = r.base_nightly_rate || (nights > 0 ? Math.round(((r.total_price || 0) - (r.extra_guest_fee_total || 0) - (r.addons_total || 0) - (r.early_checkin_fee || 0) - (r.late_checkout_fee || 0) - (r.fees_total || 0) - (r.pet_fee || 0)) / nights) : 0)
                           const resendLines: { label: string; amount: number }[] = []
                           if (nights > 0 && nightlyRate > 0) resendLines.push({ label: `${nights} night${nights !== 1 ? 's' : ''} × $${(nightlyRate / 100).toFixed(2)}`, amount: nightlyRate * nights })
                           if (r.extra_guest_fee_total > 0) resendLines.push({ label: 'Extra guests', amount: r.extra_guest_fee_total })
+                          // TRAP: without its own line the pet fee is swallowed by the
+                          // "Fees & other charges" remainder below — the guest gets a re-sent
+                          // confirmation with an unexplained bucket instead of the pet fee they
+                          // agreed to. 0 / absent on an un-migrated tenant, so nothing changes there.
+                          if ((r.pet_fee || 0) > 0) {
+                            resendLines.push({
+                              label: (r.pet_count || 0) > 1 ? `Pet fee (${r.pet_count} pets)` : 'Pet fee',
+                              amount: r.pet_fee,
+                            })
+                          }
                           if (r.fees_total > 0) resendLines.push({ label: 'Fees', amount: r.fees_total })
                           // Only the total is stored per reservation, not each add-on's name,
                           // so a resend lists them as one line. The original email itemized them.

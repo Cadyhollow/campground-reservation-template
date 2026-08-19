@@ -72,6 +72,10 @@ type Reservation = {
   payment_type: string | null
   notes: string | null
   fees_total: number
+  /** Optional: absent on a tenant that has not had the pet migration applied. */
+  pet_fee?: number | null
+  pet_count?: number | null
+  is_service_animal?: boolean | null
   num_adults: number
   num_children: number
   base_nightly_rate: number
@@ -610,9 +614,15 @@ export default function FolioPage() {
   const rEarly = reservation?.early_checkin_fee || 0
   const rLate = reservation?.late_checkout_fee || 0
   const rFees = reservation?.fees_total || 0
+  // 0 on an un-migrated tenant, where the column is absent — every expression below then
+  // behaves exactly as it did before the pet feature existed.
+  const rPetFee = reservation?.pet_fee || 0
   const rDiscount = reservation?.discount_amount || 0
   // Site charge is the reconciling remainder so the itemized lines always sum to total_price
-  const rSiteCharge = reservation ? (reservation.total_price - rExtraGuest - rAddons - rEarly - rLate - rFees + rDiscount) : 0
+  // TRAP: this is the reconciling remainder — every named component must be subtracted here or
+  // the SITE CHARGE silently absorbs it. Omitting rPetFee would show a $25 pet fee as $25 of
+  // extra nightly rate, which is wrong in a way nobody would notice.
+  const rSiteCharge = reservation ? (reservation.total_price - rExtraGuest - rAddons - rEarly - rLate - rFees - rPetFee + rDiscount) : 0
   const rNightly = reservation ? (reservation.base_nightly_rate || 0) * resNights : 0
   const addonLinesSum = reservationAddons.reduce((s, a) => s + a.amount, 0)
   const useAddonDetail = reservationAddons.length > 0 && addonLinesSum === rAddons
@@ -633,6 +643,14 @@ export default function FolioPage() {
     }
     if (rEarly > 0) resLines.push({ label: 'Early check-in', amount: rEarly })
     if (rLate > 0) resLines.push({ label: 'Late check-out', amount: rLate })
+    // TRAP: without its own line the pet fee falls into the "Other charges" remainder below —
+    // no error, just an unexplained bucket on a staff screen and on the guest's receipt.
+    if (rPetFee > 0) {
+      resLines.push({
+        label: (reservation.pet_count || 0) > 1 ? `Pet fee (${reservation.pet_count} pets)` : 'Pet fee',
+        amount: rPetFee,
+      })
+    }
     if (rFees > 0) resLines.push({ label: 'Fees', amount: rFees })
     if (rDiscount > 0) resLines.push({ label: 'Discount', amount: rDiscount, negative: true })
     // Reconcile: surface any amount baked into total_price that the stored breakdown didn't account for
