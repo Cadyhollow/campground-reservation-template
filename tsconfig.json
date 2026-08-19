@@ -6,6 +6,15 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
+    // Required by lib/booking-quote.ts, which imports lib/pet-fee.ts with its extension.
+    //
+    // The extension is not a style choice. These lib files are executed directly by
+    // `node --conditions=react-server --test`, whose ESM loader does no extension guessing:
+    // `./pet-fee` fails with ERR_MODULE_NOT_FOUND at runtime. Test files could always use the
+    // extension because "exclude" below drops them from type-checking; booking-quote.ts is real
+    // source and is checked, so it needs this flag. Safe with noEmit: nothing is written, so no
+    // emitted import path can be wrong.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
