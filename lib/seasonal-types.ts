@@ -131,15 +131,15 @@ export type SeasonalGuestData = {
   folioId: string
 }
 
-/** One line of GET /api/seasonals/list. */
-export type SeasonalListRow = {
-  guest_id: string
-  name?: string | null
-  site_number?: string | null
-  email?: string | null
-  status: string
-  season_year?: number | null
-  balance_cents: number
-  contract_id?: string | null
-  packet_id?: string | null
-}
+// SeasonalListRow WAS HERE AND HAS BEEN REMOVED (2026-08-19), because it was both unused and
+// wrong — the worst combination for a type in a shared file.
+//
+// It was written from expectation rather than from the route, and the end-to-end run on the
+// sandbox showed the real payload has `contract_status`, `contract_doc_status`,
+// `waiver_doc_status` and `last_note_at`, not the `status` / `email` / `season_year` /
+// `contract_id` it claimed. Nothing imported it, so nothing broke — but the next person to reach
+// for it would have been misled by a definition that looked authoritative.
+//
+// The list page declares its own accurate `Row` beside the component that consumes it, which is
+// the right home for a shape with exactly one consumer. Everything left in this file IS imported,
+// and every field in it was verified against a real response.
