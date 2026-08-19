@@ -41,7 +41,12 @@ import { POS_TILE_PALETTE, posTileColor, byNameAsc } from '@/lib/pos-tiles'
 // and their palette from the same place.
 export { POS_TILE_PALETTE, posTileColor, byNameAsc }
 
-/** The first character, uppercased. Decorative — the tile is labelled by its full name. */
+/**
+ * The first character, uppercased — rendered as an oversized watermark behind the name.
+ *
+ * Purely decorative: the tile's accessible name is the full category name on the button, and this
+ * is aria-hidden. It is a shape to recognise at a glance, not something to read.
+ */
 function monogram(name: string): string {
   return (name ?? '').trim().charAt(0).toUpperCase() || '?'
 }
@@ -63,14 +68,18 @@ export function PosCategoryTiles({
           key={cat}
           type="button"
           className="pos-cat-tile"
-          // The full name, because the monogram below is hidden from assistive tech — a screen
-          // reader announcing "C" would be useless.
+          // The full name, because the watermark letter below is hidden from assistive tech — a
+          // screen reader announcing "C" would be useless.
           aria-label={cat}
           title={cat}
           onClick={() => onSelect(cat)}
-          style={{ background: posTileColor(cat) }}
+          // backgroundColor, NOT the `background` shorthand. The shorthand resets every
+          // background property it does not mention, which silently wipes the sheen gradient
+          // globals.css layers on top — the tile still looked coloured, so the loss was invisible
+          // until the computed style was inspected.
+          style={{ backgroundColor: posTileColor(cat) }}
         >
-          <span className="pos-cat-mono" aria-hidden="true">{monogram(cat)}</span>
+          <span className="pos-cat-ghost" aria-hidden="true">{monogram(cat)}</span>
           <span className="pos-cat-name">{cat}</span>
         </button>
       ))}

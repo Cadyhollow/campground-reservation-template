@@ -6,6 +6,7 @@
 // category was added or renamed. These tests pin that.
 
 import { test } from 'node:test'
+import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import { POS_TILE_PALETTE, posTileColor, byNameAsc } from './pos-tiles.ts'
 
@@ -34,6 +35,25 @@ test('every palette colour clears WCAG AA against white text', () => {
     const ratio = 1.05 / (luminance(c) + 0.05)     // white is luminance 1
     assert.ok(ratio >= 4.5, `${c} contrast against white is ${ratio.toFixed(2)}, below AA 4.5`)
   }
+})
+
+test('the watermark stays faint enough that the contrast analysis holds', () => {
+  // WHY THIS READS THE STYLESHEET. The tile's base colour carries the name, and the test above
+  // proves every palette colour clears AA for white text on that base. The watermark letter sits
+  // BEHIND the name and lightens whatever it covers, so its opacity is the number that decides
+  // whether that guarantee survives.
+  //
+  // Measured in a browser at the grid's minimum tile size: a one-line name clears the painted
+  // glyph entirely (name top 116px vs glyph bottom 111px), and only a TWO-line name on the
+  // smallest tiles overlaps it, by about 13px. At the shipped 0.16 the overlapped region ranges
+  // 3.72–5.06:1 depending on the colour — so this is a real if narrow edge, and cranking the
+  // watermark up would widen it across every tile at once. This pins the value the analysis was
+  // done at; raising it is a deliberate act that has to come back through here.
+  const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8')
+  const ghost = css.slice(css.indexOf('.pos-cat-ghost'))
+  const alpha = Number(/color:\s*rgba\(255,255,255,([0-9.]+)\)/.exec(ghost)?.[1])
+  assert.ok(Number.isFinite(alpha), 'could not find the watermark colour in globals.css')
+  assert.ok(alpha <= 0.16, `watermark opacity is ${alpha}; above 0.16 the name's contrast analysis no longer holds`)
 })
 
 // ── COLOUR IS PINNED TO THE CATEGORY, NOT ITS POSITION ────────────────────────────────────────
