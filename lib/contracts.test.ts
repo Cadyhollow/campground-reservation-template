@@ -150,9 +150,26 @@ test('it falls back to the guest record when the contract has no snapshot', () =
 })
 
 test('settings sit between the contract and the guest for the season dates', () => {
+  // This is the FUNCTION's contract, and it holds. But note what step 2 found: no caller
+  // actually supplies these fields. The `settings` table has season_start / season_end, not
+  // season_opens / season_closes, so this middle tier has never fired in production — see the
+  // long note in lib/contract-server.ts. Kept as a test of the function's own behaviour, not as
+  // a claim about what the app does.
   const vars = buildContractVars(guest, { season_year: 2026 }, { season_opens: '2026-05-05', season_closes: '2026-09-05' })
   assert.equal(vars.opens, 'May 5, 2026', 'settings beat the guest record')
   assert.equal(vars.closes, 'September 5, 2026')
+})
+
+test('with no settings argument, the contract beats the guest and the guest is the fallback', () => {
+  // The path that actually runs. Pinned so the dormant middle tier cannot be activated by
+  // accident — activating it would change which dates print on a signed legal agreement.
+  const fromContract = buildContractVars(guest, { season_year: 2026, season_opens: '2026-05-01', season_closes: '2026-09-30' })
+  assert.equal(fromContract.opens, 'May 1, 2026')
+  assert.equal(fromContract.closes, 'September 30, 2026')
+
+  const fromGuest = buildContractVars(guest, { season_year: 2026 })
+  assert.equal(fromGuest.opens, 'April 15, 2026', 'falls through to the guest record')
+  assert.equal(fromGuest.closes, 'October 15, 2026')
 })
 
 test('the home address composes with no stray commas or blank lines', () => {

@@ -158,6 +158,9 @@ const GATED: [string, string, string][] = [
   ['POST', '/api/manual-booking', 'staff'],
   ['GET', '/api/profiles/assignable', 'staff'],
   ['POST', '/api/tasks/generate', 'staff'],
+  // Seasonal back-port, step 2. Staff-gated AND Summit-gated in the handler; the role gate is
+  // what this suite asserts.
+  ['POST', '/api/guest-notes', 'staff'],
   ['POST', '/api/receipt', 'staff'],
   ['POST', '/api/send-waiver', 'staff'],
   ['POST', '/api/sync-guests', 'staff'],
