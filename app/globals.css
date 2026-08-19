@@ -243,3 +243,50 @@ input, select, textarea {
   margin: 0;
   border-radius: 0;
 }
+
+/* ── POS category tiles ───────────────────────────────────────────────────────────────────────
+   Used by app/components/PosCategoryTiles.tsx on the three POS pickers.
+
+   Here rather than in a <style> tag inside the component: :hover and :focus-visible cannot be
+   inline styles, and a stylesheet is the conventional home for rules three screens share. */
+.pos-cat-tile {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border: none;
+  border-radius: 16px;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 8px;
+  text-align: center;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.pos-cat-tile:hover { filter: brightness(1.08); }
+.pos-cat-tile:active { transform: scale(0.97); }
+.pos-cat-tile:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: -6px;
+  box-shadow: 0 0 0 3px rgba(0,0,0,0.45);
+}
+.pos-cat-mono {
+  font-size: 38px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+.pos-cat-name {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  /* Two lines, then ellipsis — a long category name must not stretch the square. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  width: 100%;
+}
