@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import toast, { Toaster } from 'react-hot-toast'
 import { PetInputs, usePetInputs, petBookingFields, emptyPetForm, type PetFormState } from '@/app/components/PetInputs'
 import { loadSquarePayments } from '@/lib/square-card-client'
+import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/PosCategoryTiles'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useHorizonOverride, HorizonOverrideNotice } from '@/app/components/HorizonOverride'
 import { useSeasonOverride, SeasonOverrideNotice } from '@/app/components/SeasonOverride'
@@ -486,7 +487,14 @@ export default function WalkInBookingPage() {
   const paymentAmountCents = Math.round(parseFloat(paymentAmount) * 100) || 0
   const surchargePreview = paymentMethod === 'card' && cardSurcharge > 0 && !waiveFee ? Math.round(paymentAmountCents * (cardSurcharge / 100)) : 0
   const totalWithSurcharge = paymentAmountCents + surchargePreview
-  const filteredProducts = products.filter(p => p.category === activeCategory)
+  // Sorted for DISPLAY only — the underlying products, their prices and the Add-to-Tab
+  // behaviour are untouched. Shares byNameAsc with the category tiles so the two orderings
+  // cannot drift, and `numeric: true` keeps an item like "3 candy bars" with the numbers
+  // instead of between "2" and "20".
+  const filteredProducts = products
+    .filter(p => p.category === activeCategory)
+    .slice()
+    .sort((a, b) => byNameAsc(a.name, b.name))
 
   // PHASE 1 — Booking form
   if (phase === 'booking') return (
@@ -774,18 +782,9 @@ export default function WalkInBookingPage() {
         {/* Right: Product picker */}
         <div style={{ background: '#C9D2D9', borderLeft: '1px solid #b8c4cc', display: 'flex', flexDirection: 'column' }}>
           {activeCategory === '' ? (
-            <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', ...POS_TILE_GRID }}>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#4a6275', marginBottom: 4 }}>Add items</div>
-              {categories.map(cat => (
-                <button key={cat} onClick={() => setActiveCategory(cat)}
-                  style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 12, padding: '18px 20px', fontSize: 16, fontWeight: 700, cursor: 'pointer', textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 2px 6px rgba(46,107,138,0.3)' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#245875')}
-                  onMouseLeave={e => (e.currentTarget.style.background = '#2E6B8A')}
-                >
-                  <span>{cat}</span>
-                  <span style={{ fontSize: 20, opacity: 0.7 }}>›</span>
-                </button>
-              ))}
+              <PosCategoryTiles categories={categories} onSelect={setActiveCategory} />
             </div>
           ) : (
             <>

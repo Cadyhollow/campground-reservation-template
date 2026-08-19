@@ -121,6 +121,7 @@ jobs:
             lib/cancellation-policy.test.ts \
             lib/pet-fee.test.ts \
             lib/pet-pricing.test.ts \
+            lib/pos-tiles.test.ts \
             lib/refundable.test.ts \
             lib/search-pricing.test.ts \
             lib/square-credentials.test.ts \
