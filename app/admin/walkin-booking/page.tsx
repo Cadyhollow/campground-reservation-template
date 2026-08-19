@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import toast, { Toaster } from 'react-hot-toast'
+import { PetInputs, usePetInputs, petBookingFields, emptyPetForm, type PetFormState } from '@/app/components/PetInputs'
 import { loadSquarePayments } from '@/lib/square-card-client'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useHorizonOverride, HorizonOverrideNotice } from '@/app/components/HorizonOverride'
@@ -19,6 +20,8 @@ type Site = {
   site_number: string
   site_type: string
   base_rate: number
+  /** Optional: absent on a tenant that has not had the pet migration applied. */
+  pet_friendly?: boolean | null
 }
 
 type Product = {
@@ -133,7 +136,9 @@ export default function WalkInBookingPage() {
     const [{ data: siteData }, { data: prods }, { data: settings }, { data: cats }, { data: feesData }, { data: rulesData }] = await Promise.all([
       supabase.from('sites').select('*').eq('is_available', true).order('display_order'),
       supabase.from('products').select('*').eq('active', true).order('display_order'),
-      supabase.from('settings').select('card_surcharge_percent, square_terminal_device_id, max_advance_days, season_start, season_end, closed_season_message').single(),
+      // select('*') rather than a named list — the pet columns are absent on un-migrated tenants
+      // and PostgREST errors on a column it cannot find, which would leave this page unconfigured.
+      supabase.from('settings').select('*').single(),
       supabase.from('product_categories').select('name').order('display_order'),
       supabase.from('fees').select('*').eq('is_active', true),
       supabase.from('pricing_rules').select('*').eq('is_active', true),
@@ -161,6 +166,7 @@ export default function WalkInBookingPage() {
     setSites(allSites.filter((s: any) => !conflictIds.has(s.id)))
   }
 
+  const [petForm, setPetForm] = useState<PetFormState>(emptyPetForm)
   const selectedSite = sites.find(s => s.id === form.site_id)
   const isRvSite = selectedSite?.site_type === 'rv_site'
   const applicablePricingRules = selectedSite && form.arrival_date && form.departure_date ? pricingRules.filter(rule => {
@@ -176,7 +182,11 @@ export default function WalkInBookingPage() {
   const nights = form.arrival_date && form.departure_date
     ? Math.round((new Date(form.departure_date).getTime() - new Date(form.arrival_date).getTime()) / (1000 * 60 * 60 * 24))
     : 0
-  const calculatedTotal = selectedSite ? nightlyRate * nights : 0
+  const petState = usePetInputs(settings, petForm, setPetForm, selectedSite, nights)
+  // The pet fee joins the calculated total from the SAME computePetFee the route uses, so the
+  // number on screen is the number stored. A manual price override still wins, exactly as it does
+  // over the nightly rate — an operator typing a total is stating the whole figure.
+  const calculatedTotal = (selectedSite ? nightlyRate * nights : 0) + petState.petFee
   const total = priceOverride !== '' ? Math.round(parseFloat(priceOverride) * 100) : calculatedTotal
 
   // The park's booking window and the operator's explicit waiver of it.
@@ -206,6 +216,10 @@ export default function WalkInBookingPage() {
       toast.error('Some nights of this stay are outside your open season. Tick "Book outside the open season" to continue.')
       return
     }
+    if (petState.blockedReason) {
+      toast.error(petState.blockedReason)
+      return
+    }
     setSaving(true)
     const response = await fetch('/api/manual-booking', {
       method: 'POST',
@@ -216,6 +230,7 @@ export default function WalkInBookingPage() {
         departure_date: form.departure_date,
         override_horizon: horizon.override,
         override_season: season.override,
+        ...petBookingFields(petState),
         num_adults: form.num_adults,
         num_children: form.num_children,
         guest_name: form.guest_name,
@@ -588,13 +603,28 @@ export default function WalkInBookingPage() {
         )}
       </div>
 
+      {petState.active && (
+        <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '1.5rem', marginBottom: 16 }}>
+          <PetInputs state={petState} />
+        </div>
+      )}
+
       {selectedSite && nights > 0 && (
         <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '1.5rem', marginBottom: 16 }}>
           <h3 style={{ margin: '0 0 1rem', fontSize: 15, fontWeight: 700, color: '#374151' }}>Pricing</h3>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          {/* The stay row shows the STAY, not the total — calculatedTotal now carries the pet
+              fee too, and labelling that "N nights × rate" would be wrong. The pet fee gets its
+              own row below, and the two add to the calculated figure. */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: petState.petFee > 0 ? 6 : 12 }}>
             <span style={{ fontSize: 14, color: '#6b7280' }}>{nights} night{nights !== 1 ? 's' : ''} × ${(nightlyRate/100).toFixed(2)}{bestPricingRule ? ' ★' : ''}</span>
-            <span style={{ fontWeight: 700, fontSize: 16 }}>${(calculatedTotal/100).toFixed(2)}</span>
+            <span style={{ fontWeight: 700, fontSize: 16 }}>${(((selectedSite ? nightlyRate * nights : 0))/100).toFixed(2)}</span>
           </div>
+          {petState.petFee > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <span style={{ fontSize: 14, color: '#6b7280' }}>Pet fee</span>
+              <span style={{ fontWeight: 700, fontSize: 16 }}>${(petState.petFee/100).toFixed(2)}</span>
+            </div>
+          )}
           <div>
             <label style={lbl}>Price override (optional)</label>
             <div style={{ position: 'relative' }}>

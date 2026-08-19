@@ -13,6 +13,7 @@ import { useSeasonOverride, SeasonOverrideNotice } from '@/app/components/Season
 // prerender.
 const supabase = createBrowserSupabase()
 import toast, { Toaster } from 'react-hot-toast'
+import { PetInputs, usePetInputs, petBookingFields, emptyPetForm, type PetFormState } from '@/app/components/PetInputs'
 import { loadSquarePayments } from '@/lib/square-card-client'
 
 type Site = {
@@ -23,6 +24,8 @@ type Site = {
   hookups: string
   base_rate: number
   is_available: boolean
+  /** Optional: absent on a tenant that has not had the pet migration applied. */
+  pet_friendly?: boolean | null
 }
 
 type Addon = {
@@ -122,7 +125,10 @@ function ManualBookingInner() {
     setAddons(data || [])
   }
   async function fetchSettings() {
-    const { data } = await supabase.from('settings').select('early_checkin_enabled, early_checkin_price, early_checkin_time, late_checkout_enabled, late_checkout_price, late_checkout_time, max_advance_days, season_start, season_end, closed_season_message').limit(1).single()
+    // select('*') rather than a named list: the pet columns are absent on un-migrated tenants and
+    // PostgREST errors on a column it cannot find, which would leave this page with no settings at
+    // all. Matches /admin/new-reservation, which already reads '*'.
+    const { data } = await supabase.from('settings').select('*').limit(1).single()
     setSettings(data || null)
   }
 
@@ -174,6 +180,7 @@ function ManualBookingInner() {
     setBalanceDue('')
   }
 
+  const [petForm, setPetForm] = useState<PetFormState>(emptyPetForm)
   const selectedSite = sites.find(s => s.id === form.site_id)
   const isRvSite = selectedSite?.site_type === 'rv_site'
 
@@ -216,7 +223,18 @@ function ManualBookingInner() {
 
   const earlyFee = (earlyChecked && settings?.early_checkin_enabled) ? (settings.early_checkin_price || 0) : 0
   const lateFee = (lateChecked && settings?.late_checkout_enabled) ? (settings.late_checkout_price || 0) : 0
-  const calculatedTotal = baseTotal + extraGuestFee + feesTotal + addonTotal + earlyFee + lateFee
+  // ── THE PET FEE ON A WIZARD WITH NO FEE ENGINE ────────────────────────────────────────────
+  //
+  // This page has never had one — it posts fees_total: 0 and sums its own line items. That was
+  // survivable while every charge on it was one the operator typed. The pet fee is not: since
+  // step 5 the SERVER computes and stores one on this route whether or not this page mentions it.
+  //
+  // So leaving it out is not the neutral option; it is the one that makes the wizard lie. Staff
+  // would agree a total, the server would store a different pet_fee alongside it, and the folio
+  // would reconcile the difference into "Other charges". Including it here — from the same
+  // computePetFee the route calls — is what keeps display, charge and storage equal.
+  const petState = usePetInputs(settings, petForm, setPetForm, selectedSite, nights)
+  const calculatedTotal = baseTotal + extraGuestFee + feesTotal + addonTotal + earlyFee + lateFee + petState.petFee
   const total = calculatedTotal
 
   // Card-only fees (excluded from cash total)
@@ -255,6 +273,11 @@ function ManualBookingInner() {
     // enforces this regardless — this is the prompt, not the gate.
     if (!horizon.cleared) {
       toast.error(`This arrival is beyond your ${horizon.maxDays}-day booking window. Tick "Book beyond the booking window" to continue.`)
+      return
+    }
+    // Same reasoning: the route refuses these too, this just points at the control on screen.
+    if (petState.blockedReason) {
+      toast.error(petState.blockedReason)
       return
     }
     if (!season.cleared) {
@@ -322,6 +345,7 @@ function ManualBookingInner() {
         override_horizon: horizon.override,
         override_season: season.override,
         addonItems,
+        ...petBookingFields(petState),
       }),
     })
 
@@ -559,6 +583,13 @@ function ManualBookingInner() {
             </div>
           )}
 
+          {/* Pets — renders nothing unless the park runs the feature. */}
+          {petState.active && (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <PetInputs state={petState} />
+            </div>
+          )}
+
           {/* Fees */}
           {applicableFees.length > 0 && selectedSite && nights > 0 && (
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
@@ -771,6 +802,12 @@ function ManualBookingInner() {
                     <div className="flex justify-between text-gray-600">
                       <span>Extra guests</span>
                       <span>${(extraGuestFee / 100).toFixed(2)}</span>
+                    </div>
+                  )}
+                  {petState.petFee > 0 && (
+                    <div className="flex justify-between text-gray-600">
+                      <span>Pet fee</span>
+                      <span>${(petState.petFee / 100).toFixed(2)}</span>
                     </div>
                   )}
                   {Object.entries(selectedAddons).filter(([_, qty]) => qty > 0).map(([id, qty]) => {
