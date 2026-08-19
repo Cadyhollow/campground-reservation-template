@@ -56,6 +56,10 @@ export async function POST(request: NextRequest) {
     // Include the reservation's own stay charge, not just folio line items.
     // Mirror the folio page: count booking-path money (amount_paid) + folio payments.
     const reservationCharge = reservation ? ((reservation as any).total_price || 0) : 0
+    // 0 when the column is absent (un-migrated tenant), so the stay line below is the whole
+    // charge exactly as it was before pets existed.
+    const resPetFee = reservation ? ((reservation as any).pet_fee || 0) : 0
+    const resPetCount = reservation ? ((reservation as any).pet_count || 0) : 0
     const chargesTotal = reservationCharge + itemsTotal
     const totalPaid = (reservation ? ((reservation as any).amount_paid || 0) : 0) + paymentsTotal
     const balanceRemaining = chargesTotal - totalPaid
@@ -71,8 +75,12 @@ export async function POST(request: NextRequest) {
           (new Date((reservation as any).departure_date).getTime() -
            new Date((reservation as any).arrival_date).getTime()) / 86400000))
       : 0
+    // The STAY, with the pet fee taken out — otherwise "N nights @ $X" quietly includes a charge
+    // that has nothing to do with the nightly rate, and the arithmetic on the receipt does not
+    // hold up if the guest checks it.
+    const resStayCharge = reservationCharge - resPetFee
     const resNightlyRate = (reservation as any)?.base_nightly_rate
-      || (resNights > 0 ? Math.round(reservationCharge / resNights) : 0)
+      || (resNights > 0 ? Math.round(resStayCharge / resNights) : 0)
     const stayLabel = resNights > 0 && resNightlyRate > 0
       ? `Reservation stay — ${resNights} night${resNights !== 1 ? 's' : ''} @ ${money(resNightlyRate)}`
       : 'Reservation stay'
@@ -156,7 +164,12 @@ export async function POST(request: NextRequest) {
       ${reservation ? `
       <tr>
         <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${stayLabel}</td>
-        <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">${money(reservationCharge)}</td>
+        <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">${money(resStayCharge)}</td>
+      </tr>` : ''}
+      ${resPetFee > 0 ? `
+      <tr>
+        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">Pet fee${resPetCount > 1 ? ` (${resPetCount} pets)` : ''}</td>
+        <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">${money(resPetFee)}</td>
       </tr>` : ''}
       ${(lineItems || []).map((item: any) => `
       <tr>

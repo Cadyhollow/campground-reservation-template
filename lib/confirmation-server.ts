@@ -53,6 +53,18 @@ export type ConfirmationData = {
   accentColor: string | null
   policyText: string | null
   depositRefundable: boolean
+  // ── ITEMIZATION ──────────────────────────────────────────────────────────────────────────
+  // The stay with every named component removed, so the breakdown always reconciles to
+  // chargesTotal. 0 on a tenant without the pet columns, where petFee is 0 and stayCharge is
+  // simply the whole stay — the page then renders exactly what it rendered before.
+  stayCharge: number
+  petFee: number
+  petCount: number
+  isServiceAnimal: boolean
+  /** The park's own pet rules, replacing the hardcoded leash line when set. */
+  petRulesText: string | null
+  /** Anything added to a folio after booking, shown as one line so the parts add up. */
+  folioCharges: number
 }
 
 /**
@@ -119,6 +131,26 @@ export async function getConfirmation(reservationId: string | null): Promise<Con
     .limit(1)
     .single()
 
+  // ── THE PET FIELDS COME FROM SEPARATE, TOLERANT READS ────────────────────────────────────
+  //
+  // Not by adding pet_fee / pet_rules_text to the two named lists above. Those lists are named
+  // deliberately — the browser used to receive every column of tables it shows a handful of
+  // fields from — and the pet columns are absent on un-migrated tenants, where PostgREST errors
+  // on a column it cannot find. Naming one up there would take the whole confirmation page down
+  // on every live park.
+  //
+  // select('*') is safe here because nothing from these rows is forwarded: two values are picked
+  // out below and the rest is discarded.
+  const [{ data: petResRow }, { data: petSettingsRow }] = await Promise.all([
+    supabase.from('reservations').select('*').eq('id', reservationId).single(),
+    supabase.from('settings').select('*').limit(1).single(),
+  ])
+  const petFee = (petResRow && 'pet_fee' in petResRow ? petResRow.pet_fee : 0) || 0
+  const petCount = (petResRow && 'pet_count' in petResRow ? petResRow.pet_count : 0) || 0
+  const isServiceAnimal = !!(petResRow && petResRow.is_service_animal)
+  const petRulesText = (petSettingsRow && 'pet_rules_text' in petSettingsRow
+    ? petSettingsRow.pet_rules_text : null) || null
+
   // The cancellation terms for THIS booking's arrival date, resolved through the same helper
   // /api/cancellation-policy uses, so the terms on the confirmation are the terms the camper
   // agreed to at checkout. Called directly rather than over HTTP — a server component fetching
@@ -156,5 +188,14 @@ export async function getConfirmation(reservationId: string | null): Promise<Con
     accentColor: settings?.accent_color ?? null,
     policyText,
     depositRefundable,
+    // The stay charge with every named component removed, so the page can itemize without
+    // inventing a figure. Kept as a remainder rather than a stored column for the same reason
+    // the folio does it: the parts must always add up to what was billed.
+    stayCharge: (res.total_price || 0) - petFee,
+    petFee,
+    petCount,
+    isServiceAnimal,
+    petRulesText,
+    folioCharges,
   }
 }

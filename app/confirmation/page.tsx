@@ -44,7 +44,7 @@ export default async function ConfirmationPage({
     </div>
   )
 
-  const { chargesTotal, totalPaid, balanceRemaining } = reservation
+  const { chargesTotal, totalPaid, balanceRemaining, stayCharge, petFee, petCount, petRulesText, folioCharges } = reservation
 
   const siteTypeLabel = (type: string) =>
     ({ rv_site: 'RV Site', cabin: 'Cabin', tent: 'Tent Site' }[type] || type)
@@ -128,10 +128,38 @@ export default async function ConfirmationPage({
         <div className="rounded-2xl p-6 mb-6" style={{ backgroundColor: 'var(--surface-card)' }}>
           <h3 className="text-[var(--text-primary)] font-bold text-lg mb-4">Payment Summary</h3>
           <div className="space-y-2 text-sm">
-            <div className="flex justify-between text-[var(--text-muted)]">
-              <span>Total reservation cost</span>
-              <span>${(chargesTotal / 100).toFixed(2)}</span>
-            </div>
+            {/* ITEMIZED, not a lump. A pet fee the guest cannot find on their confirmation is a
+                support call — and it is the only charge here they were asked to opt into, so it
+                is the one most worth naming. The parts are shown only when there is more than
+                one, so a plain stay still reads as a single "Total reservation cost" line the
+                way it always did. */}
+            {petFee > 0 ? (
+              <>
+                <div className="flex justify-between text-[var(--text-muted)]">
+                  <span>Stay</span>
+                  <span>${(stayCharge / 100).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-[var(--text-muted)]">
+                  <span>Pet fee{petCount > 1 ? ` (${petCount} pets)` : ''}</span>
+                  <span>${(petFee / 100).toFixed(2)}</span>
+                </div>
+                {folioCharges > 0 && (
+                  <div className="flex justify-between text-[var(--text-muted)]">
+                    <span>Additional charges</span>
+                    <span>${(folioCharges / 100).toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-[var(--text-primary)] font-medium border-t border-[var(--border)] pt-2 mt-2">
+                  <span>Total reservation cost</span>
+                  <span>${(chargesTotal / 100).toFixed(2)}</span>
+                </div>
+              </>
+            ) : (
+              <div className="flex justify-between text-[var(--text-muted)]">
+                <span>Total reservation cost</span>
+                <span>${(chargesTotal / 100).toFixed(2)}</span>
+              </div>
+            )}
             <div className="flex justify-between text-green-400">
               <span>Amount paid</span>
               <span>${(totalPaid / 100).toFixed(2)}</span>
@@ -157,9 +185,17 @@ export default async function ConfirmationPage({
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
               <p>Check-out is at <span className="text-[var(--text-primary)] font-medium">{reservation.checkOutTime}</span>.</p>
             </div>
+            {/* The park's OWN pet rules. This was a hardcoded leash line shown to every guest of
+                every campground on the template, whether or not that park takes pets or agrees
+                with it. It now shows what the owner wrote, and falls back to the old sentence
+                only when they have written nothing — so no park silently loses a rule it was
+                relying on, and a park that has never opened the pet screen sees exactly the line
+                it saw before. Deliberately still shown to every guest: it is a house rule, and
+                hiding it from bookings without pets would be a behaviour change nobody asked
+                for. */}
             <div className="flex gap-3">
               <span style={{ color: 'var(--accent-color)' }}>✓</span>
-              <p>All pets must be on a leash at all times.</p>
+              <p className="whitespace-pre-line">{petRulesText || 'All pets must be on a leash at all times.'}</p>
             </div>
             {reservation.policyText && (
               <div className="flex gap-3">
