@@ -18,10 +18,54 @@ export const svc = createClient(
 // Lazy Resend so keyless builds (next build) don't construct — and throw — at import.
 export function getResend() { return new Resend(process.env.RESEND_API_KEY) }
 
+/**
+ * Is outbound email actually configured on this deployment?
+ *
+ * ⚠ THIS GUARDS A DOCUMENTED SILENT-FAILURE MODE, not a hypothetical one.
+ *
+ * Onboarding provisions a new client's key from the shared ResoNation one:
+ *
+ *     RESEND_API_KEY: resend_api_key || process.env.RESEND_API_KEY || ''
+ *
+ * Note the final `|| ''`. If the shared key were ever missing from the admin system, a client
+ * would still onboard "successfully" and simply send no email — the onboarding runbook names this
+ * as its single most dangerous failure mode, with an end-of-setup test booking as the tripwire.
+ *
+ * A test booking catches it for confirmations. It does NOT catch it for seasonal contracts, which
+ * are sent months later by a park owner with no reason to suspect anything. Without this check
+ * "Send" would report success and the camper would simply never receive their agreement — and the
+ * park would discover it at the start of the season.
+ *
+ * So every route that sends mail calls this FIRST and refuses with a message a park owner can act
+ * on, turning a silent failure into a visible one. Checked at call time rather than at import: the
+ * key is an environment variable, and a deployment can be fixed without a code change.
+ */
+export function emailConfigured(): boolean {
+  return !!(process.env.RESEND_API_KEY || '').trim()
+}
+
+/** What a park owner sees when email is not set up. Shared so it reads identically wherever it
+ *  surfaces, and it names ResoNation because the fix is ours, not the park's. */
+export const EMAIL_NOT_CONFIGURED =
+  'Email is not set up for this site yet, so the packet could not be sent. ' +
+  'Nothing has been changed — please contact ResoNation support, then try again.'
+
 // Summit gate — reads settings.plan and fails CLOSED on missing/unknown plan.
 export async function isSummit(): Promise<boolean> {
   const { data } = await svc.from('settings').select('plan').limit(1).single()
   return planAtLeast(data?.plan, 'summit')
+}
+
+/**
+ * The message from a thrown value.
+ *
+ * Cady's seasonal routes all wrote `catch (e: any) { e?.message }`. This repo's lint config
+ * forbids `any`, and `unknown` is the honest type for a caught value anyway — a throw can be any
+ * value at all, not only an Error. Same output as before, without the escape hatch, and in one
+ * place rather than repeated in every route.
+ */
+export function errMessage(e: unknown, fallback = 'Something went wrong'): string {
+  return e instanceof Error && e.message ? e.message : fallback
 }
 
 // Client IP — identical logic to app/api/sign/[token]/route.ts:99
