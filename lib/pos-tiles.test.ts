@@ -39,21 +39,25 @@ test('every palette colour clears WCAG AA against white text', () => {
 
 test('the watermark stays faint enough that the contrast analysis holds', () => {
   // WHY THIS READS THE STYLESHEET. The tile's base colour carries the name, and the test above
-  // proves every palette colour clears AA for white text on that base. The watermark letter sits
-  // BEHIND the name and lightens whatever it covers, so its opacity is the number that decides
-  // whether that guarantee survives.
+  // proves every palette colour clears AA for white text on that base. The watermark sits BEHIND
+  // the name and lightens whatever it covers, so its opacity decides whether that survives.
   //
   // Measured in a browser at the grid's minimum tile size: a one-line name clears the painted
-  // glyph entirely (name top 116px vs glyph bottom 111px), and only a TWO-line name on the
-  // smallest tiles overlaps it, by about 13px. At the shipped 0.16 the overlapped region ranges
-  // 3.72–5.06:1 depending on the colour — so this is a real if narrow edge, and cranking the
-  // watermark up would widen it across every tile at once. This pins the value the analysis was
-  // done at; raising it is a deliberate act that has to come back through here.
+  // glyph entirely (name top 116px vs glyph bottom 111px). Only a TWO-line name on the smallest
+  // tiles overlaps, by about 13px. At normal tile sizes there is a 20px gap and no overlap at all.
+  //
+  // At 0.12 the overlapped region leaves three palette colours below AA (#1f7a86 4.01,
+  // #94631a 4.08, #2f6f6a 4.50) — down from eight at 0.16. Lowering it further cannot close the
+  // gap: all twelve only clear 4.5:1 at about 0.058, which is close to invisible. The remaining
+  // fix is geometric, not optical.
+  //
+  // This pins the value the analysis was done at. Raising it widens the failing set across every
+  // tile at once, so it has to come back through here.
   const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8')
   const ghost = css.slice(css.indexOf('.pos-cat-ghost'))
   const alpha = Number(/color:\s*rgba\(255,255,255,([0-9.]+)\)/.exec(ghost)?.[1])
   assert.ok(Number.isFinite(alpha), 'could not find the watermark colour in globals.css')
-  assert.ok(alpha <= 0.16, `watermark opacity is ${alpha}; above 0.16 the name's contrast analysis no longer holds`)
+  assert.ok(alpha <= 0.12, `watermark opacity is ${alpha}; above 0.12 more palette colours lose AA under the name`)
 })
 
 // ── COLOUR IS PINNED TO THE CATEGORY, NOT ITS POSITION ────────────────────────────────────────

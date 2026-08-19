@@ -303,7 +303,17 @@ input, select, textarea {
 }
 
 /* THE WATERMARK LETTER. Decorative only — aria-hidden in the component, and pointer-events:none
-   so it can never intercept a tap meant for the tile. */
+   so it can never intercept a tap meant for the tile.
+
+   OPACITY 0.12, NOT 0.16. The letter lightens whatever it sits behind, and on the smallest tiles a
+   two-line name can overlap it — white text over a lightened tile loses contrast. Dropping to 0.12
+   takes the palette colours that fall below WCAG AA in that overlap from EIGHT to THREE
+   (#1f7a86, #2f6f6a, #94631a), and the worst case from 3.72:1 to 4.01:1.
+
+   It does NOT make it always-AA, and lowering the opacity further cannot: all twelve colours only
+   clear 4.5:1 at about 0.058, which is close to invisible and would lose the watermark entirely.
+   The route to always-AA is geometric — stop the name and the glyph overlapping — not optical.
+   See the note in app/components/PosCategoryTiles.tsx. */
 .pos-cat-ghost {
   position: absolute;
   top: -14px;
@@ -314,7 +324,7 @@ input, select, textarea {
   line-height: 1;
   font-weight: 800;
   letter-spacing: -2px;
-  color: rgba(255,255,255,0.16);
+  color: rgba(255,255,255,0.12);
 }
 
 /* THE NAME — now the prominent element, sitting above the watermark. */
