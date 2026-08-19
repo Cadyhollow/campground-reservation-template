@@ -124,6 +124,25 @@ export function dueLabel(dueAt: string, now: Date = new Date()): string {
 }
 
 /**
+ * The due chip for a task that is due on a DAY rather than at a moment: "Today", "Tomorrow",
+ * "Sep 3".
+ *
+ * Check-in prep tasks are the case. They are due "before the Ortiz family arrive tomorrow", not
+ * at 00:00 — the midnight in the stored timestamp is a placeholder for "that day", and printing
+ * it back as "Tomorrow 12:00 AM" reads like a 15-minutes-past-midnight chore. The mockup shows
+ * the bare day for exactly this reason.
+ */
+export function dueDayLabel(dueAt: string, now: Date = new Date()): string {
+  const due = new Date(dueAt)
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const days = Math.round((startOfDay(due) - startOfDay(now)) / 86_400_000)
+  if (days === 0) return 'Today'
+  if (days === 1) return 'Tomorrow'
+  if (days === -1) return 'Yesterday'
+  return due.toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
+/**
  * Up to two initials for the round assignee badge.
  *
  * First and LAST word, so "Mary Anne Robinson" reads MR rather than MA — the first and last name

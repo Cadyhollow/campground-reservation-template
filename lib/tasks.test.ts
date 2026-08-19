@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  sortTasks, visibleTasks, openCount, isOverdue, dueLabel, initials, nameOf, priorityRank,
+  sortTasks, visibleTasks, openCount, isOverdue, dueLabel, dueDayLabel, initials, nameOf, priorityRank,
   type Task,
 } from './tasks.ts'
 
@@ -136,4 +136,15 @@ test('nameOf resolves a profile id, and is null when it cannot', () => {
   // The case that matters after someone is deactivated: they drop out of the roster, and the
   // board must fall back rather than render "undefined".
   assert.equal(nameOf('gone', people), null)
+})
+
+test('dueDayLabel prints a bare day, for tasks due on a date rather than at a moment', () => {
+  const now = new Date('2026-08-19T14:00:00')
+  // A check-in prep task stores midnight as a stand-in for "that day". Printing the time back
+  // would read as a 15-minutes-past-midnight chore.
+  assert.equal(dueDayLabel('2026-08-20T00:00:00', now), 'Tomorrow')
+  assert.equal(dueDayLabel('2026-08-19T00:00:00', now), 'Today')
+  assert.equal(dueDayLabel('2026-08-18T00:00:00', now), 'Yesterday')
+  assert.equal(dueDayLabel('2026-09-03T00:00:00', now), 'Sep 3')
+  assert.doesNotMatch(dueDayLabel('2026-08-20T00:00:00', now), /AM|PM|:/)
 })

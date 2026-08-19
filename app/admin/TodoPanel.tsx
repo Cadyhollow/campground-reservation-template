@@ -32,16 +32,33 @@
 import { useEffect, useState } from 'react'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import {
-  sortTasks, visibleTasks, openCount, isOverdue, dueLabel, initials, personColor, nameOf,
+  sortTasks, visibleTasks, openCount, isOverdue, dueLabel, dueDayLabel, initials, personColor, nameOf,
   type Task, type Person,
 } from '@/lib/tasks'
+import { describeRuleShort, type TaskRule } from '@/lib/task-generation'
+import ManageReminders from './ManageReminders'
 
 const supabase = createBrowserSupabase()
 
-// Every column the board reads, named explicitly rather than select('*') — so that adding a
-// column to the table (phase 2 will) cannot silently change what this component receives.
-const TASK_COLUMNS =
-  'id, title, notes, priority, assigned_to, due_at, created_by, created_at, completed_at, completed_by, removed_at, source'
+// ⚠ select('*'), AND THE PHASE-1 REASONING FOR A NAMED LIST HAS BEEN INVERTED ON PURPOSE.
+//
+// Phase 1 named every column here so that adding one could not silently change what this
+// component receives. Phase 2 is that added column — three of them — and naming them turns out to
+// be the dangerous choice: on a tenant carrying phase 1 but NOT phase 2, PostgREST errors on the
+// unknown column, the select fails, and this component's own tolerance logic hides the ENTIRE
+// board. A park would lose the working checklist it already had because it had not taken a
+// feature it never asked for.
+//
+// select('*') is what the Settings and Sites screens do for exactly this reason (see the pet
+// column notes in app/admin/sites/page.tsx). Phase-2 fields are then read defensively below.
+const TASK_COLUMNS = '*'
+
+// The browser's local date as 'YYYY-MM-DD'. Deliberately identical to lib/transactions.ts ymd()
+// and to the inline copy in app/admin/page.tsx — this is the app's one notion of "today", and the
+// generation pass must use the same one the stats above it use.
+function ymdLocal(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 // The mockup's palette, kept together so the panel can be restyled in one place.
 const LINE = '#e7e2d6'
@@ -49,6 +66,13 @@ const INK = '#26302b'
 const INK_SOFT = '#61695f'
 const MUTED = '#8a9187'
 const GREEN = '#2f4238'
+
+// The picker reads S M T W T F S starting on Sunday, because index 0 is Sunday in
+// JavaScript's Date.getDay() — which is what task_rules.byweekday stores and what the generation
+// engine matches on. Reordering these letters without reindexing would fire every weekly rule on
+// the wrong day.
+const DAY_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
+const DAY_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 const PRIORITY_CHIP: Record<string, { bg: string; color: string; label: string }> = {
   high: { bg: '#fbe9e4', color: '#b0432b', label: 'High' },
@@ -67,11 +91,24 @@ export default function TodoPanel({ onAvailability }: { onAvailability?: (ok: bo
   const [people, setPeople] = useState<Person[]>([])
   const [meId, setMeId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Whether this tenant has the phase-2 objects at all. Probed against task_rules, which ships in
+  // the same migration as every other phase-2 object — if it is there, they all are. Everything
+  // phase 2 adds (the Repeat control, the badges, Manage reminders) is hidden while this is false,
+  // and the phase-1 board carries on exactly as before.
+  const [phase2, setPhase2] = useState(false)
+  const [rules, setRules] = useState<TaskRule[]>([])
+  const [showManage, setShowManage] = useState(false)
 
   const [title, setTitle] = useState('')
   const [priority, setPriority] = useState('')
   const [assignee, setAssignee] = useState('')
   const [due, setDue] = useState('')
+  // The Repeat control. 'none' keeps the phase-1 behaviour exactly: a one-off task with a
+  // datetime. Anything else makes "Add" create a RULE instead.
+  const [repeat, setRepeat] = useState<'none' | 'daily' | 'weekly' | 'monthly'>('none')
+  const [repeatTime, setRepeatTime] = useState('10:00')
+  const [repeatDays, setRepeatDays] = useState<number[]>([])
+  const [repeatMonthday, setRepeatMonthday] = useState<number>(new Date().getDate())
 
   useEffect(() => {
     let alive = true
@@ -92,6 +129,23 @@ export default function TodoPanel({ onAvailability }: { onAvailability?: (ok: bo
         .then(d => { if (alive && d?.people) setPeople(d.people) })
         .catch(() => {})
 
+      // THE GENERATION PASS, BEFORE THE FIRST READ, so anything due today is already on the
+      // board by the time it renders rather than appearing a moment later.
+      //
+      // `today` is the BROWSER's local date. The app has no park timezone (see lib/bookability.ts)
+      // and the browser is the machine sitting at the park, so this is the app's existing notion
+      // of "today" rather than a new one. The route bounds what it will accept.
+      //
+      // Awaited, but never allowed to block the board: a generation failure must leave the
+      // existing tasks readable, so this cannot throw past here.
+      try {
+        await fetch('/api/tasks/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ today: ymdLocal(new Date()) }),
+        })
+      } catch { /* the board is still worth showing */ }
+
       const { data, error } = await supabase
         .from('tasks')
         .select(TASK_COLUMNS)
@@ -108,6 +162,15 @@ export default function TodoPanel({ onAvailability }: { onAvailability?: (ok: bo
       setAvailable(true)
       onAvailability?.(true)
       setTasks((data ?? []) as Task[])
+
+      // Phase-2 probe. An error here is not a failure — it is a park that has phase 1 only — so
+      // the board stays exactly as it was and every phase-2 control simply does not render.
+      const ruleProbe = await supabase.from('task_rules').select('*').order('created_at')
+      if (!alive) return
+      if (!ruleProbe.error) {
+        setPhase2(true)
+        setRules((ruleProbe.data ?? []) as TaskRule[])
+      }
     }
 
     load()
@@ -127,12 +190,55 @@ export default function TodoPanel({ onAvailability }: { onAvailability?: (ok: bo
       .select(TASK_COLUMNS)
       .is('removed_at', null)
     if (!error) setTasks((data ?? []) as Task[])
+    // Rules travel with the board so Manage reminders and the badges cannot disagree about what
+    // is scheduled. Only attempted once phase 2 is known present.
+    if (phase2) {
+      const r = await supabase.from('task_rules').select('*').order('created_at')
+      if (!r.error) setRules((r.data ?? []) as TaskRule[])
+    }
+  }
+
+  // Re-run generation and reload. Used after a schedule changes: creating, resuming or editing a
+  // rule can make an occurrence due right now, and the person who just did it should see it
+  // appear rather than wonder whether it worked.
+  async function regenerate() {
+    try {
+      await fetch('/api/tasks/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ today: ymdLocal(new Date()) }),
+      })
+    } catch { /* the reload below still shows whatever is there */ }
+    await refresh()
   }
 
   async function add() {
     const text = title.trim()
     if (!text || busy) return
     setBusy(true)
+
+    // REPEAT SET → this creates a RULE, not a task. The rule is the thing that will manufacture
+    // tasks from now on; the generation pass immediately afterwards is what makes today's
+    // occurrence (if it is due today) appear straight away, so the person who just typed it sees
+    // something happen rather than an empty board and a hope.
+    if (repeat !== 'none') {
+      await supabase.from('task_rules').insert({
+        title: text,
+        priority: priority || null,
+        assigned_to: assignee || null,
+        freq: repeat,
+        byweekday: repeat === 'weekly' ? repeatDays : null,
+        bymonthday: repeat === 'monthly' ? repeatMonthday : null,
+        at_time: repeatTime,
+        created_by: meId,
+      })
+      setTitle(''); setPriority(''); setAssignee(''); setDue('')
+      setRepeat('none'); setRepeatDays([])
+      await regenerate()
+      setBusy(false)
+      return
+    }
+
     await supabase.from('tasks').insert({
       title: text,
       priority: priority || null,
@@ -185,6 +291,13 @@ export default function TodoPanel({ onAvailability }: { onAvailability?: (ok: bo
 
   const shown = sortTasks(visibleTasks(tasks))
   const open = openCount(tasks)
+  // The rule behind a recurring instance, when it still exists. It may not: deleting a rule sets
+  // rule_id to NULL on its past instances, so the badge falls back to a plain "Recurring" rather
+  // than claiming a schedule that has been withdrawn.
+  const ruleOf = (task: Task) =>
+    (task as Task & { rule_id?: string }).rule_id
+      ? rules.find(r => r.id === (task as Task & { rule_id?: string }).rule_id) ?? null
+      : null
 
   return (
     <section
@@ -202,7 +315,18 @@ export default function TodoPanel({ onAvailability }: { onAvailability?: (ok: bo
             {open} open
           </span>
         </h2>
-        <span className="ml-auto text-[13px]" style={{ color: MUTED }}>Everyone sees this</span>
+        {phase2 ? (
+          <button
+            type="button"
+            onClick={() => setShowManage(true)}
+            className="ml-auto text-[12.5px] font-bold bg-transparent border-none cursor-pointer hover:underline"
+            style={{ color: '#3f679a' }}
+          >
+            ⚙ Manage reminders
+          </button>
+        ) : (
+          <span className="ml-auto text-[13px]" style={{ color: MUTED }}>Everyone sees this</span>
+        )}
       </div>
 
       {/* Quick add */}
@@ -246,15 +370,53 @@ export default function TodoPanel({ onAvailability }: { onAvailability?: (ok: bo
             <option key={p.id} value={p.id}>{p.full_name || 'Unnamed'}</option>
           ))}
         </select>
-        <label htmlFor="todo-due" className="sr-only">Due date and time</label>
-        <input
-          id="todo-due"
-          type="datetime-local"
-          className="flex-1 min-w-0 rounded-[9px] px-[9px] py-2 text-[12.5px] bg-white"
-          style={{ border: `1px solid ${LINE}`, color: INK_SOFT }}
-          value={due}
-          onChange={e => setDue(e.target.value)}
-        />
+        {phase2 && (
+          <>
+            <label htmlFor="todo-repeat" className="sr-only">Repeat</label>
+            <select
+              id="todo-repeat"
+              className="flex-1 min-w-0 rounded-[9px] px-[9px] py-2 text-[12.5px] bg-white"
+              style={{ border: `1px solid ${LINE}`, color: INK_SOFT }}
+              value={repeat}
+              onChange={e => setRepeat(e.target.value as typeof repeat)}
+            >
+              <option value="none">Repeat: Never</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </>
+        )}
+
+        {/* One control, two meanings. A one-off task needs a DATE and a time; a repeating one
+            needs only a time of day, because its dates come from the schedule. Showing both at
+            once would invite somebody to set a due date on a weekly rule and expect it to mean
+            something. */}
+        {repeat === 'none' ? (
+          <>
+            <label htmlFor="todo-due" className="sr-only">Due date and time</label>
+            <input
+              id="todo-due"
+              type="datetime-local"
+              className="flex-1 min-w-0 rounded-[9px] px-[9px] py-2 text-[12.5px] bg-white"
+              style={{ border: `1px solid ${LINE}`, color: INK_SOFT }}
+              value={due}
+              onChange={e => setDue(e.target.value)}
+            />
+          </>
+        ) : (
+          <>
+            <label htmlFor="todo-attime" className="sr-only">Time of day</label>
+            <input
+              id="todo-attime"
+              type="time"
+              className="flex-1 min-w-0 rounded-[9px] px-[9px] py-2 text-[12.5px] bg-white"
+              style={{ border: `1px solid ${LINE}`, color: INK_SOFT }}
+              value={repeatTime}
+              onChange={e => setRepeatTime(e.target.value)}
+            />
+          </>
+        )}
         <button
           type="button"
           onClick={add}
@@ -265,6 +427,73 @@ export default function TodoPanel({ onAvailability }: { onAvailability?: (ok: bo
           Add
         </button>
       </div>
+
+      {/* The schedule detail, revealed by the Repeat control. Weekly gets the S-M-T-W-T-F-S
+          picker; monthly a day-of-month. Daily needs nothing beyond the time already in the row
+          above, so it reveals nothing. */}
+      {phase2 && repeat !== 'none' && (
+        <div className="px-4 pb-3" style={{ background: '#faf8f2', borderBottom: `1px solid ${LINE}` }}>
+          <div className="rounded-[10px] px-[11px] py-[9px] bg-white" style={{ border: `1px dashed ${LINE}` }}>
+            {repeat === 'weekly' && (
+              <div className="flex items-center gap-2 flex-wrap text-[12.5px]" style={{ color: INK_SOFT }}>
+                <b style={{ color: INK }}>Repeats weekly on:</b>
+                <div className="flex gap-1" role="group" aria-label="Days of the week">
+                  {DAY_LETTERS.map((letter, i) => {
+                    const on = repeatDays.includes(i)
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        aria-pressed={on}
+                        aria-label={DAY_FULL[i]}
+                        onClick={() => setRepeatDays(on ? repeatDays.filter(d => d !== i) : [...repeatDays, i])}
+                        className="rounded-full text-[11px] font-bold inline-flex items-center justify-center cursor-pointer"
+                        style={{
+                          width: 26, height: 26,
+                          border: `1px solid ${on ? GREEN : LINE}`,
+                          background: on ? GREEN : '#fff',
+                          color: on ? '#fff' : INK_SOFT,
+                        }}
+                      >
+                        {letter}
+                      </button>
+                    )
+                  })}
+                </div>
+                {repeatDays.length === 0 && (
+                  // Said plainly rather than silently accepting an unfinished rule: a weekly rule
+                  // with no days matches nothing, and the engine deliberately does not treat it
+                  // as "every day".
+                  <span style={{ color: '#b0432b' }}>pick at least one day</span>
+                )}
+              </div>
+            )}
+            {repeat === 'monthly' && (
+              <div className="flex items-center gap-2 flex-wrap text-[12.5px]" style={{ color: INK_SOFT }}>
+                <b style={{ color: INK }}>Repeats monthly on day</b>
+                <label htmlFor="todo-monthday" className="sr-only">Day of the month</label>
+                <select
+                  id="todo-monthday"
+                  className="rounded-lg px-2 py-1 text-[12.5px] bg-white"
+                  style={{ border: `1px solid ${LINE}`, color: INK_SOFT, width: 'auto', flex: 'none' }}
+                  value={repeatMonthday}
+                  onChange={e => setRepeatMonthday(Number(e.target.value))}
+                >
+                  {Array.from({ length: 31 }, (_, i) => i + 1).map(d => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+                <span>— short months use their last day.</span>
+              </div>
+            )}
+            {repeat === 'daily' && (
+              <div className="text-[12.5px]" style={{ color: INK_SOFT }}>
+                <b style={{ color: INK }}>Repeats every day</b> at the time set above.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* The list scrolls INSIDE the panel, so the buttons in the left column never move. */}
       <ul className="list-none m-0 py-1 overflow-y-auto" style={{ maxHeight: 430 }}>
@@ -336,6 +565,26 @@ export default function TodoPanel({ onAvailability }: { onAvailability?: (ok: bo
                     </span>
                   ) : (
                     <>
+                      {/* Where a generated task says so. Purple for a recurring instance, teal
+                          for one raised from a check-in — the same two badges as the mockup, and
+                          the only visual difference between an automatic task and a typed one.
+                          Everything else about them behaves identically. */}
+                      {task.source === 'recurring' && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-bold"
+                          style={{ background: '#efeaf6', color: '#6a51a0' }}
+                        >
+                          ↺ Recurring{ruleOf(task) ? ` · ${describeRuleShort(ruleOf(task)!)}` : ''}
+                        </span>
+                      )}
+                      {task.source === 'auto_checkin' && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-bold"
+                          style={{ background: '#e2f0ee', color: '#2f6f6a' }}
+                        >
+                          ⟳ Auto · from check-in
+                        </span>
+                      )}
                       {chip && (
                         <span
                           className="rounded-full px-2 py-0.5 text-[11px] font-bold"
@@ -351,7 +600,8 @@ export default function TodoPanel({ onAvailability }: { onAvailability?: (ok: bo
                             ? { background: '#fbe9e4', color: '#b0432b', fontWeight: 700 }
                             : { background: '#f1efe8', color: INK_SOFT }}
                         >
-                          ⚑ {dueLabel(task.due_at)}
+                          {/* A check-in prep task is due on a DAY; everything else at a moment. */}
+                          ⚑ {task.source === 'auto_checkin' ? dueDayLabel(task.due_at) : dueLabel(task.due_at)}
                           {overdue && <span className="sr-only"> (overdue)</span>}
                         </span>
                       )}
@@ -390,6 +640,15 @@ export default function TodoPanel({ onAvailability }: { onAvailability?: (ok: bo
           )
         })}
       </ul>
+
+      {phase2 && showManage && (
+        <ManageReminders
+          rules={rules}
+          people={people}
+          onClose={() => setShowManage(false)}
+          onChanged={regenerate}
+        />
+      )}
     </section>
   )
 }
