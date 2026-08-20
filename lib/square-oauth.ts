@@ -49,7 +49,12 @@ export function getSquareAuthUrl(campgroundId: string): string {
 
   const params = new URLSearchParams({
     client_id: process.env.SQUARE_APPLICATION_ID!,
-    scope: 'PAYMENTS_WRITE PAYMENTS_READ ORDERS_WRITE MERCHANT_PROFILE_READ',
+    // DEVICE_CREDENTIAL_MANAGEMENT is what the Devices API checks on POST /v2/devices/codes and
+    // GET /v2/devices/codes/{id} — the two calls app/api/terminal/pair/route.ts makes. Without it
+    // pairing a Square Terminal fails with "the merchant has not given your application sufficient
+    // permissions". It is the ONLY extra permission pairing needs; the checkout that follows runs
+    // on PAYMENTS_WRITE, already granted above.
+    scope: 'PAYMENTS_WRITE PAYMENTS_READ ORDERS_WRITE MERCHANT_PROFILE_READ DEVICE_CREDENTIAL_MANAGEMENT',
     state,
   })
 
