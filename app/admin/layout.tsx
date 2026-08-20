@@ -74,6 +74,12 @@ const navGroups: NavGroup[] = [
       { name: 'Electric Billing', href: '/admin/electric-billing', icon: '⚡', minPlan: 'summit' as const },
       { name: 'Discounts', href: '/admin/discounts', icon: '🏷️' },
       { name: 'Transactions', href: '/admin/transactions', icon: '💳' },
+      // Square Account lives in FINANCE, not in the Point of Sale group beside 'Square Terminal',
+      // because that group is posOnly: a park with POS switched off would lose the only link to
+      // the connection its ONLINE card payments also depend on. Finance is never posOnly, and it
+      // renders immediately above Point of Sale, so the two Square items still read together.
+      // Owner-gating is not repeated here — roleForPath() resolves this through /admin/settings.
+      { name: 'Square Account', href: '/admin/settings/square', icon: '🔗' },
     ],
   },
   {
