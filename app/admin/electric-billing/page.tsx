@@ -74,28 +74,88 @@ type CamperRow = {
   showBillConfirm: boolean
 }
 
-function generateMonthOptions(): string[] {
-  const months = ['January','February','March','April','May','June','July','August','September','October','November','December']
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
+
+// The month the owner almost always means: the one that just ENDED. Parks bill on the 1st
+// for the period behind them, so seeding this box with the CURRENT month was permanently one
+// month ahead of intent — and a whole batch can go out mislabelled before anyone notices.
+// Rolls back across the year boundary (January -> December of the prior year). The owner can
+// still pick any month; this only decides where the box opens.
+function getPreviousMonthOption(): string {
   const now = new Date()
-  const currentYear = now.getFullYear()
+  const monthIdx = now.getMonth() - 1
+  const year = monthIdx < 0 ? now.getFullYear() - 1 : now.getFullYear()
+  return `${MONTH_NAMES[(monthIdx + 12) % 12]} ${year}`
+}
+
+function generateMonthOptions(): string[] {
+  const now = new Date()
+  // Start at the DEFAULT's year, not today's: in January the default is last December, and a
+  // <select> whose value is absent from its own options renders blank. Outside January this
+  // is the same two-year list as before.
+  const startYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear()
   const options: string[] = []
-  for (const year of [currentYear, currentYear + 1]) {
-    for (const month of months) {
+  for (let year = startYear; year <= now.getFullYear() + 1; year++) {
+    for (const month of MONTH_NAMES) {
       options.push(`${month} ${year}`)
     }
   }
   return options
 }
 
-function getCurrentMonthOption(): string {
-  const now = new Date()
-  return now.toLocaleString('default', { month: 'long' }) + ' ' + now.getFullYear()
+function parseMonthValue(s: string): number {
+  const p = s.split(' ')
+  return p.length === 2 ? parseInt(p[1]) * 12 + MONTH_NAMES.indexOf(p[0]) : 0
 }
 
-function parseMonthValue(s: string): number {
-  const months = ['January','February','March','April','May','June','July','August','September','October','November','December']
-  const p = s.split(' ')
-  return p.length === 2 ? parseInt(p[1]) * 12 + months.indexOf(p[0]) : 0
+// --- The billing period, for the confirmation headline ------------------------------------
+// Pure string math on ISO 'YYYY-MM-DD'; no Date is ever constructed here, so there is no
+// timezone drift exactly at the month boundary. The period is half-open [start, end): the end
+// is the next month's 1st, i.e. the meter-read boundary the bill runs up to. Derived from the
+// month label alone, so a tenant whose electric_readings table has no period columns still
+// gets the headline.
+function pad2(n: number): string { return n < 10 ? '0' + n : String(n) }
+
+function periodForMonth(billingMonth: string): { start: string; end: string } | null {
+  const parts = billingMonth.trim().split(' ')
+  if (parts.length !== 2) return null
+  const monthIdx = MONTH_NAMES.indexOf(parts[0])
+  const year = parseInt(parts[1], 10)
+  if (monthIdx < 0 || !Number.isFinite(year)) return null
+  const endYear = monthIdx === 11 ? year + 1 : year
+  const endMonth = monthIdx === 11 ? 1 : monthIdx + 2 // 1-based next month
+  return { start: `${year}-${pad2(monthIdx + 1)}-01`, end: `${endYear}-${pad2(endMonth)}-01` }
+}
+
+// 'YYYY-MM-DD' -> 'M/D/YY'
+function fmtMDY(iso: string): string {
+  const [y, m, d] = iso.split('-')
+  return `${parseInt(m, 10)}/${parseInt(d, 10)}/${y.slice(2)}`
+}
+
+// "July 2026" -> "7/1/26-8/1/26" (en dash). '' if the label can't be parsed.
+function periodLabel(billingMonth: string): string {
+  const p = periodForMonth(billingMonth)
+  return p ? `${fmtMDY(p.start)}\u2013${fmtMDY(p.end)}` : ''
+}
+
+// The one fact a busy person must not be able to skate past: WHICH MONTH is being billed.
+// Deliberately the largest thing in either confirmation, above the amount and the recipient.
+function MonthHeadline({ lead, billingMonth }: { lead: string; billingMonth: string }) {
+  const period = periodLabel(billingMonth)
+  return (
+    <div style={{ background: '#fff', border: '2px solid #1e40af', borderRadius: 9, padding: '10px 14px', marginBottom: 12 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6b7280' }}>{lead}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: '0.01em', color: '#1e3a8a', lineHeight: 1.2 }}>
+        {billingMonth.toUpperCase()}
+      </div>
+      {period && (
+        <div style={{ fontSize: 15, fontWeight: 700, color: '#1e40af' }}>
+          {'\u00b7'} {period}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function ElectricBillingPage() {
@@ -118,9 +178,11 @@ export default function ElectricBillingPage() {
   const [ratePerKwh, setRatePerKwh] = useState('0.27')
   const [minimumCharge, setMinimumCharge] = useState('15.00')
   const [activeTab, setActiveTab] = useState<'billing' | 'history'>('billing')
-  const [billingMonth, setBillingMonth] = useState(getCurrentMonthOption)
+  const [billingMonth, setBillingMonth] = useState(getPreviousMonthOption)
   const [emailMessage, setEmailMessage] = useState("Please find your monthly electric statement below. If you have any questions, please don't hesitate to reach out.")
   const [sendingAll, setSendingAll] = useState(false)
+  // The bulk action now asks first, and the ask leads with the month (see MonthHeadline).
+  const [showSendAllConfirm, setShowSendAllConfirm] = useState(false)
   const [autoPopulating, setAutoPopulating] = useState(false)
 
   const monthOptions = generateMonthOptions()
@@ -203,6 +265,7 @@ export default function ElectricBillingPage() {
 
  async function handleMonthChange(newMonth: string) {
     setBillingMonth(newMonth)
+    setShowSendAllConfirm(false) // never leave a confirmation open across a month change
     if (campers.length === 0) return
     setAutoPopulating(true)
     const selectedVal = parseMonthValue(newMonth)
@@ -677,9 +740,10 @@ export default function ElectricBillingPage() {
 
                       {row.showBillConfirm && (
                         <div style={{ margin: '0 14px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '14px' }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: '#1e40af', marginBottom: 6 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#1e40af', marginBottom: 8 }}>
                             Bill electric to {row.guest.name}?
                           </div>
+                          <MonthHeadline lead={'Billing ' + row.guest.name + ' for'} billingMonth={billingMonth} />
                           <div style={{ fontSize: 13, color: '#1e3a8a', marginBottom: 12 }}>
                             This creates a <strong>{billingMonth} electric charge of ${row.finalAmount}</strong> on their account and emails their statement to <strong>{row.guest.email}</strong>.
                           </div>
@@ -843,12 +907,34 @@ export default function ElectricBillingPage() {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16 }}>
-                <span style={{ fontSize: 14, color: '#6b7280' }}>{readyToSend} bill{readyToSend !== 1 ? 's' : ''} ready to send</span>
-                <button onClick={sendAllBills} disabled={sendingAll || readyToSend === 0}
-                  style={{ background: readyToSend > 0 ? '#2E6B8A' : '#d1d5db', color: '#fff', border: 'none', borderRadius: 8, padding: '11px 28px', fontWeight: 700, fontSize: 15, cursor: readyToSend > 0 ? 'pointer' : 'default' }}>
-                  {sendingAll ? 'Sending all...' : 'Send All Bills'}
-                </button>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 12 }}>
+                {/* The batch used to fire on one click. It now asks, and the ask leads with the
+                    month, because this is the action that can mislabel every camper at once. */}
+                {showSendAllConfirm && (
+                  <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: 16, maxWidth: 520, textAlign: 'left', alignSelf: 'flex-end' }}>
+                    <MonthHeadline lead='Billing everyone for' billingMonth={billingMonth} />
+                    <div style={{ fontSize: 13, color: '#1e3a8a', marginBottom: 12 }}>
+                      This creates a <strong>{billingMonth} electric charge</strong> on <strong>{readyToSend} camper account{readyToSend !== 1 ? 's' : ''}</strong> and emails each of them a statement. Campers already billed for this month, and any marked Skip, are left alone.
+                    </div>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <button onClick={() => { setShowSendAllConfirm(false); sendAllBills() }}
+                        style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '8px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+                        Yes, Bill {billingMonth}
+                      </button>
+                      <button onClick={() => setShowSendAllConfirm(false)}
+                        style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 7, padding: '8px 16px', fontSize: 13, fontWeight: 600, color: '#6b7280', cursor: 'pointer' }}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16 }}>
+                  <span style={{ fontSize: 14, color: '#6b7280' }}>{readyToSend} bill{readyToSend !== 1 ? 's' : ''} ready to send</span>
+                  <button onClick={() => setShowSendAllConfirm(true)} disabled={sendingAll || readyToSend === 0}
+                    style={{ background: readyToSend > 0 ? '#2E6B8A' : '#d1d5db', color: '#fff', border: 'none', borderRadius: 8, padding: '11px 28px', fontWeight: 700, fontSize: 15, cursor: readyToSend > 0 ? 'pointer' : 'default' }}>
+                    {sendingAll ? 'Sending all...' : 'Send All Bills'}
+                  </button>
+                </div>
               </div>
             </>
           )}
