@@ -74,6 +74,32 @@ type ContractLike = {
 }
 type SettingsLike = { season_opens?: string | null; season_closes?: string | null } | null | undefined
 
+/** The rig/site fields the packet is frozen with. Copied from the GUEST record, never the draft. */
+export type RigSiteSnapshot = {
+  site_number: string
+  camper_type: string | null
+  camper_length: number | null
+  camper_amperage: string | null
+  camper_make: string | null
+  camper_model: string | null
+  camper_year: number | null
+}
+
+type RigGuestLike = GuestLike & {
+  site_number?: string | null
+  camper_type?: string | null
+  camper_length?: number | null
+  camper_amperage?: string | null
+}
+type SnapshotContractLike = ContractLike & { site_number?: string | null }
+
+/** The two document bodies a packet is made of, plus the contract's title. */
+export type PacketDocuments = {
+  contractTitle: string
+  contractText: string
+  waiverText: string
+}
+
 const pick = (...vals: Array<string | null | undefined>): string =>
   (vals.find(v => v != null && v !== '') ?? '') as string
 
@@ -118,5 +144,72 @@ export function buildContractVars(guest: GuestLike, contract: ContractLike, sett
     // staff_notes, which is private and must never reach a camper's contract.
     charge_note: pick(contract.charge_note),
     home_address,
+  }
+}
+
+
+// ── THE PACKET RENDERER — ONE IMPLEMENTATION, USED BY THE FREEZE AND BY EVERY PREVIEW ─────────
+//
+// WHY THESE TWO FUNCTIONS EXIST. freezePacket() in lib/contract-server.ts turns a draft into the
+// legal documents a camper signs. Two admin screens show the owner what that will produce BEFORE
+// it happens — the New Camper intake form and the Phase 1.5 review screen. A preview whose output
+// differs from the freeze, in any byte, is worse than no preview at all: it is a screen that says
+// "this is what they will sign" and is wrong.
+//
+// The only way to guarantee they agree is for there to be nothing to keep in agreement. So the
+// rendering lives here, once, and the freeze calls it too. There is no second renderer to drift.
+//
+// Kept in this module, not in contract-server.ts, deliberately: contract-server.ts constructs a
+// service-role Supabase client at import and can never be pulled into a browser bundle. This file
+// is pure, so the client screens can import it.
+
+/**
+ * The rig/site snapshot a packet freezes with.
+ *
+ * ⚠ THESE COME FROM THE GUEST RECORD, NOT FROM THE DRAFT, and that asymmetry is intentional
+ * rather than an oversight. The guest record is current truth about the camper's rig; the draft
+ * carries the staff-edited party, season dates, total and charge note. freezePacket has always
+ * snapshotted all seven of these off the guest at send time, so a preview that rendered the
+ * draft's stale copy would show a different unit than the camper is about to be sent.
+ *
+ * `site_number` falls back to the contract and then to '' — matching the schema default and the
+ * behaviour freeze has always had.
+ */
+export function guestRigSnapshot(guest: RigGuestLike, contract?: SnapshotContractLike): RigSiteSnapshot {
+  return {
+    site_number: guest.site_number || contract?.site_number || '',
+    camper_type: guest.camper_type ?? null,
+    camper_length: guest.camper_length ?? null,
+    camper_amperage: guest.camper_amperage ?? null,
+    camper_make: guest.camper_make ?? null,
+    camper_model: guest.camper_model ?? null,
+    camper_year: guest.camper_year ?? null,
+  }
+}
+
+/**
+ * Render a packet's two documents exactly as freezePacket will write them.
+ *
+ * ⚠ THE SETTINGS ARGUMENT TO buildContractVars IS DELIBERATELY OMITTED. See the long note in
+ * lib/contract-server.ts: `settings` has season_start / season_end, NOT season_opens /
+ * season_closes, so that middle fallback tier has never fired anywhere. Passing the row here
+ * would ACTIVATE a dormant tier and could change which dates print on a signed legal agreement.
+ * Preserving the omission is what keeps this function byte-identical to the freeze.
+ *
+ * `waiverText` is returned as-is: the waiver carries no merge fields today, and freeze renders it
+ * unrendered for that reason. Do not "fix" that here without changing the freeze in the same
+ * commit — they are the same code path now.
+ */
+export function renderPacketDocuments(
+  guest: RigGuestLike,
+  contract: SnapshotContractLike,
+  settings: { contract_text?: string | null; waiver_text?: string | null } | null | undefined,
+): PacketDocuments {
+  const snapshot = guestRigSnapshot(guest, contract)
+  const vars = buildContractVars(guest, { ...contract, ...snapshot }, undefined)
+  return {
+    contractTitle: `${contract.season_year ?? ''} Seasonal Admission Agreement`,
+    contractText: renderTemplate(settings?.contract_text || '', vars),
+    waiverText: settings?.waiver_text || '',
   }
 }
