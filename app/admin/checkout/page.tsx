@@ -160,6 +160,9 @@ export default function LaneCheckoutPage() {
   const overageExceedsCap = maxCreditAmount > 0 && overageCents > maxCreditAmount
   const shortCents = method === 'cash' && cashTendered !== '' ? Math.max(0, grandTotal - tenderedCents) : 0
   const creditCents = keepAsCredit ? overageCents : 0
+  // Which lane a kept credit will be filed under — only when exactly one lane is being paid.
+  const selectedLanes = PAYABLE.filter(p => lineFor(p.lane) > 0)
+  const creditLaneLabel = selectedLanes.length === 1 ? selectedLanes[0].label : ''
 
   async function mountCard() {
     setSquareErr('')
@@ -223,14 +226,25 @@ export default function LaneCheckoutPage() {
           note,
           lane: l.lane,
         }))
-        // A KEPT OVERPAYMENT IS ONE UNTAGGED ROW. Untagged is exactly what "an account credit,
-        // applicable to any lane later" already means in Phase 4 — it belongs to the account
-        // rather than to any one lane, which is the meaning this choice has always had.
+        // ── PR 3c: A KEPT OVERPAYMENT CARRIES THE LANE IT WAS PAID ON ───────────────────────
+        //
+        // Previously this row was untagged, and that broke the thing Phase 4 exists for: an
+        // untagged credit floats outside every lane, so the lanes stop summing to the account
+        // and a camper is told they owe more on a lane than they owe in total.
+        //
+        // When ONE lane was being paid, "the lane it was paid on" is unambiguous, so the credit
+        // is filed there automatically — no extra tap for staff, and the lanes stay reconciled.
+        //
+        // When SEVERAL lanes were paid at once there is no honest answer, so the credit stays
+        // unassigned and is shown as such on the folio, with the one-tap control to file it.
+        // Picking the largest lane, or the first, would be a guess dressed up as a fact — and a
+        // wrong guess silently misstates what a camper owes on a specific lane.
+        const creditLane = split.length === 1 ? split[0].lane : null
         if (creditCents > 0) {
           rows.push({
             folio_id: data.folioId, method, amount: creditCents, surcharge_amount: 0,
             status: 'completed', note: (note ? note + ' · ' : '') + 'Account credit',
-            lane: null,
+            lane: creditLane,
           })
         }
         const { error } = await supabase.from('folio_payments').insert(rows)
@@ -454,7 +468,9 @@ export default function LaneCheckoutPage() {
                     )}
                     {keepAsCredit && (
                       <p className="text-xs text-gray-500 mt-1">
-                        Recorded as an <strong>account credit</strong> — it applies to any lane and comes off their next charge.
+                        {creditLaneLabel
+                          ? <>Kept as credit on <strong>{creditLaneLabel}</strong> — it comes off that lane&rsquo;s next charge. You can move it to another lane from the folio.</>
+                          : <>Kept as an <strong>account credit</strong>. You&rsquo;re paying more than one lane, so it isn&rsquo;t filed against a particular one — file it from the folio in a tap.</>}
                       </p>
                     )}
                   </>
