@@ -95,6 +95,7 @@ const defaultSettings = {
   waiver_text: '',
   contract_text: '',
   packet_email_intro: '',
+  billing_mode: 'combined',
   maintenance_mode: false,
   maintenance_message: 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
   deposit_type: 'first_night',
@@ -143,6 +144,7 @@ export default function SettingsPage() {
   // row, so it self-activates the moment a tenant is migrated, with no code change.
   const [hasPetColumns, setHasPetColumns] = useState(false)
   const [hasPacketIntroColumn, setHasPacketIntroColumn] = useState(false)
+  const [hasBillingModeColumn, setHasBillingModeColumn] = useState(false)
   const [earlyPriceInput, setEarlyPriceInput] = useState('0.00')
   const [latePriceInput, setLatePriceInput] = useState('0.00')
   const [uploadingLogo, setUploadingLogo] = useState(false)
@@ -173,6 +175,7 @@ export default function SettingsPage() {
       // Phase 3 column — a tenant that has not run the migration must not be offered a field whose
       // save would fail. Same pattern as hero_image_url and the pet columns.
       setHasPacketIntroColumn('packet_email_intro' in data)
+      setHasBillingModeColumn('billing_mode' in data)
       setForm({
         park_name: data.park_name || '',
         park_tagline: data.park_tagline || '',
@@ -223,6 +226,8 @@ export default function SettingsPage() {
         waiver_text: data.waiver_text || '',
         contract_text: data.contract_text || '',
         packet_email_intro: data.packet_email_intro || '',
+        // Anything unrecognised reads as combined — the same fail-safe the server applies.
+        billing_mode: data.billing_mode === 'separated' ? 'separated' : 'combined',
         maintenance_mode: data.maintenance_mode || false,
         maintenance_message: data.maintenance_message || 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
         pets_enabled: data.pets_enabled || false,
@@ -578,6 +583,7 @@ export default function SettingsPage() {
       waiver_text: form.waiver_text,
       contract_text: form.contract_text,
       ...(hasPacketIntroColumn ? { packet_email_intro: form.packet_email_intro } : {}),
+      ...(hasBillingModeColumn ? { billing_mode: form.billing_mode } : {}),
       maintenance_mode: form.maintenance_mode,
       maintenance_message: form.maintenance_message,
       deposit_type: form.deposit_type,
@@ -1077,6 +1083,60 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+
+        {/* ── HOW SEASONAL MONEY IS TRACKED (Phase 4) ─────────────────────────────────────
+            The switch that turns the separated experience on. It changes PRESENTATION ONLY:
+            since PR 2 the seasonal fee is posted to the folio in either mode, so flipping this
+            never moves a camper's balance — it changes how that same money is shown, and whether
+            the electric bill is narrowed to electric. */}
+        {hasBillingModeColumn && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-1">How seasonal money is tracked</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              Whether a seasonal camper has one running balance or separate lanes. You can switch back and forth at
+              any time — it changes how the money is <em>shown</em>, never what anyone owes.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {([
+                {
+                  value: 'combined',
+                  title: 'Combined',
+                  blurb: 'One running balance per camper — the seasonal fee, the store tab and electric all together. This is how the app has always worked.',
+                },
+                {
+                  value: 'separated',
+                  title: 'Separated',
+                  blurb: 'Seasonal fees, the store tab and electric each tracked in their own lane, so you can see and settle them separately — and the seasonal fee stays off the electric bill.',
+                },
+              ] as const).map(opt => {
+                const active = form.billing_mode === opt.value
+                return (
+                  <button key={opt.value} type="button"
+                    onClick={() => setForm({ ...form, billing_mode: opt.value })}
+                    className="text-left rounded-xl border-2 p-4 transition-colors"
+                    style={{ borderColor: active ? '#15803d' : '#e5e7eb', background: active ? '#f0fdf4' : '#fff' }}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span style={{
+                        width: 18, height: 18, borderRadius: 999, flexShrink: 0, display: 'inline-flex',
+                        alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#fff',
+                        border: `2px solid ${active ? '#15803d' : '#9ca3af'}`, background: active ? '#15803d' : '#fff',
+                      }}>{active ? '✓' : ''}</span>
+                      <span className="text-sm font-bold text-gray-900">{opt.title}</span>
+                      {opt.value === 'combined' && <span className="text-[11px] text-gray-400">(default)</span>}
+                    </div>
+                    <p className="text-xs text-gray-500 leading-relaxed">{opt.blurb}</p>
+                  </button>
+                )
+              })}
+            </div>
+            {form.billing_mode === 'separated' && (
+              <p className="text-xs text-gray-500 mt-3">
+                Seasonal campers now show Electric, Store and Seasonal balances on their page, and you can take a
+                payment against specific lanes from <strong>Take a payment</strong> there.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* ── SEASONAL PACKET ──────────────────────────────────────────────────────────────
             The seasonal agreement's body and the invitation email that carries it.

@@ -151,7 +151,19 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
         )}
         <Row label="Last payment" value={data.lastPayment ? `${fmtMoney(data.lastPayment.amount - (data.lastPayment.surcharge_amount || 0))} · ${fmtDate(data.lastPayment.paid_at)}` : '—'} />
         {admin && data.folioId && (
-          <div className="mt-2"><Link href={`/admin/folio/guest/${g.id}`} className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>Open folio →</Link></div>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            {/* Phase 4 PR 3. Shown only when the park is SEPARATED — `lanes` is present exactly
+                then — because the lane checkout has nothing to select otherwise. A combined park
+                keeps taking payments on the folio, unchanged. */}
+            {lanes && (
+              <Link href={`/admin/checkout?guestId=${g.id}`}
+                className="px-3 py-2 rounded-lg text-xs font-bold text-white"
+                style={{ background: '#15803d' }}>
+                Take a payment
+              </Link>
+            )}
+            <Link href={`/admin/folio/guest/${g.id}`} className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>Open folio →</Link>
+          </div>
         )}
       </Section>
 
