@@ -20,10 +20,28 @@ export type SeasonalOccupant = {
   kind?: string | null
 }
 
+/**
+ * A park-level named season ("2027 Spring") — Phase 2a.
+ *
+ * `opens`/`closes` are nullable: a season an owner has not dated yet is a normal state, and every
+ * season the Phase 2a backfill created has null dates on purpose (a sent contract already carries
+ * its own frozen dates, so inventing historical ones would be guessing).
+ */
+export type Season = {
+  id: string
+  name: string
+  year: number
+  opens?: string | null
+  closes?: string | null
+  created_at?: string | null
+}
+
 /** A row of `seasonal_contracts`, as the seasonal routes return it. */
 export type SeasonalContract = {
   id: string
   season_year: number
+  /** Phase 2a. NOT NULL in the schema; optional here because older cached payloads predate it. */
+  season_id?: string | null
   status: string
   packet_id?: string | null
   site_number?: string | null

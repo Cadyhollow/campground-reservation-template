@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { svc, isSummit, errMessage } from '@/lib/contract-server'
+import { svc, isSummit, errMessage, findOrCreateSeasonForYear } from '@/lib/contract-server'
 import { requireRole } from '@/lib/require-role'
 
 
@@ -13,8 +13,10 @@ import { requireRole } from '@/lib/require-role'
 // rig/site from last year's row.
 //
 // Idempotent: skips any guest that already has a to_year row, and survives a
-// unique-constraint (guest_id, season_year) race per guest without failing the
-// batch — mirroring the create route's 23505 handling. Never creates or modifies
+// unique-constraint race per guest without failing the batch — mirroring the create
+// route's 23505 handling. (Phase 2a swapped that constraint from (guest_id,
+// season_year) to (guest_id, season_id); the 23505 handling is unchanged and still
+// correct, because every row in a batch shares one season.) Never creates or modifies
 // guest rows. Never sends, never issues tokens; status stays 'draft'.
 //
 // preview:true returns { would_create, would_skip } and writes NOTHING — used by
@@ -89,11 +91,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ preview: true, from_year, to_year, would_create: toCreate.length, would_skip: skipped })
     }
 
+    // Phase 2a: season_id is NOT NULL. Resolved ONCE for the batch rather than per guest — every
+    // row here is for the same to_year, and doing it once means a batch cannot end up split
+    // across two seasons if a concurrent request creates one midway.
+    //
+    // Deliberately AFTER the preview early-return above, so `preview: true` still writes nothing
+    // at all — including no auto-created season.
+    const season = await findOrCreateSeasonForYear(to_year)
+    if (!season.ok) return NextResponse.json({ error: season.error }, { status: 500 })
+
     let created = 0
     for (const { src, guest } of toCreate) {
       const draft = {
         guest_id: guest.id,
         season_year: to_year,
+        season_id: season.season_id,
         status: 'draft',
         // FRESH from the guest record:
         site_number: guest.site_number || '',

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { planAtLeast } from '@/lib/plan'
 import { currentSeasonYear } from '@/lib/season'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
+import SeasonsManager from './SeasonsManager'
 
 // PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
 // `anon`. Same publishable key, but it travels with the session cookie, so PostgREST runs
@@ -54,6 +55,8 @@ export default function SeasonalsPage() {
   const [cloneResult, setCloneResult] = useState<{ created: number; skipped: number; errors: { guest_id: string; reason: string }[] } | null>(null)
   const [cloneBusy, setCloneBusy] = useState(false)
   const [cloneErr, setCloneErr] = useState('')
+  // Phase 2a: the seasons manager. Purely additive — nothing else on this page reads seasons yet.
+  const [seasonsOpen, setSeasonsOpen] = useState(false)
 
   // Batch-1 gate: decide on the freshly-loaded plan, never the state default.
   useEffect(() => {
@@ -133,6 +136,11 @@ export default function SeasonalsPage() {
             style={unsignedOnly ? { background: '#fffbeb', borderColor: '#fde68a', color: '#b45309' } : { background: '#fff', borderColor: '#e5e7eb', color: '#6b7280' }}>
             {unsignedOnly ? 'Showing unsigned' : 'Unsigned only'}
           </button>
+          <button onClick={() => setSeasonsOpen(true)}
+            className="px-3 py-2 text-xs font-medium rounded-lg border"
+            style={{ background: '#fff', borderColor: '#e5e7eb', color: '#6b7280' }}>
+            Manage seasons
+          </button>
           <button onClick={openClone}
             className="px-3 py-2 text-xs font-semibold rounded-lg border text-white"
             style={{ background: '#15803d', borderColor: '#15803d' }}>
@@ -182,6 +190,8 @@ export default function SeasonalsPage() {
           </table>
         </div>
       </div>
+
+      {seasonsOpen && <SeasonsManager defaultYear={year} onClose={() => setSeasonsOpen(false)} />}
 
       {cloneStep !== 'idle' && (
         <>
