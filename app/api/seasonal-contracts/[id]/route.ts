@@ -11,6 +11,10 @@ import { requireRole } from '@/lib/require-role'
 // db/migrations/2026-08-27-seasonal-charge-note.sql.
 const EDITABLE = [
   'occupants', 'total_due_cents', 'staff_notes', 'charge_note', 'site_number',
+  // Phase 3 — display-only amounts and their due-by dates. They need no snapshot logic at send
+  // (unlike the season dates): they are plain columns ON the contract, so the document renders
+  // them as they stand, and this route already refuses any edit once the status leaves 'draft'.
+  'deposit_due_cents', 'total_due_by', 'deposit_due_by',
   'season_opens', 'season_closes',
   'camper_type', 'camper_length', 'camper_amperage',
   'camper_make', 'camper_model', 'camper_year',

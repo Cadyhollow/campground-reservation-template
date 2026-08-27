@@ -6,7 +6,10 @@ import { randomBytes, randomUUID } from 'crypto'
 import { createClient } from '@supabase/supabase-js'
 import { Resend } from 'resend'
 import { planAtLeast } from '@/lib/plan'
-import { guestRigSnapshot, renderPacketDocuments, effectiveSeasonDates } from '@/lib/contracts'
+import {
+  guestRigSnapshot, renderPacketDocuments, effectiveSeasonDates,
+  buildContractVars, renderTemplate,
+} from '@/lib/contracts'
 
 // Service-role client (bypasses RLS). Constructed at import is fine — createClient
 // doesn't throw on missing env (unlike Resend, which we keep lazy below).
@@ -137,6 +140,46 @@ export async function findOrCreateSeasonForYear(year: number): Promise<
   return { ok: false, error: error?.message || 'Could not resolve a season for this year.' }
 }
 
+/**
+ * The invitation email's message, rendered for one contract — Phase 3.
+ *
+ * The park's own text from settings.packet_email_intro, with the SAME merge tokens the contract
+ * body supports, substituted against the SAME inputs the document used: the guest, the contract,
+ * and the contract's season (effective dates included). So "your deposit of {{deposit_due}} is due
+ * by {{deposit_due_by}}" in the email says exactly what the agreement says.
+ *
+ * Returns '' when the park has set nothing — packetEmailHtml then renders its built-in default.
+ *
+ * ⚠ THIS IS A COVER NOTE, NOT PART OF THE SIGNED DOCUMENT, and the difference is the whole reason
+ * it can be rendered late. The packet's two documents were frozen onto signature rows at send and
+ * are never re-read. This text is rendered FRESH every time an email goes out — so editing it
+ * between a send and a resend changes what the covering email says and CANNOT change what the
+ * camper signs. The resent link still points at the same frozen packet.
+ *
+ * Shared by /send and /resend so the two cannot drift apart.
+ */
+export function renderPacketIntro(
+  guest: DbRow | null | undefined,
+  contract: DbRow | null | undefined,
+  season: DbRow | null | undefined,
+  settings: { packet_email_intro?: string | null } | null | undefined,
+): string {
+  const raw = (settings?.packet_email_intro || '').trim()
+  if (!raw) return ''
+  const dates = effectiveSeasonDates(contract as never, season as never)
+  const vars = buildContractVars(
+    (guest || {}) as never,
+    {
+      ...(contract || {}),
+      season_opens: dates.opens,
+      season_closes: dates.closes,
+      season_name: (season?.name as string | undefined) ?? null,
+    } as never,
+    undefined,
+  )
+  return renderTemplate(raw, vars)
+}
+
 // THE FREEZE — the single place a draft becomes a signable packet. Renders both
 // documents from settings, runs the empty-doc GUARD (so EVERY caller inherits it),
 // snapshots the guest's rig/site AND the resolved season dates onto the contract,
@@ -154,7 +197,7 @@ export async function findOrCreateSeasonForYear(year: number): Promise<
 export type DbRow = Record<string, unknown>
 
 export type FreezeResult =
-  | { ok: true; packet_id: string; guest: DbRow; contract: DbRow; settings: DbRow | null }
+  | { ok: true; packet_id: string; guest: DbRow; contract: DbRow; settings: DbRow | null; season: DbRow | null }
   | { ok: false; status: number; error: string }
 
 export async function freezePacket(contractId: string, opts?: { requireEmail?: boolean }): Promise<FreezeResult> {
@@ -172,7 +215,7 @@ export async function freezePacket(contractId: string, opts?: { requireEmail?: b
 
   const { data: settings } = await svc
     .from('settings')
-    .select('park_name, park_email, contract_text, waiver_text')
+    .select('park_name, park_email, contract_text, waiver_text, packet_email_intro')
     .limit(1).single()
 
   // The guest record is current truth; the contract is a frozen copy. Snapshot ALL
@@ -201,6 +244,7 @@ export async function freezePacket(contractId: string, opts?: { requireEmail?: b
   const st = settings as {
     park_name?: string | null; park_email?: string | null
     contract_text?: string | null; waiver_text?: string | null
+    packet_email_intro?: string | null
   } | null
 
   // ⚠ THE RENDERING NOW LIVES IN lib/contracts.ts AND THIS IS NOT A REFACTOR FOR TIDINESS.
@@ -274,5 +318,7 @@ export async function freezePacket(contractId: string, opts?: { requireEmail?: b
     return { ok: false, status: 500, error: eC.message }
   }
 
-  return { ok: true, packet_id, guest, contract, settings }
+  // The season travels back so /send can render the invitation email's intro against the same
+  // inputs the document used, without a second query.
+  return { ok: true, packet_id, guest, contract, settings, season: season ?? null }
 }

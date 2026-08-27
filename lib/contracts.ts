@@ -70,6 +70,10 @@ type ContractLike = {
   camper_model?: string | null
   camper_year?: number | null
   total_due_cents?: number | null
+  /** Phase 3 — DISPLAY ONLY, like total_due_cents. Prints; nothing is charged from it. */
+  deposit_due_cents?: number | null
+  total_due_by?: string | null
+  deposit_due_by?: string | null
   charge_note?: string | null
   /** Phase 2b. The season's name, passed in by renderPacketDocuments — see {{season_name}}. */
   season_name?: string | null
@@ -154,6 +158,14 @@ export function buildContractVars(guest: GuestLike, contract: ContractLike, sett
     // literal token and never the word "null".
     season_name: pick(contract.season_name),
     total_due: formatCents(contract.total_due_cents),
+    // Phase 3. DISPLAY ONLY — these three print on the agreement and nothing is charged from
+    // them. Null-safe like every other var, and the null/zero distinction matters here more than
+    // most: formatCents(null) is '' ("no deposit stated") while formatCents(0) is '$0.00' (a
+    // stated deposit of nothing). A contract must not claim the second when the park meant the
+    // first, which is why the columns are nullable with no default.
+    deposit_due: formatCents(contract.deposit_due_cents),
+    total_due_by: formatContractDate(contract.total_due_by),
+    deposit_due_by: formatContractDate(contract.deposit_due_by),
     // The owner's CUSTOMER-FACING explanation of the total ("includes 2 extra family members,
     // golf cart, second site"). Same null-safe treatment as every other var: null/undefined
     // renders '', never the literal "null" and never a leftover {{charge_note}}. Deliberately NOT

@@ -68,6 +68,10 @@ export default function SeasonalReviewPage() {
   // The editable fields — the same set the modal carried, plus Phase 1's charge note.
   const [occupants, setOccupants] = useState<Occupant[]>([])
   const [totalDue, setTotalDue] = useState('')
+  // Phase 3 — DISPLAY ONLY, like Total due.
+  const [depositDue, setDepositDue] = useState('')
+  const [totalDueBy, setTotalDueBy] = useState('')
+  const [depositDueBy, setDepositDueBy] = useState('')
   const [chargeNote, setChargeNote] = useState('')
   // Phase 2b: the screen is driven by the contract's SEASON. Its dates are the default; these
   // three pieces of state are the per-camper override.
@@ -112,6 +116,9 @@ export default function SeasonalReviewPage() {
       setOccupants(Array.isArray(c.occupants) ? (c.occupants as Occupant[]) : [])
       setTotalDue(c.total_due_cents != null ? (c.total_due_cents / 100).toFixed(2) : '')
       setChargeNote(c.charge_note || '')
+      setDepositDue(c.deposit_due_cents != null ? (c.deposit_due_cents / 100).toFixed(2) : '')
+      setTotalDueBy(c.total_due_by || '')
+      setDepositDueBy(c.deposit_due_by || '')
       // The contract's own dates ARE the override. A pre-2b draft has them filled in (they were
       // seeded from the guest back then), so it opens with the override already on and keeps
       // exactly the dates it had — nothing shifts under the owner. A 2b draft has them null and
@@ -138,6 +145,8 @@ export default function SeasonalReviewPage() {
 
   const g: SeasonalGuest = data?.guest || { id: '' }
   const totalDueCents = totalDue ? Math.round(parseFloat(totalDue) * 100) : null
+  // null, not 0, when blank — a stated $0.00 deposit and no deposit are different terms.
+  const depositDueCents = depositDue ? Math.round(parseFloat(depositDue) * 100) : null
 
   // The override exactly as it will be saved, and the dates the packet actually runs on.
   const overrideDates = {
@@ -157,6 +166,9 @@ export default function SeasonalReviewPage() {
     season_year: year,
     occupants,
     total_due_cents: totalDueCents,
+    deposit_due_cents: depositDueCents,
+    total_due_by: totalDueBy || null,
+    deposit_due_by: depositDueBy || null,
     charge_note: chargeNote,
     ...overrideDates,
   }
@@ -186,6 +198,9 @@ export default function SeasonalReviewPage() {
       body: JSON.stringify({
         occupants,
         total_due_cents: totalDueCents,
+        deposit_due_cents: depositDueCents,
+        total_due_by: totalDueBy || null,
+        deposit_due_by: depositDueBy || null,
         charge_note: chargeNote.trim() || null,
         // Null unless the owner explicitly chose different dates — a null override is what makes
         // this contract inherit its season. The freeze resolves and snapshots the result.
@@ -307,6 +322,23 @@ export default function SeasonalReviewPage() {
           <label className={lbl}>Total due (display only, $)</label>
           <input type="number" step="0.01" value={totalDue} onChange={e => setTotalDue(e.target.value)} placeholder="0.00" className={`${inp} max-w-[200px]`} />
         </div>
+        <div className="grid grid-cols-2 gap-3 mt-3">
+          <div>
+            <label className={lbl}>Deposit due (display only, $)</label>
+            <input type="number" step="0.01" value={depositDue} onChange={e => setDepositDue(e.target.value)} placeholder="0.00" className={inp} />
+          </div>
+          <div>
+            <label className={lbl}>Deposit due by</label>
+            <input type="date" value={depositDueBy} onChange={e => setDepositDueBy(e.target.value)} className={inp} />
+          </div>
+          <div>
+            <label className={lbl}>Total due by</label>
+            <input type="date" value={totalDueBy} onChange={e => setTotalDueBy(e.target.value)} className={inp} />
+          </div>
+        </div>
+        <p className="text-xs text-gray-400 mt-1">
+          Display only — these print on the contract and nothing is charged from them.
+        </p>
         <div className="mt-3">
           <label className={lbl}>Note about the charge (prints on the contract)</label>
           <textarea value={chargeNote} onChange={e => setChargeNote(e.target.value)} rows={3}
