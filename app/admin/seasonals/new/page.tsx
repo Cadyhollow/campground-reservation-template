@@ -4,14 +4,14 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { planAtLeast } from '@/lib/plan'
 import { currentSeasonYear } from '@/lib/season'
-import { renderPacketDocuments } from '@/lib/contracts'
+import { effectiveSeasonDates, renderPacketDocuments } from '@/lib/contracts'
 import AddressEditor, { type Address } from '../AddressEditor'
 import RigEditor, { type Rig } from '../RigEditor'
 import PartyEditor, { type Occupant } from '../PartyEditor'
 import PacketPreview, { missingPacketFields } from '../PacketPreview'
 import toast, { Toaster } from 'react-hot-toast'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
-import type { SeasonalContract } from '@/lib/seasonal-types'
+import type { Season, SeasonalContract } from '@/lib/seasonal-types'
 
 /** Only the two fields the preview reads off `settings`. */
 type SeasonalSettings = { contract_text?: string | null; waiver_text?: string | null; plan?: string | null }
@@ -43,9 +43,14 @@ export default function NewSeasonalCamperPage() {
   // SETUP
   const [rig, setRig] = useState<Rig>({})
   const [occupants, setOccupants] = useState<Occupant[]>([])
-  const [seasonYear, setSeasonYear] = useState(cy)
-  const [seasonOpens, setSeasonOpens] = useState('')
-  const [seasonCloses, setSeasonCloses] = useState('')
+  // Phase 2b: the camper is filed under a SEASON, not a year. Its dates are the default; the
+  // override below is only for a camper whose stay genuinely differs from the season's.
+  const [seasons, setSeasons] = useState<Season[]>([])
+  const [seasonsLoaded, setSeasonsLoaded] = useState(false)
+  const [seasonId, setSeasonId] = useState('')
+  const [overrideOn, setOverrideOn] = useState(false)
+  const [ovOpens, setOvOpens] = useState('')
+  const [ovCloses, setOvCloses] = useState('')
   // CONTRACT
   const [totalDue, setTotalDue] = useState('')
   const [chargeNote, setChargeNote] = useState('')   // CUSTOMER-FACING — prints on the contract
@@ -63,6 +68,21 @@ export default function NewSeasonalCamperPage() {
     })
   }, [router])
 
+  // The park's seasons. Defaults to one in the computed current season year (earliest-created,
+  // the same "year's default" rule the create route and the 2a backfill use), falling back to the
+  // newest season the park has so the picker is never pointlessly empty.
+  useEffect(() => {
+    fetch('/api/seasons')
+      .then(r => r.json())
+      .then(d => {
+        const list: Season[] = d?.seasons || []
+        setSeasons(list)
+        setSeasonId(prev => prev || list.filter(s => s.year === cy)[0]?.id || list[0]?.id || '')
+      })
+      .catch(() => {})
+      .finally(() => setSeasonsLoaded(true))
+  }, [cy])
+
   // Existing seasonal (?guestId=…): prefill from the guest record; clone LAST YEAR's
   // contract party forward (always editable). Read from window.location so we don't
   // pull in useSearchParams (which would force a Suspense boundary).
@@ -78,8 +98,9 @@ export default function NewSeasonalCamperPage() {
         setName(g.name || ''); setEmail(g.email || ''); setPhone(g.phone || ''); setSiteNumber(g.site_number || '')
         setAddr({ home_street: g.home_street, home_city: g.home_city, home_state: g.home_state, home_zip: g.home_zip })
         setRig({ camper_type: g.camper_type, camper_length: g.camper_length, camper_amperage: g.camper_amperage, camper_make: g.camper_make, camper_model: g.camper_model, camper_year: g.camper_year })
-        if (g.season_start) setSeasonOpens(String(g.season_start).slice(0, 10))
-        if (g.season_end) setSeasonCloses(String(g.season_end).slice(0, 10))
+        // Deliberately NOT prefilling dates from the guest any more: a renewing camper inherits
+        // the season they are filed under. Their old dates are still on last year's contract,
+        // frozen there. Set an override only if this camper's stay really differs.
         // The STANDING roster wins over last year's contract: it is the more recently maintained
         // of the two, and it is what a NEW draft would be seeded from anyway (see
         // /api/seasonal-contracts/create). Last year's contract stays as the fallback so a camper
@@ -101,16 +122,27 @@ export default function NewSeasonalCamperPage() {
 
   const totalDueCents = totalDue ? Math.round(parseFloat(totalDue) * 100) : null
 
+  const season = seasons.find(s => s.id === seasonId) || null
+  const seasonYear = season?.year ?? cy
+  // The override columns as they will actually be saved: null unless the toggle is on.
+  const overrideDates = {
+    season_opens: overrideOn ? (ovOpens || null) : null,
+    season_closes: overrideOn ? (ovCloses || null) : null,
+  }
+  // What the camper's contract actually runs on — the same helper the preview, the printed
+  // document and the freeze all use.
+  const eff = effectiveSeasonDates(overrideDates, season)
+
   // Live preview — the REAL documents, rendered exactly as freezePacket would.
   const previewGuest = {
     name, site_number: siteNumber,
-    season_start: seasonOpens || null, season_end: seasonCloses || null,
+    season_start: eff.opens, season_end: eff.closes,
     camper_make: rig.camper_make, camper_model: rig.camper_model, camper_year: rig.camper_year == null ? null : Number(rig.camper_year),
     home_street: addr.home_street, home_city: addr.home_city, home_state: addr.home_state, home_zip: addr.home_zip,
   }
   const previewContract = {
     season_year: seasonYear, site_number: siteNumber,
-    season_opens: seasonOpens || null, season_closes: seasonCloses || null,
+    ...overrideDates,
     occupants, total_due_cents: totalDueCents, charge_note: chargeNote,
     camper_make: rig.camper_make, camper_model: rig.camper_model, camper_year: rig.camper_year == null ? null : Number(rig.camper_year),
   }
@@ -121,16 +153,19 @@ export default function NewSeasonalCamperPage() {
   // Note this screen previews a camper who may not exist yet, so the "guest" it renders from is
   // the form's own fields rather than a saved row. That is unchanged from before the extraction —
   // and it is what the owner is about to save, so it is the right source here.
-  const { contractText, waiverText } = renderPacketDocuments(previewGuest, previewContract, settings)
+  const { contractText, waiverText } = renderPacketDocuments(previewGuest, previewContract, settings, season)
 
   // Contract-critical fields — the source-level guard against a blank freeze. Shared with the
   // review screen so both block a send on identical conditions.
   const missing = missingPacketFields({
     name, siteNumber,
-    seasonOpens, seasonCloses,
+    // EFFECTIVE dates, so a camper inheriting a dated season passes and one whose season has no
+    // dates (and no override) is blocked with a prompt naming the actual fix.
+    seasonOpens: eff.opens, seasonCloses: eff.closes,
     homeStreet: addr.home_street, homeCity: addr.home_city, homeState: addr.home_state, homeZip: addr.home_zip,
     contractText, waiverText,
   })
+  if (seasonsLoaded && !seasonId) missing.push('a season (create one first)')
   const ready = missing.length === 0
 
   async function prepareDraft(): Promise<string | null> {
@@ -141,7 +176,7 @@ export default function NewSeasonalCamperPage() {
       body: JSON.stringify({
         id: existingId || undefined,   // update the existing guest, don't create a duplicate
         name, email, phone, site_number: siteNumber,
-        season_start: seasonOpens || null, season_end: seasonCloses || null,
+        season_start: eff.opens, season_end: eff.closes,
         // The party typed here becomes the camper's STANDING roster, alongside their address and
         // rig — this form is the full camper record, not a per-contract editor. The send modal on
         // the camper page is the per-contract one, and deliberately does NOT write back here.
@@ -156,7 +191,9 @@ export default function NewSeasonalCamperPage() {
     // 2) Create the draft (guest now exists), then save the staff-edited contract fields.
     const cRes = await fetch('/api/seasonal-contracts/create', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ guest_id: guestId, season_year: seasonYear }),
+      // season_id is what the draft is filed under AND what idempotency keys on, so a camper can
+      // hold a Spring and a Fall in the same year.
+      body: JSON.stringify({ guest_id: guestId, season_year: seasonYear, season_id: seasonId }),
     })
     const cData = await cRes.json()
     if (!cRes.ok || !cData.contract) { setSaving(false); toast.error(cData.error || 'Could not create the contract draft.'); return null }
@@ -176,8 +213,9 @@ export default function NewSeasonalCamperPage() {
         occupants,
         total_due_cents: totalDueCents,
         charge_note: chargeNote.trim() || null,
-        season_opens: seasonOpens || null,
-        season_closes: seasonCloses || null,
+        // Null unless the owner explicitly chose different dates — a null override is what makes
+        // the draft INHERIT its season.
+        ...overrideDates,
       }),
     })
     if (!pRes.ok) { const e = await pRes.json().catch(() => ({})); setSaving(false); toast.error(e.error || 'Could not save contract details.'); return null }
@@ -212,6 +250,14 @@ export default function NewSeasonalCamperPage() {
     if (d.emailed) toast.success('Packet emailed to the camper.')
     else toast('Packet created, but the email did not send — resend from the camper page.', { icon: '⚠️' })
     router.push('/admin/seasonals')
+  }
+
+  // "2027 Spring · May 1 – Jun 30", with the date half dropped when the season has none yet.
+  const fmtShort = (d?: string | null) => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
+  const fmtRange = (a?: string | null, b?: string | null) => [fmtShort(a), fmtShort(b)].filter(Boolean).join(' – ')
+  const seasonLabel = (s: Season) => {
+    const range = fmtRange(s.opens, s.closes)
+    return range ? `${s.name} · ${range}` : s.name
   }
 
   const cardCls = 'bg-white rounded-xl border border-gray-100 p-5 mb-4'
@@ -260,16 +306,54 @@ export default function NewSeasonalCamperPage() {
         <p className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Rig</p>
         <RigEditor value={rig} onChange={v => { setRig(v); invalidateDraft() }} />
         <div className="mt-4"><PartyEditor value={occupants} onChange={v => { setOccupants(v); invalidateDraft() }} /></div>
-        <div className="grid grid-cols-3 gap-3 mt-4">
-          <div>
-            <label className={lbl}>Season year</label>
-            <select value={seasonYear} onChange={e => { setSeasonYear(parseInt(e.target.value)); invalidateDraft() }} className={`${inp} font-bold`}>
-              {[cy - 1, cy, cy + 1].map(y => <option key={y} value={y}>{y}</option>)}
+        <div className="mt-4">
+          <label className={lbl}>Season <span className="text-red-500">*</span></label>
+          {seasonsLoaded && seasons.length === 0 ? (
+            // No seasons yet: an empty dropdown would be a dead end, so name the fix and link to it.
+            <div className="rounded-lg px-3 py-2 text-sm" style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>
+              This park has no seasons yet. Create one first — open{' '}
+              <Link href="/admin/seasonals" className="underline font-semibold">Seasonals → Manage seasons</Link>{' '}
+              and add a season (for example &ldquo;{cy} Season&rdquo;), then come back here.
+            </div>
+          ) : (
+            <select value={seasonId} onChange={e => { setSeasonId(e.target.value); invalidateDraft() }} className={`${inp} font-bold`}>
+              {!seasonsLoaded && <option value="">Loading…</option>}
+              {seasons.map(s => <option key={s.id} value={s.id}>{seasonLabel(s)}</option>)}
             </select>
-          </div>
-          <div><label className={lbl}>Season opens <span className="text-red-500">*</span></label><input type="date" value={seasonOpens} onChange={e => { setSeasonOpens(e.target.value); invalidateDraft() }} className={inp} /></div>
-          <div><label className={lbl}>Season closes <span className="text-red-500">*</span></label><input type="date" value={seasonCloses} onChange={e => { setSeasonCloses(e.target.value); invalidateDraft() }} className={inp} /></div>
+          )}
         </div>
+
+        {season && (
+          <div className="mt-3">
+            {!overrideOn ? (
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-sm text-gray-600">
+                  {season.opens || season.closes
+                    ? <>Runs <strong>{fmtRange(season.opens, season.closes)}</strong> <span className="text-gray-400">— from the season</span></>
+                    : <span className="text-amber-700">This season has no dates set yet. Add them under Manage seasons, or set dates just for this camper below.</span>}
+                </p>
+                <button type="button" onClick={() => { setOverrideOn(true); setOvOpens(season.opens || ''); setOvCloses(season.closes || ''); invalidateDraft() }}
+                  className="text-xs font-semibold whitespace-nowrap" style={{ color: 'var(--accent-color, #2E6B8A)' }}>
+                  Use different dates
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Dates for this camper only</p>
+                  <button type="button" onClick={() => { setOverrideOn(false); setOvOpens(''); setOvCloses(''); invalidateDraft() }}
+                    className="text-xs font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>
+                    Use the season&rsquo;s dates
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className={lbl}>Opens</label><input type="date" value={ovOpens} onChange={e => { setOvOpens(e.target.value); invalidateDraft() }} className={inp} /></div>
+                  <div><label className={lbl}>Closes</label><input type="date" value={ovCloses} onChange={e => { setOvCloses(e.target.value); invalidateDraft() }} className={inp} /></div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* CONTRACT */}
@@ -287,7 +371,7 @@ export default function NewSeasonalCamperPage() {
           <p className="text-xs text-gray-400 mt-1">The camper sees this. It appears in the preview below wherever the contract body uses <code>{'{{charge_note}}'}</code>.</p>
         </div>
         <p className="text-xs text-gray-500 mb-2">This is exactly what the camper will see and sign:</p>
-        <PacketPreview guest={previewGuest} contract={previewContract} settings={settings} />
+        <PacketPreview guest={previewGuest} contract={previewContract} settings={settings} season={season} />
       </div>
 
       {/* ACTIONS */}
