@@ -6,6 +6,7 @@ import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/PosCategoryTiles'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
 import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
+import { classifyLineItem, normalizeBillingMode, type Lane } from '@/lib/ledger-lanes'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useRole } from '@/lib/use-role'
 import { atLeast } from '@/lib/roles'
@@ -41,6 +42,9 @@ type LineItem = {
   category: string
   charged_at: string
   notes?: string | null
+  /** Phase 4. Explicit lane tag / store signal — both come through select('*'). */
+  lane?: string | null
+  product_id?: string | null
 }
 
 type Payment = {
@@ -51,6 +55,7 @@ type Payment = {
   status: string
   note: string
   paid_at: string
+  lane?: string | null
 }
 
 type Product = {
@@ -107,6 +112,12 @@ export default function GuestAccountPage() {
   const [paymentAmount, setPaymentAmount] = useState('')
   const [cashTendered, setCashTendered] = useState('')
   const [maxCreditAmount, setMaxCreditAmount] = useState(0)
+  // Phase 4 PR 3b. Read in its OWN query, never folded into the settings select above: a tenant
+  // that has not run the Phase 4 migration has no billing_mode column, and widening that select
+  // would break this page — the folio — for them. Every failure path lands on 'combined'.
+  const [billingMode, setBillingMode] = useState<'combined' | 'separated'>('combined')
+  const [electricItemIds, setElectricItemIds] = useState<Set<string>>(new Set())
+  const [assigningLane, setAssigningLane] = useState('')
   const [waiveFee, setWaiveFee] = useState(false)
   const [terminalDeviceId, setTerminalDeviceId] = useState('')
   const [cardEntryMode, setCardEntryMode] = useState('terminal')
@@ -138,6 +149,8 @@ export default function GuestAccountPage() {
     if (settings?.card_surcharge_percent) setCardSurcharge(Number(settings.card_surcharge_percent))
     if (settings?.square_terminal_device_id) setTerminalDeviceId(settings.square_terminal_device_id)
     if (settings?.max_credit_amount !== undefined) setMaxCreditAmount(settings.max_credit_amount || 0)
+    supabase.from('settings').select('billing_mode').single()
+      .then(({ data, error }) => { if (!error) setBillingMode(normalizeBillingMode(data?.billing_mode)) })
     if (cats && cats.length > 0) setCategories(cats.map((c: any) => c.name))
 
     // Find or create a standing folio for this guest using guest_id
@@ -187,6 +200,35 @@ export default function GuestAccountPage() {
     ])
     setLineItems(items || [])
     setPayments(pmts || [])
+
+    // The electric signal for lane classification — the readings that point at these charges.
+    // Not the category: see the note in lib/ledger-lanes.ts about 'Fees' colliding with the POS.
+    const ids = (items || []).map((i: LineItem) => i.id)
+    if (ids.length) {
+      const { data: readings } = await supabase
+        .from('electric_readings').select('folio_line_item_id').in('folio_line_item_id', ids)
+      setElectricItemIds(new Set(((readings || []) as { folio_line_item_id: string }[])
+        .map(r => r.folio_line_item_id).filter(Boolean)))
+    } else {
+      setElectricItemIds(new Set())
+    }
+  }
+
+  /**
+   * Attribute an existing UNTAGGED payment to a lane — Phase 4 PR 3b, Part D.
+   *
+   * Pure tidy-up. It moves nothing between accounts and changes no amount: it sets `lane` on a
+   * payment that had none, so a payment taken before lanes existed (or through an older path)
+   * can be filed where it belongs. The account balance is untouched by construction — the row's
+   * amount is not read, let alone written.
+   */
+  async function assignPaymentLane(paymentId: string, lane: string) {
+    if (!folio || !lane) return
+    setAssigningLane(paymentId)
+    const { error } = await supabase.from('folio_payments').update({ lane }).eq('id', paymentId)
+    setAssigningLane('')
+    if (error) { alert('Could not file that payment: ' + error.message); return }
+    await loadFolioData(folio.id)
   }
 
   async function addProduct(product: Product, overridePrice?: number, qty: number = 1, notes: string = '') {
@@ -416,71 +458,26 @@ export default function GuestAccountPage() {
   const ledgerFoldDate = ledgerHasFold ? ledgerEvents[ledgerFoldIndex].sub : ''
   const visibleLedger = ledgerHasFold && !showEarlier ? ledgerEvents.slice(ledgerFoldIndex + 1) : ledgerEvents
 
-  // Sorted for DISPLAY only — the underlying products, their prices and the Add-to-Tab
-  // behaviour are untouched. Shares byNameAsc with the category tiles so the two orderings
-  // cannot drift, and `numeric: true` keeps an item like "3 candy bars" with the numbers
-  // instead of between "2" and "20".
-  const filteredProducts = products
-    .filter(p => p.category === activeCategory)
-    .slice()
-    .sort((a, b) => byNameAsc(a.name, b.name))
-
-  if (loading) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Loading account...</div>
-  if (!guest) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Guest not found.</div>
-
-  return (
-    <div style={{ fontFamily: 'sans-serif', minHeight: '100vh', background: '#C9D2D9' }}>
-      {/* Header */}
-      <div style={{ background: '#fff', borderBottom: '1px solid #b8c4cc', padding: '0.875rem 1.25rem', display: 'flex', alignItems: 'center', gap: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
-        <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 14, whiteSpace: 'nowrap' }}>← Back</button>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <h1 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>{guest.name}</h1>
-            {guest.is_seasonal && <span style={{ fontSize: 11, background: '#e8f2f7', color: '#2E6B8A', borderRadius: 4, padding: '2px 7px', fontWeight: 600 }}>Seasonal</span>}
-            {guest.site_number && <span style={{ fontSize: 11, background: '#f3f4f6', color: '#6b7280', borderRadius: 4, padding: '2px 7px' }}>Site {guest.site_number}</span>}
-          </div>
-          {guest.email && <p style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>{guest.email}{guest.phone ? ' · ' + guest.phone : ''}</p>}
-        </div>
-        <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: overpaid > 0 ? '#6b7280' : totalDue > 0 ? '#dc2626' : '#15803d' }}>
-            {overpaid > 0 ? 'Credit: $' + (overpaid/100).toFixed(2) : '$' + (totalDue/100).toFixed(2)}
-          </div>
-          <div style={{ fontSize: 11, color: '#6b7280' }}>
-            {overpaid > 0 ? 'credit on account' : totalDue > 0 ? 'balance due' : '✓ paid in full'}
-          </div>
-        </div>
-      </div>
-
-      {/* Tab switcher */}
-      <div style={{ display: 'flex', borderBottom: '1px solid #b8c4cc', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-        <button onClick={() => setActiveTab('tab')} style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', borderBottom: activeTab === 'tab' ? '2px solid #2E6B8A' : '2px solid transparent', color: activeTab === 'tab' ? '#2E6B8A' : '#6b7280' }}>Account</button>
-        <button onClick={() => { setActiveTab('items'); setActiveCategory('') }} style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', borderBottom: activeTab === 'items' ? '2px solid #2E6B8A' : '2px solid transparent', color: activeTab === 'items' ? '#2E6B8A' : '#6b7280' }}>Add Items</button>
-      </div>
-
-      <div style={{ display: 'flex', minHeight: 'calc(100vh - 120px)' }}>
-        {/* Account tab */}
-        <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none', background: '#C9D2D9' }}>
-
-          {ledgerEvents.length > 0 && (
-            <div style={{ background: '#fff', border: '1px solid #b8c4cc', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
-              <div style={{ display: 'flex', alignItems: 'center', padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6' }}>
-                <div style={{ flex: 1, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>Account</div>
-                <div style={{ width: 80, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#9ca3af' }}>Amount</div>
-                <div style={{ width: 92, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#9ca3af' }}>Balance</div>
-                <div style={{ width: 28, flexShrink: 0 }} />
-              </div>
-
-              {ledgerHasFold && (
-                <button
-                  onClick={() => setShowEarlier(s => !s)}
-                  style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: '#eef2f5', border: 'none', borderBottom: '1px solid #f3f4f6', cursor: 'pointer', textAlign: 'left', color: '#4a6275', fontSize: 13 }}
-                >
-                  <span style={{ fontSize: 12 }}>{showEarlier ? '▾' : '▸'}</span>
-                  <span>{showEarlier ? `Hide earlier activity · settled ${ledgerFoldDate}` : `Show earlier activity · settled ${ledgerFoldDate} · ${ledgerFoldedCount} ${ledgerFoldedCount === 1 ? 'entry' : 'entries'}`}</span>
-                </button>
-              )}
-
-              {visibleLedger.map((ev) => {
+  // ── PHASE 4 PR 3b: THE LANE VIEW ─────────────────────────────────────────────────────────
+  //
+  // ONLY for a SEASONAL camper at a SEPARATED park. Every other folio — combined mode, a
+  // transient guest's account, a reservation folio — falls through to the flat ledger below,
+  // which is untouched.
+  //
+  // ⚠ IT REGROUPS; IT NEVER FILTERS. Every charge, payment and refund in `ledgerEvents` appears
+  // in exactly one group, so the audit trail this page exists for is complete either way. The
+  // grand total is still `totalDue` / `overpaid` — the same figures the flat view prints — so
+  // the two views cannot disagree about what is owed.
+  const laneView = billingMode === 'separated' && !!guest?.is_seasonal
+  const laneOf = (ev: LedgerEvent): Lane | 'unassigned' => {
+    if (ev.itemId) {
+      const item = lineItems.find(i => i.id === ev.itemId)
+      return item ? classifyLineItem({ ...item, id: item.id }, { electricLineItemIds: electricItemIds }) : 'other'
+    }
+    const lane = ev.payment?.lane
+    return lane === 'electric' || lane === 'store' || lane === 'seasonal' || lane === 'other' ? lane : 'unassigned'
+  }
+  const ledgerRow = (ev: LedgerEvent) => {
                 const isPay = ev.kind === 'payment'
                 const balPositive = ev.balanceAfter > 0
                 const balZero = ev.balanceAfter === 0
@@ -528,7 +525,87 @@ export default function GuestAccountPage() {
                     </div>
                   </div>
                 )
-              })}
+  }
+
+  const LANE_SECTIONS: { key: Lane | 'unassigned'; label: string; blurb: string }[] = [
+    { key: 'electric', label: 'Electric', blurb: 'Metered electricity' },
+    { key: 'store', label: 'Store', blurb: 'Camp store purchases' },
+    { key: 'seasonal', label: 'Seasonal', blurb: 'Site fee for the season' },
+    { key: 'other', label: 'Other charges', blurb: 'Anything not in a lane above' },
+    { key: 'unassigned', label: 'Not assigned to a lane', blurb: 'Payments taken before lanes, or on the whole account' },
+  ]
+  const laneGroups = LANE_SECTIONS.map(sec => {
+    const events = ledgerEvents.filter(ev => laneOf(ev) === sec.key)
+    const charges = events.filter(e => e.kind === 'charge').reduce((s, e) => s + e.amount, 0)
+    const paid = events.filter(e => e.kind === 'payment').reduce((s, e) => s + e.amount, 0)
+    return { ...sec, events, charges, paid, subtotal: charges - paid }
+  }).filter(g => g.events.length > 0)
+
+  // Sorted for DISPLAY only — the underlying products, their prices and the Add-to-Tab
+  // behaviour are untouched. Shares byNameAsc with the category tiles so the two orderings
+  // cannot drift, and `numeric: true` keeps an item like "3 candy bars" with the numbers
+  // instead of between "2" and "20".
+  const filteredProducts = products
+    .filter(p => p.category === activeCategory)
+    .slice()
+    .sort((a, b) => byNameAsc(a.name, b.name))
+
+  if (loading) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Loading account...</div>
+  if (!guest) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Guest not found.</div>
+
+  return (
+    <div style={{ fontFamily: 'sans-serif', minHeight: '100vh', background: '#C9D2D9' }}>
+      {/* Header */}
+      <div style={{ background: '#fff', borderBottom: '1px solid #b8c4cc', padding: '0.875rem 1.25rem', display: 'flex', alignItems: 'center', gap: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}>
+        <button onClick={() => router.back()} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 14, whiteSpace: 'nowrap' }}>← Back</button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h1 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>{guest.name}</h1>
+            {guest.is_seasonal && <span style={{ fontSize: 11, background: '#e8f2f7', color: '#2E6B8A', borderRadius: 4, padding: '2px 7px', fontWeight: 600 }}>Seasonal</span>}
+            {guest.site_number && <span style={{ fontSize: 11, background: '#f3f4f6', color: '#6b7280', borderRadius: 4, padding: '2px 7px' }}>Site {guest.site_number}</span>}
+          </div>
+          {guest.email && <p style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>{guest.email}{guest.phone ? ' · ' + guest.phone : ''}</p>}
+        </div>
+        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+          <div style={{ fontSize: 20, fontWeight: 800, color: overpaid > 0 ? '#6b7280' : totalDue > 0 ? '#dc2626' : '#15803d' }}>
+            {overpaid > 0 ? 'Credit: $' + (overpaid/100).toFixed(2) : '$' + (totalDue/100).toFixed(2)}
+          </div>
+          <div style={{ fontSize: 11, color: '#6b7280' }}>
+            {overpaid > 0 ? 'credit on account' : totalDue > 0 ? 'balance due' : '✓ paid in full'}
+          </div>
+        </div>
+      </div>
+
+      {/* Tab switcher */}
+      <div style={{ display: 'flex', borderBottom: '1px solid #b8c4cc', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+        <button onClick={() => setActiveTab('tab')} style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', borderBottom: activeTab === 'tab' ? '2px solid #2E6B8A' : '2px solid transparent', color: activeTab === 'tab' ? '#2E6B8A' : '#6b7280' }}>Account</button>
+        <button onClick={() => { setActiveTab('items'); setActiveCategory('') }} style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', borderBottom: activeTab === 'items' ? '2px solid #2E6B8A' : '2px solid transparent', color: activeTab === 'items' ? '#2E6B8A' : '#6b7280' }}>Add Items</button>
+      </div>
+
+      <div style={{ display: 'flex', minHeight: 'calc(100vh - 120px)' }}>
+        {/* Account tab */}
+        <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none', background: '#C9D2D9' }}>
+
+          {ledgerEvents.length > 0 && !laneView && (
+            <div style={{ background: '#fff', border: '1px solid #b8c4cc', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6' }}>
+                <div style={{ flex: 1, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>Account</div>
+                <div style={{ width: 80, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#9ca3af' }}>Amount</div>
+                <div style={{ width: 92, textAlign: 'right', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#9ca3af' }}>Balance</div>
+                <div style={{ width: 28, flexShrink: 0 }} />
+              </div>
+
+              {ledgerHasFold && (
+                <button
+                  onClick={() => setShowEarlier(s => !s)}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: '#eef2f5', border: 'none', borderBottom: '1px solid #f3f4f6', cursor: 'pointer', textAlign: 'left', color: '#4a6275', fontSize: 13 }}
+                >
+                  <span style={{ fontSize: 12 }}>{showEarlier ? '▾' : '▸'}</span>
+                  <span>{showEarlier ? `Hide earlier activity · settled ${ledgerFoldDate}` : `Show earlier activity · settled ${ledgerFoldDate} · ${ledgerFoldedCount} ${ledgerFoldedCount === 1 ? 'entry' : 'entries'}`}</span>
+                </button>
+              )}
+
+              {visibleLedger.map(ledgerRow)}
 
               <div style={{ borderTop: '1px solid #e5e7eb', padding: '10px 14px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
@@ -547,15 +624,106 @@ export default function GuestAccountPage() {
             </div>
           )}
 
+          {/* ── THE LANE VIEW (separated + seasonal only) ────────────────────────────────
+              The SAME events as the flat ledger above, regrouped. Nothing is filtered out: every
+              charge, payment and refund appears in exactly one section, so this page is still the
+              complete audit trail it exists to be. The grand total is the same `totalDue` /
+              `overpaid` the flat view prints. */}
+          {ledgerEvents.length > 0 && laneView && (
+            <div style={{ marginBottom: 12 }}>
+              {laneGroups.map(group => (
+                <div key={group.key} style={{ background: '#fff', border: '1px solid #b8c4cc', borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', padding: '0.625rem 1rem', borderBottom: '1px solid #f3f4f6', background: '#f8fafb' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#374151' }}>{group.label}</div>
+                      <div style={{ fontSize: 11, color: '#9ca3af' }}>{group.blurb}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: group.subtotal > 0 ? '#b45309' : '#15803d' }}>
+                        ${(Math.abs(group.subtotal) / 100).toFixed(2)}
+                      </div>
+                      <div style={{ fontSize: 10, color: '#9ca3af' }}>
+                        {group.key === 'unassigned'
+                          ? 'applied to the account'
+                          : group.subtotal > 0 ? 'due' : group.subtotal === 0 ? 'settled' : 'credit'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {group.events.map(ev => (
+                    <div key={ev.key}>
+                      {ledgerRow(ev)}
+                      {/* PART D — file a stray untagged payment. Sets `lane` and nothing else:
+                          no amount moves, so the account balance cannot change. */}
+                      {group.key === 'unassigned' && ev.paymentId && ev.payment?.status === 'completed' && canMoveMoney && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px 10px', background: '#f9fafb', borderBottom: '1px solid #f3f4f6' }}>
+                          <span style={{ fontSize: 11, color: '#6b7280' }}>File this payment under</span>
+                          <select
+                            defaultValue=""
+                            disabled={assigningLane === ev.paymentId}
+                            onChange={e => e.target.value && assignPaymentLane(ev.paymentId!, e.target.value)}
+                            style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}>
+                            <option value="">Choose a lane…</option>
+                            <option value="electric">Electric</option>
+                            <option value="store">Store</option>
+                            <option value="seasonal">Seasonal</option>
+                          </select>
+                          {assigningLane === ev.paymentId && <span style={{ fontSize: 11, color: '#9ca3af' }}>Filing…</span>}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  <div style={{ borderTop: '1px solid #e5e7eb', padding: '8px 14px', display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                    <span style={{ color: '#6b7280' }}>Charges ${(group.charges / 100).toFixed(2)} · Payments ${(group.paid / 100).toFixed(2)}</span>
+                    <span style={{ fontWeight: 700 }}>${(Math.abs(group.subtotal) / 100).toFixed(2)}</span>
+                  </div>
+                </div>
+              ))}
+
+              {/* ONE grand total, and it is the SAME figure the flat view prints. */}
+              <div style={{ background: '#fff', border: '1px solid #b8c4cc', borderRadius: 10, padding: '12px 14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
+                  <span style={{ color: '#6b7280' }}>Total charges</span>
+                  <span style={{ fontWeight: 600 }}>${(itemsTotal / 100).toFixed(2)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
+                  <span style={{ color: '#6b7280' }}>Total payments</span>
+                  <span style={{ fontWeight: 600, color: '#15803d' }}>${(paymentsTotal / 100).toFixed(2)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderTop: '1px solid #f3f4f6', marginTop: 6, paddingTop: 6 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#374151' }}>{overpaid > 0 ? 'Account credit' : totalDue > 0 ? 'Balance due' : 'Settled'}</span>
+                  <span style={{ fontSize: 20, fontWeight: 800, color: totalDue > 0 ? '#dc2626' : '#15803d' }}>${((overpaid > 0 ? overpaid : totalDue) / 100).toFixed(2)}</span>
+                </div>
+                {overpaid > 0 && (
+                  <p style={{ fontSize: 11, color: '#6b7280', margin: '6px 0 0' }}>
+                    Applies to any lane — it comes off their next charge.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           {ledgerEvents.length === 0 && (
             <div style={{ textAlign: 'center', color: '#4a6275', padding: '3rem 0', fontSize: 14 }}>
               No charges yet. Tap Add Items to get started.
             </div>
           )}
 
+          {/* ── ONE PAYMENT FLOW (Phase 4 PR 3b, Part A) ────────────────────────────────
+              A separated park's seasonal camper goes to the LANE CHECKOUT, so there is exactly
+              one way to take their money and it always attributes it to a lane. Every other
+              folio — combined, transient, reservation — opens the same payment panel as before,
+              untouched. */}
+          {laneView ? (
+            <button onClick={() => router.push(`/admin/checkout?guestId=${guestId}`)} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
+              {totalDue > 0 ? `Collect Payment · $${(totalDue/100).toFixed(2)}` : 'Add Payment / Credit'}
+            </button>
+          ) : (
           <button onClick={() => { setPaymentAmount(totalDue > 0 ? (totalDue/100).toFixed(2) : ''); setCashTendered(''); setShowPayment(true) }} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
             {totalDue > 0 ? `Collect Payment · $${(totalDue/100).toFixed(2)}` : 'Add Payment / Credit'}
           </button>
+          )}
 
           {overpaid > 0 && (
             <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '1rem', marginTop: 8, textAlign: 'center' }}>
