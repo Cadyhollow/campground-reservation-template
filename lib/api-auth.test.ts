@@ -175,6 +175,12 @@ const GATED: [string, string, string][] = [
   ['GET',   '/api/seasonals/guest/00000000-0000-0000-0000-000000000000', 'staff'],
 
 
+  // Phase 2a — the seasons list. Manager, matching the contract routes rather than the staff
+  // reads: a season is park configuration that decides what contracts can exist.
+  ['GET',   '/api/seasons', 'manager'],
+  ['POST',  '/api/seasons', 'manager'],
+  ['PATCH', '/api/seasons/00000000-0000-0000-0000-000000000000', 'manager'],
+
   ['POST',  '/api/seasonal-contracts/create', 'manager'],
   ['POST',  '/api/seasonal-contracts/clone', 'manager'],
   ['PATCH', '/api/seasonal-contracts/00000000-0000-0000-0000-000000000000', 'manager'],

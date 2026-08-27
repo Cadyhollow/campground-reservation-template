@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { svc, isSummit, errMessage } from '@/lib/contract-server'
+import { svc, isSummit, errMessage, findOrCreateSeasonForYear } from '@/lib/contract-server'
 import { requireRole } from '@/lib/require-role'
 
 
@@ -49,9 +49,16 @@ export async function POST(request: NextRequest) {
     // renderer's `.map` throws at send time.
     const roster = Array.isArray(guest.party) ? guest.party : []
 
+    // Phase 2a: season_id is NOT NULL, so resolve it before inserting. Reuses the year's season
+    // if the park has one, creates the default otherwise. Until Phase 2b's picker, a year with
+    // two seasons attaches here to the earliest-created one — see the helper's note.
+    const season = await findOrCreateSeasonForYear(season_year)
+    if (!season.ok) return NextResponse.json({ error: season.error }, { status: 500 })
+
     const draft = {
       guest_id,
       season_year,
+      season_id: season.season_id,
       status: 'draft',
       site_number: guest.site_number || '',
       season_opens: guest.season_start ?? null,

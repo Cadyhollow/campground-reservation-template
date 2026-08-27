@@ -85,6 +85,58 @@ export function originOf(request: NextRequest): string {
 // caller keeps importing them from '@/lib/contract-server'.
 export { packetEmailHtml, packetReceiptHtml } from '@/lib/contract-emails'
 
+/**
+ * The season a new contract for `year` belongs to — reused if one exists, created if not.
+ *
+ * Phase 2a made seasonal_contracts.season_id NOT NULL, so EVERY path that inserts a contract has
+ * to supply one. Both of them (the create route and the clone route) go through here so the
+ * "which season?" answer is defined once.
+ *
+ * ⚠ THIS IS A TRANSITIONAL RULE, AND IT IS INTENDED RATHER THAN A BUG.
+ *
+ * Creation still goes BY YEAR — the screens have no season picker until Phase 2b. So if a park
+ * has defined two seasons in one year (a Spring and a Fall, which is the whole point of the
+ * feature), a contract created today attaches to the year's DEFAULT season: the earliest-created
+ * one. Phase 2b replaces this call with an explicit choice made by the owner.
+ *
+ * "Earliest-created" is the same rule the Phase 2a migration's backfill used, with the same
+ * created_at/id ordering, so a season chosen here and a season chosen by the backfill agree.
+ *
+ * The auto-created season's name and null dates also match the backfill exactly, so a season the
+ * app makes and a season the migration made are indistinguishable.
+ */
+export async function findOrCreateSeasonForYear(year: number): Promise<
+  { ok: true; season_id: string } | { ok: false; error: string }
+> {
+  const findExisting = async () => {
+    const { data } = await svc
+      .from('seasons')
+      .select('id')
+      .eq('year', year)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+    return data?.id as string | undefined
+  }
+
+  const existing = await findExisting()
+  if (existing) return { ok: true, season_id: existing }
+
+  const { data: created, error } = await svc
+    .from('seasons')
+    .insert({ name: `${year} Season`, year, opens: null, closes: null })
+    .select('id')
+    .single()
+  if (created?.id) return { ok: true, season_id: created.id as string }
+
+  // Lost a race with a concurrent create (or the insert failed for another reason): look again
+  // before giving up, so two simultaneous "New Seasonal Camper" saves don't both fail.
+  const raced = await findExisting()
+  if (raced) return { ok: true, season_id: raced }
+  return { ok: false, error: error?.message || 'Could not resolve a season for this year.' }
+}
+
 // THE FREEZE — the single place a draft becomes a signable packet. Renders both
 // documents from settings, runs the empty-doc GUARD (so EVERY caller inherits it),
 // snapshots the guest's rig/site onto the contract, inserts the two signature rows
