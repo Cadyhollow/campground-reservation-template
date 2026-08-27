@@ -37,7 +37,10 @@ export type SeasonalContract = {
   camper_model?: string | null
   camper_year?: number | null
   total_due_cents?: number | null
+  /** PRIVATE owner scratchpad. Never shown to the camper. Not to be confused with charge_note. */
   staff_notes?: string | null
+  /** CUSTOMER-FACING explanation of the total. Rendered into the contract body as {{charge_note}}. */
+  charge_note?: string | null
   sent_at?: string | null
   signed_at?: string | null
   contract_signature_id?: string | null
@@ -81,6 +84,13 @@ export type SeasonalGuest = {
   camper_make?: string | null
   camper_model?: string | null
   camper_year?: number | null
+  /**
+   * The STANDING party roster — who lives in this camper, as camper info rather than as one
+   * year's contract. Seeds a new draft's `occupants`; NOT NULL '[]' in the schema, but typed
+   * optional here because every other field on this type is, and older cached payloads predate
+   * the column.
+   */
+  party?: SeasonalOccupant[] | null
 }
 
 /** A staff note against a guest. Append-only — there is no edit or delete route. */

@@ -34,6 +34,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (pending.length === 0) {
       return NextResponse.json({ error: 'This packet has already been signed.' }, { status: 409 })
     }
+    // RETRACTED PACKET — refuse. Without this the void done by
+    // /api/seasonal-contracts/[id]/cancel would be cosmetic: `pending` above is "not signed",
+    // which includes voided, and the loop below updates with `.neq('status','signed')` — so a
+    // voided row would happily flip to signed and a canceled packet would still be signable.
+    // Same wording and same 409 as app/api/sign/[token]/route.ts.
+    if (pending.some(r => r.status === 'voided')) {
+      return NextResponse.json({ error: 'This signing link has been canceled.' }, { status: 409 })
+    }
 
     const ip = clientIp(request)
     const userAgent = request.headers.get('user-agent') || ''

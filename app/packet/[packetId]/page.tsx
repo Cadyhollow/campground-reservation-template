@@ -11,7 +11,7 @@ type Doc = {
   signedAt: string | null
 }
 type PacketData = { parkName: string; documents: Doc[] }
-type View = 'loading' | 'not_found' | 'error' | 'ready' | 'signed'
+type View = 'loading' | 'not_found' | 'error' | 'ready' | 'signed' | 'voided'
 
 export default function PacketPage() {
   const params = useParams()
@@ -35,6 +35,7 @@ export default function PacketPage() {
       if (res.status === 404) { setView('not_found'); return }
       const d = await res.json()
       if (d.status === 'signed') { setData(d); setView('signed') }
+      else if (d.status === 'voided') { setView('voided') }
       else if (d.status === 'pending') { setData(d); setView('ready') }
       else { setErrorMsg('Unable to load this packet.'); setView('error') }
     } catch {
@@ -89,6 +90,17 @@ export default function PacketPage() {
 
   if (view === 'loading') {
     return <div style={wrap}><div style={{ ...card, textAlign: 'center', color: '#8A7E6B' }}>Loading…</div></div>
+  }
+
+  // ── VOIDED: the park retracted this packet. Wording matches app/sign/[token]/page.tsx. ──
+  if (view === 'voided') {
+    return (
+      <div style={wrap}><div style={{ ...card, textAlign: 'center' }}>
+        <div style={{ fontSize: 40, marginBottom: 10 }}>🚫</div>
+        <h1 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 6px' }}>Link canceled</h1>
+        <p style={{ color: '#6b7280', fontSize: 14, margin: 0 }}>This signing link has been canceled. Please contact the campground.</p>
+      </div></div>
+    )
   }
 
   if (view === 'not_found' || view === 'error') {

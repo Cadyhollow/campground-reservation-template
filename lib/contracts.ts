@@ -70,6 +70,7 @@ type ContractLike = {
   camper_model?: string | null
   camper_year?: number | null
   total_due_cents?: number | null
+  charge_note?: string | null
 }
 type SettingsLike = { season_opens?: string | null; season_closes?: string | null } | null | undefined
 
@@ -111,6 +112,11 @@ export function buildContractVars(guest: GuestLike, contract: ContractLike, sett
     party_names,
     camper_make_year,
     total_due: formatCents(contract.total_due_cents),
+    // The owner's CUSTOMER-FACING explanation of the total ("includes 2 extra family members,
+    // golf cart, second site"). Same null-safe treatment as every other var: null/undefined
+    // renders '', never the literal "null" and never a leftover {{charge_note}}. Deliberately NOT
+    // staff_notes, which is private and must never reach a camper's contract.
+    charge_note: pick(contract.charge_note),
     home_address,
   }
 }

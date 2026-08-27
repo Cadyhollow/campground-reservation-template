@@ -20,6 +20,18 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 
   const { data: settings } = await svc.from('settings').select('park_name').limit(1).single()
   const allSigned = rows.every(r => r.status === 'signed')
+  // CANCELED PACKET. /api/seasonal-contracts/[id]/cancel voids this packet's rows and reverts the
+  // contract to draft; from that moment the emailed link must stop working. `signed` is checked
+  // FIRST so an already-executed packet still renders its signed copy — cancel cannot reach a
+  // signed row, so a mix can only mean the packet was retracted mid-way.
+  //
+  // This mirrors app/api/sign/[token]/route.ts, which has always returned `status: 'voided'` for
+  // a voided row. The per-token route and this per-packet route now agree.
+  const anyVoided = rows.some(r => r.status === 'voided')
+
+  if (!allSigned && anyVoided) {
+    return NextResponse.json({ status: 'voided' })
+  }
 
   return NextResponse.json({
     status: allSigned ? 'signed' : 'pending',
