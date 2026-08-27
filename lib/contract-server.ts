@@ -10,6 +10,7 @@ import {
   guestRigSnapshot, renderPacketDocuments, effectiveSeasonDates,
   buildContractVars, renderTemplate,
 } from '@/lib/contracts'
+import { normalizeBillingMode, type BillingMode } from '@/lib/ledger-lanes'
 
 // Service-role client (bypasses RLS). Constructed at import is fine — createClient
 // doesn't throw on missing env (unlike Resend, which we keep lazy below).
@@ -180,6 +181,124 @@ export function renderPacketIntro(
   return renderTemplate(raw, vars)
 }
 
+/**
+ * The park's billing mode, read server-side and failing safe to 'combined'.
+ *
+ * Shared so every lane decision on the server answers the question the same way. A park that has
+ * not run the Phase 4 migration has no such column, and that select fails — which lands here on
+ * 'combined', i.e. exactly today's behaviour.
+ */
+export async function getBillingMode(): Promise<BillingMode> {
+  try {
+    const { data } = await svc.from('settings').select('billing_mode').limit(1).single()
+    return normalizeBillingMode(data?.billing_mode)
+  } catch {
+    return 'combined'
+  }
+}
+
+/**
+ * Post the seasonal fee as a real charge in the seasonal lane — Phase 4, PR 2.
+ *
+ * Until now `total_due_cents` was display-only: a number printed on the agreement that the books
+ * never saw. This puts it on the camper's account, so what they owe for the season is tracked
+ * separately from their store tab and their electric.
+ *
+ * ⚠ POSTED IN BOTH BILLING MODES. TRACKING A FEE MUST NOT DEPEND ON HOW IT IS DISPLAYED.
+ * billing_mode decides PRESENTATION — whether the camper's account is shown as separate lanes or
+ * as one blended balance, and whether the electric bill is lane-isolated. It does not decide
+ * whether the money is on the books. A combined park gets the same charge; it simply appears in
+ * its single blended balance, which is exactly what "everything together" should mean.
+ *
+ * ⚠ THE TRIGGER IS total_due_cents > 0, AND THAT IS THE REAL SAFETY GATE. A park that does not put
+ * an amount on its contracts posts nothing at all, so this can never surprise a park that tracks
+ * seasonal money somewhere else entirely.
+ *
+ * ⚠ IDEMPOTENT, AND THAT IS THE POINT OF seasonal_contract_id. The gate is "no NON-VOIDED charge
+ * already exists for this contract". So:
+ *   send                     → posts once
+ *   cancel                   → voids it
+ *   edit and send again      → the old one is voided, so a fresh charge posts — correct, because
+ *                              the re-sent agreement may state a different amount
+ *   any repeat of the above  → never a second live charge
+ *
+ * ⚠ NEVER FAILS THE SEND. By the time this runs the packet is COMMITTED — signature rows written,
+ * contract marked sent, and the camper about to receive a link. Throwing here would leave a real
+ * packet reported as a failure. So every error is captured and returned for the caller to surface,
+ * not raised.
+ *
+ * ⚠ GOING FORWARD ONLY. Nothing backfills historical contracts, deliberately — see the migration.
+ */
+export async function postSeasonalCharge(
+  contract: DbRow,
+  guest: DbRow,
+  season: DbRow | null,
+): Promise<{ posted: boolean; error?: string }> {
+  try {
+    const total = Number(contract.total_due_cents ?? 0)
+    // Zero or unset is not a charge. A contract with no stated fee should put nothing on the
+    // books — the same reason deposit_due_cents distinguishes NULL from 0 on the document.
+    if (!Number.isFinite(total) || total <= 0) return { posted: false }
+
+    const contractId = String(contract.id || '')
+    const guestId = String(guest.id || '')
+    if (!contractId || !guestId) return { posted: false }
+
+    // Already charged for this contract? Voided ones do not count — a cancel voids, and the
+    // re-send that follows is entitled to post the (possibly amended) fee again.
+    const { data: existing } = await svc
+      .from('folio_line_items')
+      .select('id')
+      .eq('seasonal_contract_id', contractId)
+      .neq('voided', true)
+      .limit(1)
+      .maybeSingle()
+    if (existing) return { posted: false }
+
+    // The camper's standing account folio, created if they have none — same shape the electric
+    // billing screen and the guest folio page already use, so all three find the same folio.
+    const { data: folio } = await svc
+      .from('folios')
+      .select('id')
+      .eq('folio_type', 'guest_account')
+      .eq('guest_id', guestId)
+      .limit(1)
+      .maybeSingle()
+    let folioId = folio?.id as string | undefined
+    if (!folioId) {
+      const { data: created, error: fErr } = await svc.from('folios').insert({
+        guest_id: guestId,
+        guest_name: (guest.name as string) || '',
+        guest_email: (guest.email as string) || '',
+        folio_type: 'guest_account', status: 'open', label: 'Seasonal Account',
+      }).select('id').single()
+      if (fErr || !created) return { posted: false, error: fErr?.message || 'Could not open an account for this camper.' }
+      folioId = created.id as string
+    }
+
+    const seasonName = (season?.name as string | undefined)?.trim()
+    const description = `${seasonName || `${contract.season_year ?? ''} Season`} — Seasonal Fee`.trim()
+
+    const { error } = await svc.from('folio_line_items').insert({
+      folio_id: folioId,
+      product_id: null,
+      description,
+      quantity: 1,
+      unit_price: total,
+      tax_amount: 0,
+      line_total: total,
+      // The explicit lane. Without it this row has no product_id and no electric reading, so it
+      // would be inferred as `other` — indistinguishable from a manual custom charge.
+      lane: 'seasonal',
+      seasonal_contract_id: contractId,
+    })
+    if (error) return { posted: false, error: error.message }
+    return { posted: true }
+  } catch (e) {
+    return { posted: false, error: errMessage(e, 'Could not post the seasonal fee.') }
+  }
+}
+
 // THE FREEZE — the single place a draft becomes a signable packet. Renders both
 // documents from settings, runs the empty-doc GUARD (so EVERY caller inherits it),
 // snapshots the guest's rig/site AND the resolved season dates onto the contract,
@@ -197,7 +316,12 @@ export function renderPacketIntro(
 export type DbRow = Record<string, unknown>
 
 export type FreezeResult =
-  | { ok: true; packet_id: string; guest: DbRow; contract: DbRow; settings: DbRow | null; season: DbRow | null }
+  | {
+      ok: true; packet_id: string; guest: DbRow; contract: DbRow; settings: DbRow | null; season: DbRow | null
+      /** Phase 4 PR 2. Whether the seasonal fee was posted to the camper's account, and why not
+       *  if it failed. Never fatal — the packet is already committed by the time it runs. */
+      seasonalCharge: { posted: boolean; error?: string }
+    }
   | { ok: false; status: number; error: string }
 
 export async function freezePacket(contractId: string, opts?: { requireEmail?: boolean }): Promise<FreezeResult> {
@@ -318,7 +442,16 @@ export async function freezePacket(contractId: string, opts?: { requireEmail?: b
     return { ok: false, status: 500, error: eC.message }
   }
 
+  // Phase 4 PR 2 — the fee goes on the books, AFTER the packet is committed. BOTH billing modes:
+  // tracking does not depend on display. A no-op when the contract states no amount. Deliberately
+  // last and deliberately non-fatal: everything above this line is already real and the camper is
+  // about to be sent a link.
+  const seasonalCharge = await postSeasonalCharge(contract, guest, season ?? null)
+  if (seasonalCharge.error) {
+    console.error('Seasonal fee not posted for contract', contractId, '—', seasonalCharge.error)
+  }
+
   // The season travels back so /send can render the invitation email's intro against the same
   // inputs the document used, without a second query.
-  return { ok: true, packet_id, guest, contract, settings, season: season ?? null }
+  return { ok: true, packet_id, guest, contract, settings, season: season ?? null, seasonalCharge }
 }

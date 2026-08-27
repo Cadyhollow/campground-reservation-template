@@ -13,6 +13,8 @@ import { requireRole } from '@/lib/require-role'
 //   1. Voids the packet's signature rows (status != 'signed' only — see the race note below).
 //      The rows are NOT deleted: they are the audit trail of what was sent and when.
 //   2. Reverts the contract to 'draft' and clears packet_id, the two signature ids, and sent_at.
+//   3. Voids any seasonal fee the contract posted to the camper's account (Phase 4 PR 2), so a
+//      retracted agreement leaves no phantom debt behind it.
 //
 // WHY RE-SENDING AFTERWARDS IS CLEAN. freezePacket() refuses anything not in 'draft', and mints a
 // NEW packet_id with NEW signature rows and NEW sign tokens every time it runs. So a cancel
@@ -93,6 +95,34 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         { error: 'This packet was signed while you were canceling it, so it was left in place.' },
         { status: 409 },
       )
+    }
+
+    // 3) Void any seasonal fee this contract posted (Phase 4 PR 2). A retracted agreement must
+    //    leave no phantom debt: the camper no longer has a contract, so they no longer owe the
+    //    fee it stated. Voided rather than deleted — the ledger keeps its audit trail, and
+    //    laneBalances excludes voided charges from every total.
+    //
+    //    NOT gated on billing_mode, on purpose. A park that posted charges while separated and
+    //    later switched back to combined would otherwise leave live seasonal charges behind on
+    //    cancelled contracts. Where no such charge exists this matches nothing and is a no-op,
+    //    which is every combined park and every contract predating this feature.
+    //
+    //    `.neq('voided', true)` keeps it idempotent and stops a second cancel rewriting
+    //    voided_at on a row that was already voided.
+    const { error: voidErr } = await svc
+      .from('folio_line_items')
+      .update({ voided: true, voided_at: new Date().toISOString(), reason: 'Seasonal packet canceled' })
+      .eq('seasonal_contract_id', id)
+      .neq('voided', true)
+    if (voidErr) {
+      // The packet IS canceled — the link is dead and the contract is a draft again. Say so
+      // rather than reporting a failure that would invite a second cancel, but make the leftover
+      // charge visible so it can be voided by hand.
+      console.error('Packet canceled but its seasonal charge could not be voided:', voidErr.message)
+      return NextResponse.json({
+        ok: true,
+        warning: 'The packet was canceled, but the seasonal fee on this camper\u2019s account could not be removed. Please void it on their folio.',
+      })
     }
 
     return NextResponse.json({ ok: true })

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { svc, isSummit } from '@/lib/contract-server'
+import { svc, isSummit, getBillingMode } from '@/lib/contract-server'
+import { laneBalances, type LaneBalances } from '@/lib/ledger-lanes'
 import { notVoided } from '@/lib/ledger'
 import { requireRole } from '@/lib/require-role'
 
@@ -62,11 +63,14 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     .select('id').eq('folio_type', 'guest_account').eq('guest_id', guestId).limit(1).maybeSingle()
   let balance_cents = 0
   let lastPayment: Record<string, unknown> | null = null
+  /** Null on a combined park — the screen then renders exactly today's single blended balance. */
+  let lanes: LaneBalances | null = null
   const folioId = folio?.id || ''
   if (folioId) {
     const [{ data: items }, { data: pmts }] = await Promise.all([
-      svc.from('folio_line_items').select('line_total, voided').eq('folio_id', folioId),
-      svc.from('folio_payments').select('amount, surcharge_amount, method, paid_at, status').eq('folio_id', folioId).eq('status', 'completed').order('paid_at', { ascending: false }),
+      // id / product_id / lane are for lane classification; they change no existing figure.
+      svc.from('folio_line_items').select('id, line_total, voided, product_id, lane').eq('folio_id', folioId),
+      svc.from('folio_payments').select('amount, surcharge_amount, method, paid_at, status, lane').eq('folio_id', folioId).eq('status', 'completed').order('paid_at', { ascending: false }),
     ])
     // ⚠ INLINED RATHER THAN IMPORTED, AND lib/ledger.ts IS NOT TOUCHED.
     //
@@ -85,6 +89,23 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const paymentsTotal = (pmts || []).reduce((s, p) => s + p.amount - (p.surcharge_amount || 0), 0)
     balance_cents = itemsTotal - paymentsTotal
     lastPayment = (pmts || [])[0] || null
+
+    // ── PHASE 4 PR 2: the per-lane view, for a SEPARATED park only ──────────────────────────
+    //
+    // `balance_cents` above is untouched and still the whole-account figure — lanes GROUP that
+    // number, they never replace or restate it. A combined park computes none of this and
+    // receives `lanes: null`, so its payload is byte-identical to before.
+    if ((await getBillingMode()) === 'separated') {
+      // The electric signal, exactly as the electric bill resolves it in PR 1: the readings that
+      // point at this folio's line items. Not the category — see lib/ledger-lanes.ts.
+      const itemIds = (items || []).map(i => i.id)
+      const { data: readings } = itemIds.length
+        ? await svc.from('electric_readings').select('folio_line_item_id').in('folio_line_item_id', itemIds)
+        : { data: [] }
+      lanes = laneBalances(items || [], pmts || [], {
+        electricLineItemIds: new Set((readings || []).map(r => r.folio_line_item_id).filter(Boolean) as string[]),
+      })
+    }
   }
 
   return NextResponse.json({
@@ -97,5 +118,6 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     balance_cents,
     folioId,
     lastPayment,
+    lanes,
   })
 }

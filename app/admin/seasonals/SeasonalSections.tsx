@@ -35,7 +35,25 @@ const Row = ({ label, value }: { label: string; value: React.ReactNode }) => (
   <div className="flex justify-between text-sm py-1"><span className="text-gray-500">{label}</span><span className="font-medium text-gray-900 text-right">{value}</span></div>
 )
 
+/** The lanes shown on the camper page, in the order an owner reads them. `other` is deliberately
+ *  absent: it is the classifier's catch-all, not a bill a camper is sent, and giving it a line
+ *  here would put a heading on money nobody meant to categorise. It still counts in the account
+ *  balance below, which is the figure that must never change meaning. */
+const LANE_ROWS = [
+  { lane: 'electric' as const, label: 'Electric' },
+  { lane: 'store' as const, label: 'Store' },
+  { lane: 'seasonal' as const, label: 'Seasonal fee' },
+]
+
 export default function SeasonalSections({ data, mode }: { data: SeasonalGuestData; mode: Mode }) {
+  const lanes = data.lanes || null
+  // One rendering of an amount, so a lane line and the account line cannot disagree about what a
+  // credit looks like.
+  const money = (cents: number) => (
+    <span style={{ color: cents > 0 ? '#d97706' : '#15803d' }}>
+      {cents < 0 ? 'Credit ' + fmtMoney(-cents) : fmtMoney(cents)}
+    </span>
+  )
   const g = data.guest || {}
   // Single-line home address, gap-safe (no stray commas): "Street, City, ST ZIP".
   const homeAddressLine = [
@@ -100,7 +118,37 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
       </Section>
 
       <Section title="Money">
-        <Row label="Account balance" value={<span style={{ color: data.balance_cents > 0 ? '#d97706' : '#15803d' }}>{data.balance_cents < 0 ? 'Credit ' + fmtMoney(-data.balance_cents) : fmtMoney(data.balance_cents)}</span>} />
+        {/* ── PHASE 4 PR 2 ─────────────────────────────────────────────────────────────────
+            THE MODE CHANGES THE PRESENTATION, NOT WHAT IS TRACKED. The seasonal fee is posted to
+            the folio in BOTH modes, so:
+              separated → `data.lanes` is present; show the lanes, with the whole-account total.
+              combined  → `data.lanes` is NULL; render the single blended balance exactly as
+                          before, which now simply INCLUDES the seasonal charge along with
+                          everything else. No special-casing: it is just another line item in the
+                          one folio, which is what "everything together" should mean.
+            The lane breakdown is purely additive and only a separated park ever sees it. */}
+        {lanes ? (
+          <>
+            {LANE_ROWS.map(({ lane, label }) => (
+              <Row key={lane} label={label} value={money(lanes.byLane[lane].balance)} />
+            ))}
+            {/* Shown HONESTLY rather than folded into a lane. Until the checkout screen lands,
+                every payment is recorded against the whole account rather than against one lane,
+                so a camper will normally have some sitting here. Silently spreading it across
+                the lanes would make each lane's figure a guess. */}
+            {lanes.untaggedPayments !== 0 && (
+              <Row
+                label="Payments not yet assigned"
+                value={<span style={{ color: '#15803d' }}>−{fmtMoney(lanes.untaggedPayments)}</span>}
+              />
+            )}
+            <div className="mt-2 pt-2 border-t border-gray-100">
+              <Row label="Account balance" value={money(data.balance_cents)} />
+            </div>
+          </>
+        ) : (
+          <Row label="Account balance" value={<span style={{ color: data.balance_cents > 0 ? '#d97706' : '#15803d' }}>{data.balance_cents < 0 ? 'Credit ' + fmtMoney(-data.balance_cents) : fmtMoney(data.balance_cents)}</span>} />
+        )}
         <Row label="Last payment" value={data.lastPayment ? `${fmtMoney(data.lastPayment.amount - (data.lastPayment.surcharge_amount || 0))} · ${fmtDate(data.lastPayment.paid_at)}` : '—'} />
         {admin && data.folioId && (
           <div className="mt-2"><Link href={`/admin/folio/guest/${g.id}`} className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>Open folio →</Link></div>
