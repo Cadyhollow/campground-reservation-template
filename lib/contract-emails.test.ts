@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { packetEmailHtml, packetReceiptHtml } from './contract-emails.ts'
+import { packetEmailHtml, packetReceiptHtml, defaultPacketIntro } from './contract-emails.ts'
 
 // The two seasonal packet emails.
 //
@@ -114,4 +114,54 @@ test('the two emails are different documents — an invite is not a receipt', ()
   assert.doesNotMatch(invite, /is signed/)
   assert.match(receipt, /is signed/)
   assert.doesNotMatch(receipt, /Review &amp; Sign Packet/)
+})
+
+// ── Phase 3: the park-authored invitation message ────────────────────────────────────────────
+
+test('with no intro set, the email is EXACTLY what it has always said', () => {
+  // The fallback is the normal case: every park has NULL in packet_email_intro the moment the
+  // migration runs. A park that sets nothing must see no change whatsoever.
+  const before = packetEmailHtml('Cady Hollow', 'Ortiz', 2027, 'https://x/packet/1')
+  for (const blank of ['', '   ', null, undefined]) {
+    assert.equal(packetEmailHtml('Cady Hollow', 'Ortiz', 2027, 'https://x/packet/1', blank), before)
+  }
+  assert.match(before, /Your 2027 seasonal packet is ready/)
+  assert.match(before, /<strong>two documents<\/strong>/)
+})
+
+test("a park's message replaces the default paragraph, in place", () => {
+  const html = packetEmailHtml('Cady Hollow', 'Ortiz', 2027, 'https://x/packet/1',
+    'Your deposit of $500.00 is due by February 15, 2027. We take cheques over the winter.')
+  assert.match(html, /Your deposit of \$500\.00 is due by February 15, 2027\./)
+  assert.doesNotMatch(html, /seasonal packet is ready/, 'the default is replaced, not appended')
+  // Position: still between the greeting and the button.
+  assert.ok(html.indexOf('Hi Ortiz,') < html.indexOf('Your deposit'))
+  assert.ok(html.indexOf('Your deposit') < html.indexOf('Review &amp; Sign Packet'))
+})
+
+test('THE CALL TO ACTION CANNOT BE BROKEN BY AN EDIT', () => {
+  // The reason only the message is editable. Whatever an owner writes — including something that
+  // looks like markup — the button and the paste-able link survive intact.
+  const hostile = '<a href="https://evil.example">click here instead</a>'
+  const html = packetEmailHtml('Cady Hollow', 'Ortiz', 2027, 'https://x/packet/1', hostile)
+  assert.match(html, /Review &amp; Sign Packet/)
+  assert.match(html, /href="https:\/\/x\/packet\/1"/)
+  assert.equal((html.match(/<a /g) || []).length, 1, 'exactly one anchor — the real one')
+})
+
+test('the message is HTML-escaped, so ordinary punctuation cannot mangle the email', () => {
+  // Not only about hostile input: "Rates & fees" is a thing a park writes, and raw & is invalid
+  // HTML. Same reasoning as the escaping already applied to the park name.
+  const html = packetEmailHtml('Cady Hollow', 'Ortiz', 2027, 'https://x/packet/1', 'Rates & fees <see office>')
+  assert.match(html, /Rates &amp; fees &lt;see office&gt;/)
+  assert.doesNotMatch(html, /Rates & fees/)
+})
+
+test('newlines in the message become line breaks', () => {
+  const html = packetEmailHtml('Cady Hollow', 'Ortiz', 2027, 'https://x/packet/1', 'Line one\nLine two\r\nLine three')
+  assert.match(html, /Line one<br>Line two<br>Line three/)
+})
+
+test('defaultPacketIntro names the season year it is given', () => {
+  assert.match(defaultPacketIntro(2028), /Your 2028 seasonal packet is ready/)
 })

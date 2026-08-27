@@ -53,6 +53,10 @@ export default function NewSeasonalCamperPage() {
   const [ovCloses, setOvCloses] = useState('')
   // CONTRACT
   const [totalDue, setTotalDue] = useState('')
+  // Phase 3 — DISPLAY ONLY, like Total due: they print on the agreement, nothing is charged.
+  const [depositDue, setDepositDue] = useState('')
+  const [totalDueBy, setTotalDueBy] = useState('')
+  const [depositDueBy, setDepositDueBy] = useState('')
   const [chargeNote, setChargeNote] = useState('')   // CUSTOMER-FACING — prints on the contract
 
   const [draftId, setDraftId] = useState<string | null>(null)
@@ -121,6 +125,8 @@ export default function NewSeasonalCamperPage() {
   function invalidateDraft() { if (draftId) setDraftId(null); if (alreadyStatus) setAlreadyStatus(null) }
 
   const totalDueCents = totalDue ? Math.round(parseFloat(totalDue) * 100) : null
+  // null, not 0, when blank — a stated $0.00 deposit and no deposit are different terms.
+  const depositDueCents = depositDue ? Math.round(parseFloat(depositDue) * 100) : null
 
   const season = seasons.find(s => s.id === seasonId) || null
   const seasonYear = season?.year ?? cy
@@ -144,6 +150,7 @@ export default function NewSeasonalCamperPage() {
     season_year: seasonYear, site_number: siteNumber,
     ...overrideDates,
     occupants, total_due_cents: totalDueCents, charge_note: chargeNote,
+    deposit_due_cents: depositDueCents, total_due_by: totalDueBy || null, deposit_due_by: depositDueBy || null,
     camper_make: rig.camper_make, camper_model: rig.camper_model, camper_year: rig.camper_year == null ? null : Number(rig.camper_year),
   }
   // The preview renders through renderPacketDocuments — the SAME function freezePacket calls, so
@@ -212,6 +219,9 @@ export default function NewSeasonalCamperPage() {
       body: JSON.stringify({
         occupants,
         total_due_cents: totalDueCents,
+        deposit_due_cents: depositDueCents,
+        total_due_by: totalDueBy || null,
+        deposit_due_by: depositDueBy || null,
         charge_note: chargeNote.trim() || null,
         // Null unless the owner explicitly chose different dates — a null override is what makes
         // the draft INHERIT its season.
@@ -363,6 +373,24 @@ export default function NewSeasonalCamperPage() {
           <label className={lbl}>Total due (display only, $)</label>
           <input type="number" step="0.01" value={totalDue} onChange={e => { setTotalDue(e.target.value); invalidateDraft() }} placeholder="0.00" className={`${inp} max-w-[200px]`} />
         </div>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <label className={lbl}>Deposit due (display only, $)</label>
+            <input type="number" step="0.01" value={depositDue} onChange={e => { setDepositDue(e.target.value); invalidateDraft() }} placeholder="0.00" className={inp} />
+          </div>
+          <div>
+            <label className={lbl}>Deposit due by</label>
+            <input type="date" value={depositDueBy} onChange={e => { setDepositDueBy(e.target.value); invalidateDraft() }} className={inp} />
+          </div>
+          <div>
+            <label className={lbl}>Total due by</label>
+            <input type="date" value={totalDueBy} onChange={e => { setTotalDueBy(e.target.value); invalidateDraft() }} className={inp} />
+          </div>
+        </div>
+        <p className="text-xs text-gray-400 mb-3">
+          Display only — these print on the contract and nothing is charged from them. They appear wherever the contract body
+          uses <code>{'{{deposit_due}}'}</code>, <code>{'{{deposit_due_by}}'}</code> or <code>{'{{total_due_by}}'}</code>.
+        </p>
         <div className="mb-3">
           <label className={lbl}>Note about the charge (prints on the contract)</label>
           <textarea value={chargeNote} onChange={e => { setChargeNote(e.target.value); invalidateDraft() }} rows={3}

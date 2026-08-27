@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isSummit, getResend, originOf, packetEmailHtml, freezePacket, emailConfigured, EMAIL_NOT_CONFIGURED, errMessage } from '@/lib/contract-server'
+import { isSummit, getResend, originOf, packetEmailHtml, freezePacket, emailConfigured, EMAIL_NOT_CONFIGURED, errMessage, renderPacketIntro } from '@/lib/contract-server'
 import { requireRole } from '@/lib/require-role'
 
 
@@ -36,7 +36,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     const result = await freezePacket(id, { requireEmail: true })
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
-    const { packet_id, guest, contract, settings } = result
+    const { packet_id, guest, contract, settings, season } = result
 
     // Email last — NOT compensated. The packet is committed and real.
     const origin = originOf(request)
@@ -57,7 +57,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         replyTo: replyToEmail,
         to: guestEmail,
         subject: `Your ${seasonYear} seasonal packet — ${campgroundName}`,
-        html: packetEmailHtml(campgroundName, str(guest.name, 'there'), seasonYear, packetUrl),
+        // Phase 3: the park's own message, rendered against the same guest/contract/season the
+        // document was. Blank setting → packetEmailHtml falls back to its built-in paragraph.
+        html: packetEmailHtml(campgroundName, str(guest.name, 'there'), seasonYear, packetUrl,
+          renderPacketIntro(guest, contract, season, settings)),
       })
       if (sendErr) emailError = errMessage(sendErr, 'Email failed to send')
     } catch (e) {

@@ -483,3 +483,65 @@ test('the freeze snapshot pattern: once dates are written down, editing the seas
   assert.equal(before, after, 'a sent agreement must not move when the season is edited')
   assert.match(after, /May 1, 2027 to June 30, 2027/)
 })
+
+// ── Phase 3: deposit + due-by dates ──────────────────────────────────────────────────────────
+//
+// DISPLAY ONLY — these print on the signed agreement and nothing is charged from them. Which is
+// exactly why the null/zero distinction below is worth a test of its own: the failure mode is not
+// a crash, it is a legal document quietly stating a term the park never agreed to.
+
+test('the three Phase 3 tokens render when set', () => {
+  const vars = buildContractVars(guest, {
+    total_due_cents: 250000, deposit_due_cents: 50000,
+    total_due_by: '2027-04-01', deposit_due_by: '2027-02-15',
+  })
+  assert.equal(vars.total_due, '$2500.00')
+  assert.equal(vars.deposit_due, '$500.00')
+  assert.equal(vars.total_due_by, 'April 1, 2027')
+  assert.equal(vars.deposit_due_by, 'February 15, 2027')
+})
+
+test('the three Phase 3 tokens render EMPTY when unset — never a literal, never "null"', () => {
+  // Every contract in existence has NULL in these columns the moment the migration runs, so this
+  // is the normal case, not an edge case.
+  const vars = buildContractVars(guest, {})
+  assert.equal(vars.deposit_due, '')
+  assert.equal(vars.total_due_by, '')
+  assert.equal(vars.deposit_due_by, '')
+  const out = renderTemplate('[{{deposit_due}}][{{total_due_by}}][{{deposit_due_by}}]', vars)
+  assert.equal(out, '[][][]')
+  assert.doesNotMatch(out, /\{\{|null|undefined|Invalid/)
+})
+
+test('A STATED $0.00 DEPOSIT AND NO DEPOSIT ARE DIFFERENT THINGS', () => {
+  // The reason deposit_due_cents is nullable with no default. "Deposit due: $0.00" is a term;
+  // blank is the absence of one. A DEFAULT 0 would have put the first on every contract that
+  // never mentioned a deposit.
+  assert.equal(buildContractVars(guest, { deposit_due_cents: 0 }).deposit_due, '$0.00')
+  assert.equal(buildContractVars(guest, { deposit_due_cents: null }).deposit_due, '')
+  assert.notEqual(
+    buildContractVars(guest, { deposit_due_cents: 0 }).deposit_due,
+    buildContractVars(guest, { deposit_due_cents: null }).deposit_due)
+})
+
+test('an unparseable due-by date renders empty, never "Invalid Date"', () => {
+  assert.equal(buildContractVars(guest, { total_due_by: 'not-a-date' }).total_due_by, '')
+})
+
+test('the due-by dates do NOT shift a day in a negative-offset timezone', () => {
+  // Same noon-parsing guarantee the season dates get. "Deposit due by February 15" printing as
+  // February 14 on a signed agreement is a real-world problem.
+  assert.equal(buildContractVars(guest, { deposit_due_by: '2027-01-01' }).deposit_due_by, 'January 1, 2027')
+})
+
+test('the Phase 3 amounts reach the document through THE SHARED RENDERER', () => {
+  // Not a parallel path: the same renderPacketDocuments() the preview screens and freezePacket
+  // both call. If this ever needed its own renderer, the preview could disagree with the signed
+  // document about what a camper owes.
+  const body = 'Total {{total_due}} by {{total_due_by}}; deposit {{deposit_due}} by {{deposit_due_by}}.'
+  const { contractText } = renderPacketDocuments(guest, {
+    season_year: 2027, total_due_cents: 250000, deposit_due_cents: 50000,
+    total_due_by: '2027-04-01', deposit_due_by: '2027-02-15',
+  }, { contract_text: body, waiver_text: 'w' }, spring)
+  assert.equal(contractText, 'Total $2500.00 by April 1, 2027; deposit $500.00 by February 15, 2027.')
+})

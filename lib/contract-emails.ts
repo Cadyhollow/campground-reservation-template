@@ -24,14 +24,53 @@
 // the fix costs nothing.
 const esc = (s: string) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-// The packet invitation email. Used by both /send and /resend so a resent email
-// is byte-identical and always points at the same frozen packet.
-export function packetEmailHtml(campgroundName: string, guestName: string, year: number, packetUrl: string): string {
+/**
+ * The default message, kept IN CODE rather than backfilled into settings.packet_email_intro.
+ *
+ * Every park has NULL in that column the moment the Phase 3 migration runs, so falling back here
+ * is the normal case, not an edge case. Backfilling this wording into every park's database would
+ * freeze today's text everywhere and make improving the default unshippable.
+ *
+ * Exported so a preview or a Settings placeholder can show an owner exactly what they are
+ * replacing, rather than paraphrasing it.
+ */
+export function defaultPacketIntro(year: number): string {
+  return `Your ${year} seasonal packet is ready. There are <strong>two documents</strong> to review and sign — your seasonal admission agreement and the liability waiver. You can do both from your phone in a couple of minutes.`
+}
+
+/**
+ * The packet invitation email. Used by both /send and /resend.
+ *
+ * Phase 3 — `intro` is the park's own message, ALREADY RENDERED (merge tokens substituted) by the
+ * caller, which is what lets it say "your deposit of $500 is due by February 15" in the park's own
+ * words. Blank or omitted → the built-in default paragraph, byte-for-byte what this email has
+ * always said, so a park that sets nothing sees no change at all.
+ *
+ * ⚠ WHAT IS EDITABLE AND WHAT IS NOT, AND WHY. Only the MESSAGE moves. The greeting, the
+ * "Review & Sign Packet" button and the paste-this-link fallback stay fixed in code, because they
+ * are the call to action: an owner experimenting with wording must not be able to produce an email
+ * with no way to reach the packet. The intro is placed exactly where the default paragraph sat, so
+ * the layout is identical either way.
+ *
+ * ⚠ THE INTRO IS STAFF INPUT REACHING AN EMAIL BODY, so it is HTML-ESCAPED here and its newlines
+ * become <br>. That is deliberate and it is why the default above carries its own <strong> tags
+ * while a park's text cannot: escaping park-authored text is worth more than letting it use bold.
+ * A park writing "Rates & fees" gets "Rates & fees", not broken HTML.
+ */
+export function packetEmailHtml(
+  campgroundName: string, guestName: string, year: number, packetUrl: string,
+  intro?: string | null,
+): string {
+  // Escape FIRST, then turn newlines into <br> — the other order would let an escaped entity be
+  // re-processed, and would mean the <br> itself got escaped.
+  const introHtml = (intro || '').trim()
+    ? esc(intro as string).replace(/\r\n|\r|\n/g, '<br>')
+    : defaultPacketIntro(year)
   return `
     <div style="font-family: sans-serif; max-width: 520px; margin: 0 auto; color: #374151;">
       <h2 style="color:#15803d; margin-bottom: 8px;">${esc(campgroundName)}</h2>
       <p>Hi ${esc(guestName)},</p>
-      <p>Your ${year} seasonal packet is ready. There are <strong>two documents</strong> to review and sign — your seasonal admission agreement and the liability waiver. You can do both from your phone in a couple of minutes.</p>
+      <p>${introHtml}</p>
       <p style="text-align:center; margin: 28px 0;">
         <a href="${esc(packetUrl)}" style="background:#15803d; color:#fff; text-decoration:none; padding:14px 28px; border-radius:8px; font-weight:700; display:inline-block;">Review &amp; Sign Packet</a>
       </p>

@@ -55,6 +55,12 @@ export type SeasonalContract = {
   camper_model?: string | null
   camper_year?: number | null
   total_due_cents?: number | null
+  /** Phase 3 — DISPLAY ONLY. These print on the agreement; nothing is charged from them.
+   *  `deposit_due_cents` is integer cents, and NULL ("no deposit stated") is meaningfully
+   *  different from 0 ("a stated deposit of $0.00"). */
+  deposit_due_cents?: number | null
+  total_due_by?: string | null
+  deposit_due_by?: string | null
   /** PRIVATE owner scratchpad. Never shown to the camper. Not to be confused with charge_note. */
   staff_notes?: string | null
   /** CUSTOMER-FACING explanation of the total. Rendered into the contract body as {{charge_note}}. */

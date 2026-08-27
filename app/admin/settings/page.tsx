@@ -93,6 +93,8 @@ const defaultSettings = {
   closed_season_message: 'We are closed for the season. We look forward to welcoming you back next year!',
   waiver_enabled: true,
   waiver_text: '',
+  contract_text: '',
+  packet_email_intro: '',
   maintenance_mode: false,
   maintenance_message: 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
   deposit_type: 'first_night',
@@ -140,6 +142,7 @@ export default function SettingsPage() {
   // section would stop an existing park from saving its phone number. Detected from the loaded
   // row, so it self-activates the moment a tenant is migrated, with no code change.
   const [hasPetColumns, setHasPetColumns] = useState(false)
+  const [hasPacketIntroColumn, setHasPacketIntroColumn] = useState(false)
   const [earlyPriceInput, setEarlyPriceInput] = useState('0.00')
   const [latePriceInput, setLatePriceInput] = useState('0.00')
   const [uploadingLogo, setUploadingLogo] = useState(false)
@@ -167,6 +170,9 @@ export default function SettingsPage() {
       setHasThemeColumn('theme' in data)
       setHasHeroColumn('hero_image_url' in data)
       setHasPetColumns('pets_enabled' in data)
+      // Phase 3 column — a tenant that has not run the migration must not be offered a field whose
+      // save would fail. Same pattern as hero_image_url and the pet columns.
+      setHasPacketIntroColumn('packet_email_intro' in data)
       setForm({
         park_name: data.park_name || '',
         park_tagline: data.park_tagline || '',
@@ -215,6 +221,8 @@ export default function SettingsPage() {
         closed_season_message: data.closed_season_message || 'We are closed for the season. We look forward to welcoming you back next year!',
         waiver_enabled: data.waiver_enabled !== false,
         waiver_text: data.waiver_text || '',
+        contract_text: data.contract_text || '',
+        packet_email_intro: data.packet_email_intro || '',
         maintenance_mode: data.maintenance_mode || false,
         maintenance_message: data.maintenance_message || 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
         pets_enabled: data.pets_enabled || false,
@@ -568,6 +576,8 @@ export default function SettingsPage() {
       closed_season_message: form.closed_season_message,
       waiver_enabled: form.waiver_enabled,
       waiver_text: form.waiver_text,
+      contract_text: form.contract_text,
+      ...(hasPacketIntroColumn ? { packet_email_intro: form.packet_email_intro } : {}),
       maintenance_mode: form.maintenance_mode,
       maintenance_message: form.maintenance_message,
       deposit_type: form.deposit_type,
@@ -1066,6 +1076,71 @@ export default function SettingsPage() {
               <p className="text-xs text-gray-400 mt-2">💡 Tip: Consult with a legal professional to ensure your waiver is appropriate for your property and jurisdiction.</p>
             </div>
           )}
+        </div>
+
+        {/* ── SEASONAL PACKET ──────────────────────────────────────────────────────────────
+            The seasonal agreement's body and the invitation email that carries it.
+
+            ⚠ THE CONTRACT BODY EDITOR IS NEW HERE, AND IT CLOSES A REAL GAP RATHER THAN ADDING A
+            FEATURE. settings.contract_text is provisioned for every park and is READ by the
+            packet preview, the review screen and freezePacket — but before this there was no UI
+            anywhere in the app to SET it. Every merge token added across Phases 1–3
+            ({{charge_note}}, {{season_name}}, {{deposit_due}}, the due-by dates) was therefore
+            unreachable for a real park, and freezePacket's empty-document guard would refuse to
+            send at all until somebody edited the row by hand. */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-1">Seasonal Packet</h3>
+          <p className="text-sm text-gray-500 mb-4">
+            The agreement your seasonal campers sign, and the email that invites them to sign it.
+          </p>
+
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Seasonal Contract Text</label>
+            <p className="text-xs text-gray-400 mb-2">
+              The body of the seasonal admission agreement. A packet cannot be sent while this is empty.
+              Use the merge fields below and they are filled in for each camper.
+            </p>
+            <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-sans leading-relaxed" rows={14}
+              placeholder="SEASONAL ADMISSION AGREEMENT — {{season_name}}&#10;&#10;Between the campground and {{name}} of:&#10;{{home_address}}&#10;&#10;Site {{site_number}}, from {{opens}} to {{closes}}."
+              value={form.contract_text} onChange={e => setForm({ ...form, contract_text: e.target.value })} />
+            <p className="text-xs text-gray-400 mt-2">
+              💡 Consult a legal professional to make sure your agreement suits your property and jurisdiction.
+            </p>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Packet Invitation Email</label>
+            <p className="text-xs text-gray-400 mb-2">
+              The message in the email that asks a camper to sign. Plain text is fine — for example your winter
+              payment instructions. <strong>Leave it blank to use the standard message.</strong> The greeting and the
+              &ldquo;Review &amp; Sign Packet&rdquo; button are always included, so the link can never be lost.
+            </p>
+            <textarea
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-sans leading-relaxed"
+              rows={6}
+              disabled={!hasPacketIntroColumn}
+              placeholder={'Your ' + '{{season_name}}' + ' packet is ready to sign. Your deposit of ' + '{{deposit_due}}' + ' is due by ' + '{{deposit_due_by}}' + '.\nOver the winter we accept cheques at the office.'}
+              value={form.packet_email_intro} onChange={e => setForm({ ...form, packet_email_intro: e.target.value })} />
+            {!hasPacketIntroColumn && (
+              <p className="text-xs text-amber-700 mt-1">
+                This park&rsquo;s database does not have this field yet — it arrives with the next update.
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+            <p className="text-xs font-semibold text-gray-600 mb-1">Merge fields (usable in both boxes above)</p>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              <code>{'{{name}}'}</code> <code>{'{{site_number}}'}</code> <code>{'{{season_name}}'}</code>{' '}
+              <code>{'{{opens}}'}</code> <code>{'{{closes}}'}</code> <code>{'{{total_due}}'}</code>{' '}
+              <code>{'{{deposit_due}}'}</code> <code>{'{{total_due_by}}'}</code> <code>{'{{deposit_due_by}}'}</code>{' '}
+              <code>{'{{charge_note}}'}</code> <code>{'{{party_names}}'}</code> <code>{'{{camper_make_year}}'}</code>{' '}
+              <code>{'{{home_address}}'}</code> <code>{'{{year}}'}</code>
+            </p>
+            <p className="text-xs text-gray-400 mt-2">
+              A field with nothing behind it prints as blank — never as the raw <code>{'{{…}}'}</code> text.
+            </p>
+          </div>
         </div>
 
         {/* Maintenance Mode */}
