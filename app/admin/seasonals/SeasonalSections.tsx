@@ -45,9 +45,15 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
   const admin = mode === 'admin'
   const current = data.currentContract
   const prior = (data.contracts || []).filter(c => c !== current)
-  // Party comes from the most recent SIGNED contract.
+  // Party comes from the most recent SIGNED contract, then this year's contract, and only if
+  // there is no contract at all from the guest's STANDING ROSTER (guests.party). A signed
+  // contract's party is what was actually agreed, so it keeps winning; the roster is here so a
+  // camper who has been entered but never sent a packet does not show an empty Party section.
   const signed = (data.contracts || []).find(c => c.status === 'signed')
-  const occupants: SeasonalOccupant[] = (signed?.occupants || current?.occupants || [])
+  const roster: SeasonalOccupant[] = Array.isArray(g.party) ? g.party : []
+  const fromContract: SeasonalOccupant[] | null = signed?.occupants || current?.occupants || null
+  const occupants: SeasonalOccupant[] = fromContract ?? roster
+  const partyIsRoster = fromContract == null && roster.length > 0
   const rig = current || g // prefer the frozen contract's rig if present, else live guest
 
   return (
@@ -115,7 +121,8 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
               <li key={i} className="flex justify-between"><span>{o.name || '—'}</span><span className="text-gray-400 capitalize">{o.kind || ''}</span></li>
             ))}
           </ul>
-        ) : <p className="text-sm text-gray-500">No party recorded yet (from the most recent signed contract).</p>}
+        ) : <p className="text-sm text-gray-500">No party recorded yet.</p>}
+        {partyIsRoster && <p className="text-xs text-gray-400 mt-2">From the camper&rsquo;s standing party — no packet has been sent yet.</p>}
       </Section>
 
       <Section title="Electric" right={admin ? <Link href="/admin/electric-billing" className="text-xs font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>Electric billing →</Link> : undefined}>

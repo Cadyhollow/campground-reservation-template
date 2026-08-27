@@ -12,7 +12,7 @@ import { requireRole } from '@/lib/require-role'
 // body: { id?, name, email, phone, site_number, season_start, season_end,
 //         home_street, home_city, home_state, home_zip,
 //         camper_type, camper_length, camper_amperage,
-//         camper_make, camper_model, camper_year }
+//         camper_make, camper_model, camper_year, party? }
 export async function POST(request: NextRequest) {
   const denied = await requireRole(request, 'staff')
   if (denied) return denied
@@ -50,12 +50,26 @@ export async function POST(request: NextRequest) {
       camper_year: int(b.camper_year),
     }
 
+    // The STANDING party roster. OMITTED FROM `fields` WHEN THE CALLER DOES NOT SEND IT, and that
+    // conditional is load-bearing: this route is a full-row upsert, so an unconditional
+    // `party: […]` would let any caller that doesn't know about the roster silently WIPE it.
+    // Absent key ⇒ column untouched.
+    const patch: Record<string, unknown> = { ...fields }
+    if (Array.isArray(b.party)) {
+      patch.party = (b.party as unknown[])
+        .map(o => {
+          const p = (o ?? {}) as { name?: unknown; kind?: unknown }
+          return { name: (p.name ?? '').toString().trim(), kind: p.kind === 'child' ? 'child' : 'adult' }
+        })
+        .filter(p => p.name)   // an unnamed occupant is a half-typed row, not a person
+    }
+
     if (b.id) {
-      const { data, error } = await svc.from('guests').update(fields).eq('id', b.id).select('*').single()
+      const { data, error } = await svc.from('guests').update(patch).eq('id', b.id).select('*').single()
       if (error || !data) return NextResponse.json({ error: error?.message || 'Could not update guest.' }, { status: 500 })
       return NextResponse.json({ guest: data, created: false })
     }
-    const { data, error } = await svc.from('guests').insert(fields).select('*').single()
+    const { data, error } = await svc.from('guests').insert(patch).select('*').single()
     if (error || !data) return NextResponse.json({ error: error?.message || 'Could not create guest.' }, { status: 500 })
     return NextResponse.json({ guest: data, created: true })
   } catch (e) {

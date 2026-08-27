@@ -36,10 +36,18 @@ export async function POST(request: NextRequest) {
     // has no park-wide season columns today.)
     const { data: guest } = await svc
       .from('guests')
-      .select('id, name, site_number, season_start, season_end, camper_make, camper_model, camper_year')
+      .select('id, name, site_number, season_start, season_end, camper_make, camper_model, camper_year, party')
       .eq('id', guest_id)
       .single()
     if (!guest) return NextResponse.json({ error: 'Guest not found' }, { status: 404 })
+
+    // The STANDING party roster (guests.party) seeds this draft's occupants, the same way
+    // site/season/rig above are seeded from the guest record. The draft is then freely editable —
+    // the send modal still tweaks occupants per contract, and those tweaks stay on the contract.
+    // Defensive Array.isArray rather than a bare `|| []`: the column is jsonb, so a hand-edited
+    // row could hold an object or a string, and `occupants` must be an array or the contract
+    // renderer's `.map` throws at send time.
+    const roster = Array.isArray(guest.party) ? guest.party : []
 
     const draft = {
       guest_id,
@@ -51,7 +59,7 @@ export async function POST(request: NextRequest) {
       camper_make: guest.camper_make ?? null,
       camper_model: guest.camper_model ?? null,
       camper_year: guest.camper_year ?? null,
-      occupants: [],
+      occupants: roster,
     }
 
     const { data: created, error } = await svc

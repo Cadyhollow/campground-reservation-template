@@ -196,6 +196,49 @@ test('party names are joined, trimmed, and empties dropped', () => {
   assert.equal(buildContractVars(guest, { occupants: null }).party_names, '')
 })
 
+// ── charge_note ──────────────────────────────────────────────────────────────────────────────
+// Phase 1 (B). The owner's CUSTOMER-FACING explanation of the total, printed under Total Due.
+// It is a merge var like any other, and these pin the three rules that matter for a legal
+// document: it renders when set, it renders EMPTY (not "null") when not set, and a body written
+// with {{charge_note}} against an older contract row never shows the raw token.
+
+test('charge_note renders the contract note when one is set', () => {
+  const vars = buildContractVars(guest, { charge_note: 'Includes 2 extra family members and a golf cart.' })
+  assert.equal(vars.charge_note, 'Includes 2 extra family members and a golf cart.')
+  assert.equal(renderTemplate('Total: {{total_due}}\n{{charge_note}}', buildContractVars(guest, {
+    total_due_cents: 250000, charge_note: 'Includes the second site.',
+  })), 'Total: $2500.00\nIncludes the second site.')
+})
+
+test('charge_note renders EMPTY when null, undefined or blank — never "null"', () => {
+  // A nullable column on rows that predate it: every existing contract has NULL here, and a
+  // contract body that already uses {{charge_note}} must print nothing rather than the word null.
+  assert.equal(buildContractVars(guest, { charge_note: null }).charge_note, '')
+  assert.equal(buildContractVars(guest, { charge_note: undefined }).charge_note, '')
+  assert.equal(buildContractVars(guest, {}).charge_note, '')
+  assert.equal(renderTemplate('[{{charge_note}}]', buildContractVars(guest, { charge_note: null })), '[]')
+})
+
+test('charge_note is byte-for-byte — multi-line notes are not reflowed', () => {
+  // The note prints inside the contract's white-space:pre-wrap body, so the owner's line breaks
+  // are part of what the camper reads and agrees to.
+  const note = 'Includes:\n  · 2 extra family members\n  · golf cart'
+  assert.equal(renderTemplate('{{charge_note}}', buildContractVars(guest, { charge_note: note })), note)
+})
+
+test('charge_note is NOT fed by staff_notes — the private column stays private', () => {
+  // The failure this prevents is an owner's internal remark about a camper being printed on the
+  // agreement that camper signs. buildContractVars reads charge_note and nothing else.
+  const vars = buildContractVars(guest, {
+    charge_note: null,
+    // Deliberately shaped like a contract row that carries a private note.
+    ...({ staff_notes: 'Chases the neighbours. Watch the balance.' } as Record<string, unknown>),
+  })
+  assert.equal(vars.charge_note, '')
+  assert.equal(renderTemplate('{{staff_notes}}|{{charge_note}}', vars), '|',
+    'neither the private column nor an unset note reaches the document')
+})
+
 test('camper description drops missing parts instead of leaving gaps', () => {
   const bare = { ...guest, camper_make: null, camper_model: null, camper_year: null }
   assert.equal(buildContractVars(bare, {}).camper_make_year, '')
@@ -225,12 +268,14 @@ test('a full contract body renders end to end with nothing left unresolved', () 
     'Party: {{party_names}}',
     'Unit: {{camper_make_year}}',
     'Total due: {{total_due}}',
+    '{{charge_note}}',
     '',
     'This agreement is not a lease of real estate.',
   ].join('\n')
 
   const out = renderTemplate(body, buildContractVars(guest, {
     season_year: 2026, occupants: [{ name: 'Ana' }, { name: 'Luis' }], total_due_cents: 250000,
+    charge_note: 'Includes 2 extra family members and a golf cart.',
   }))
 
   assert.doesNotMatch(out, /\{\{|\}\}/, 'no token survived')
@@ -238,6 +283,7 @@ test('a full contract body renders end to end with nothing left unresolved', () 
   assert.match(out, /158 Cady Hollow Rd\nDuluth, PA 19023/)
   assert.match(out, /Party: Ana, Luis/)
   assert.match(out, /Total due: \$2500\.00/)
+  assert.match(out, /Includes 2 extra family members and a golf cart\./)
   assert.match(out, /This agreement is not a lease of real estate\.$/,
     'the legally-exact closing clause is untouched, including its position')
 })

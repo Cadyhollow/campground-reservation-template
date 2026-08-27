@@ -5,8 +5,12 @@ import { requireRole } from '@/lib/require-role'
 
 
 // Fields staff may edit on a DRAFT contract.
+//
+// `charge_note` and `staff_notes` are BOTH here and are NOT interchangeable: staff_notes is the
+// owner's private scratchpad, charge_note prints on the camper's contract under the total. See
+// db/migrations/2026-08-27-seasonal-charge-note.sql.
 const EDITABLE = [
-  'occupants', 'total_due_cents', 'staff_notes', 'site_number',
+  'occupants', 'total_due_cents', 'staff_notes', 'charge_note', 'site_number',
   'season_opens', 'season_closes',
   'camper_type', 'camper_length', 'camper_amperage',
   'camper_make', 'camper_model', 'camper_year',

@@ -178,6 +178,9 @@ const GATED: [string, string, string][] = [
   ['POST',  '/api/seasonal-contracts/create', 'manager'],
   ['POST',  '/api/seasonal-contracts/clone', 'manager'],
   ['PATCH', '/api/seasonal-contracts/00000000-0000-0000-0000-000000000000', 'manager'],
+  // Phase 1 (C). Retracting a sent packet invalidates a camper's signing link and reverts the
+  // contract — a contract change, so it sits with send/create rather than with the staff reads.
+  ['POST',  '/api/seasonal-contracts/00000000-0000-0000-0000-000000000000/cancel', 'manager'],
   ['POST',  '/api/seasonal-contracts/00000000-0000-0000-0000-000000000000/resend', 'manager'],
   ['POST',  '/api/seasonal-contracts/00000000-0000-0000-0000-000000000000/send', 'manager'],
   ['POST',  '/api/seasonal-contracts/00000000-0000-0000-0000-000000000000/sign-now', 'manager'],

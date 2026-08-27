@@ -47,6 +47,7 @@ export default function NewSeasonalCamperPage() {
   const [seasonCloses, setSeasonCloses] = useState('')
   // CONTRACT
   const [totalDue, setTotalDue] = useState('')
+  const [chargeNote, setChargeNote] = useState('')   // CUSTOMER-FACING — prints on the contract
 
   const [draftId, setDraftId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -78,8 +79,14 @@ export default function NewSeasonalCamperPage() {
         setRig({ camper_type: g.camper_type, camper_length: g.camper_length, camper_amperage: g.camper_amperage, camper_make: g.camper_make, camper_model: g.camper_model, camper_year: g.camper_year })
         if (g.season_start) setSeasonOpens(String(g.season_start).slice(0, 10))
         if (g.season_end) setSeasonCloses(String(g.season_end).slice(0, 10))
+        // The STANDING roster wins over last year's contract: it is the more recently maintained
+        // of the two, and it is what a NEW draft would be seeded from anyway (see
+        // /api/seasonal-contracts/create). Last year's contract stays as the fallback so a camper
+        // recorded before the roster existed still carries forward.
+        const roster = Array.isArray(g.party) ? (g.party as Occupant[]) : []
         const lastYear = (d.contracts || []).find((c: SeasonalContract) => c.season_year === cy - 1)
-        if (lastYear && Array.isArray(lastYear.occupants) && lastYear.occupants.length) setOccupants(lastYear.occupants)
+        if (roster.length) setOccupants(roster)
+        else if (lastYear && Array.isArray(lastYear.occupants) && lastYear.occupants.length) setOccupants(lastYear.occupants as Occupant[])
       })
       .catch(() => {})
     // `cy` is the season year this intake is for — it is read inside, so it belongs here. It is
@@ -103,7 +110,7 @@ export default function NewSeasonalCamperPage() {
   const previewContract = {
     season_year: seasonYear, site_number: siteNumber,
     season_opens: seasonOpens || null, season_closes: seasonCloses || null,
-    occupants, total_due_cents: totalDueCents,
+    occupants, total_due_cents: totalDueCents, charge_note: chargeNote,
     camper_make: rig.camper_make, camper_model: rig.camper_model, camper_year: rig.camper_year == null ? null : Number(rig.camper_year),
   }
   // The preview renders the same merge fields the real contract will, so it goes through the
@@ -133,6 +140,10 @@ export default function NewSeasonalCamperPage() {
         id: existingId || undefined,   // update the existing guest, don't create a duplicate
         name, email, phone, site_number: siteNumber,
         season_start: seasonOpens || null, season_end: seasonCloses || null,
+        // The party typed here becomes the camper's STANDING roster, alongside their address and
+        // rig — this form is the full camper record, not a per-contract editor. The send modal on
+        // the camper page is the per-contract one, and deliberately does NOT write back here.
+        party: occupants,
         ...addr, ...rig,
       }),
     })
@@ -162,6 +173,7 @@ export default function NewSeasonalCamperPage() {
       body: JSON.stringify({
         occupants,
         total_due_cents: totalDueCents,
+        charge_note: chargeNote.trim() || null,
         season_opens: seasonOpens || null,
         season_closes: seasonCloses || null,
       }),
@@ -264,6 +276,13 @@ export default function NewSeasonalCamperPage() {
         <div className="mb-3">
           <label className={lbl}>Total due (display only, $)</label>
           <input type="number" step="0.01" value={totalDue} onChange={e => { setTotalDue(e.target.value); invalidateDraft() }} placeholder="0.00" className={`${inp} max-w-[200px]`} />
+        </div>
+        <div className="mb-3">
+          <label className={lbl}>Note about the charge (prints on the contract)</label>
+          <textarea value={chargeNote} onChange={e => { setChargeNote(e.target.value); invalidateDraft() }} rows={3}
+            placeholder="e.g. Includes 2 extra family members, golf cart, and the second site."
+            className={inp} />
+          <p className="text-xs text-gray-400 mt-1">The camper sees this. It appears in the preview below wherever the contract body uses <code>{'{{charge_note}}'}</code>.</p>
         </div>
         <p className="text-xs text-gray-500 mb-2">This is exactly what the camper will see and sign:</p>
         <div className="mb-2">
