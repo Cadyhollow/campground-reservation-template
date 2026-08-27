@@ -6,7 +6,7 @@ import { randomBytes, randomUUID } from 'crypto'
 import { createClient } from '@supabase/supabase-js'
 import { Resend } from 'resend'
 import { planAtLeast } from '@/lib/plan'
-import { guestRigSnapshot, renderPacketDocuments } from '@/lib/contracts'
+import { guestRigSnapshot, renderPacketDocuments, effectiveSeasonDates } from '@/lib/contracts'
 
 // Service-role client (bypasses RLS). Constructed at import is fine — createClient
 // doesn't throw on missing env (unlike Resend, which we keep lazy below).
@@ -139,7 +139,8 @@ export async function findOrCreateSeasonForYear(year: number): Promise<
 
 // THE FREEZE — the single place a draft becomes a signable packet. Renders both
 // documents from settings, runs the empty-doc GUARD (so EVERY caller inherits it),
-// snapshots the guest's rig/site onto the contract, inserts the two signature rows
+// snapshots the guest's rig/site AND the resolved season dates onto the contract,
+// inserts the two signature rows
 // under one packet_id, and marks the contract 'sent'. Compensation-on-failure
 // (delete partial writes) matches the original send route. Does NOT email — the
 // caller owns that. Does NOT require the guest to have an email unless the caller
@@ -179,6 +180,22 @@ export async function freezePacket(contractId: string, opts?: { requireEmail?: b
   // season dates, and total_due stay as the staff-edited draft.)
   const snapshot = guestRigSnapshot(guest, contract)
 
+  // Phase 2b — THE SEASON, AND WHY ITS DATES ARE SNAPSHOTTED HERE.
+  //
+  // A contract inherits its season's dates unless it carries its own override. That inheritance
+  // is LIVE: change the season and every inheriting draft changes with it. That is right for a
+  // draft and catastrophic for a sent agreement — an owner correcting next year's season dates
+  // must not silently rewrite the dates a camper signed months ago.
+  //
+  // So the freeze RESOLVES the inheritance and writes the answer down. From this moment the
+  // contract carries concrete dates of its own, and later edits to the season cannot reach it.
+  // Same principle as the rig snapshot above, and as document_text on the signature rows.
+  const { data: season } = contract.season_id
+    ? await svc.from('seasons').select('name, opens, closes').eq('id', contract.season_id).single()
+    : { data: null }
+  const dates = effectiveSeasonDates(contract, season)
+  const seasonSnapshot = { season_opens: dates.opens, season_closes: dates.closes }
+
   // Typed rather than cast: this row is fetched with a NAMED column list a few lines up, so its
   // shape is known and the three `as any` casts Cady carried here were never necessary.
   const st = settings as {
@@ -207,7 +224,7 @@ export async function freezePacket(contractId: string, opts?: { requireEmail?: b
   //   that would have said so. Passing the row with its columns remapped would ACTIVATE a dormant
   //   tier and could change which dates print on a legal agreement — a product decision, not a
   //   refactoring one. renderPacketDocuments preserves the omission and says so in its own note.
-  const { contractTitle, contractText, waiverText } = renderPacketDocuments(guest, contract, st)
+  const { contractTitle, contractText, waiverText } = renderPacketDocuments(guest, contract, st, season)
 
   // GUARD: never freeze an empty legal document. Blocks BEFORE any rows are written.
   if (!contractText.trim()) {
@@ -247,6 +264,9 @@ export async function freezePacket(contractId: string, opts?: { requireEmail?: b
     contract_signature_id: rowA.id,
     waiver_signature_id: rowB.id,
     ...snapshot,
+    // The resolved season dates, written down so the sent packet carries immutable dates of its
+    // own rather than a live pointer at a season somebody may later edit.
+    ...seasonSnapshot,
     sent_at: new Date().toISOString(),
   }).eq('id', contractId).eq('status', 'draft')
   if (eC) {

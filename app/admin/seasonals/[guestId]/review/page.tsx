@@ -20,7 +20,8 @@ import { currentSeasonYear } from '@/lib/season'
 import PartyEditor from '../../PartyEditor'
 import PacketPreview, { missingPacketFields } from '../../PacketPreview'
 import toast, { Toaster } from 'react-hot-toast'
-import type { SeasonalGuestData, SeasonalContract, SeasonalGuest } from '@/lib/seasonal-types'
+import type { SeasonalGuestData, SeasonalContract, SeasonalGuest, Season } from '@/lib/seasonal-types'
+import { effectiveSeasonDates } from '@/lib/contracts'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 
 const supabase = createBrowserSupabase()
@@ -62,8 +63,12 @@ export default function SeasonalReviewPage() {
   const [occupants, setOccupants] = useState<Occupant[]>([])
   const [totalDue, setTotalDue] = useState('')
   const [chargeNote, setChargeNote] = useState('')
-  const [opens, setOpens] = useState('')
-  const [closes, setCloses] = useState('')
+  // Phase 2b: the screen is driven by the contract's SEASON. Its dates are the default; these
+  // three pieces of state are the per-camper override.
+  const [season, setSeason] = useState<Season | null>(null)
+  const [overrideOn, setOverrideOn] = useState(false)
+  const [ovOpens, setOvOpens] = useState('')
+  const [ovCloses, setOvCloses] = useState('')
   const [working, setWorking] = useState(false)
 
   useEffect(() => {
@@ -97,8 +102,24 @@ export default function SeasonalReviewPage() {
       setOccupants(Array.isArray(c.occupants) ? (c.occupants as Occupant[]) : [])
       setTotalDue(c.total_due_cents != null ? (c.total_due_cents / 100).toFixed(2) : '')
       setChargeNote(c.charge_note || '')
-      setOpens(c.season_opens || '')
-      setCloses(c.season_closes || '')
+      // The contract's own dates ARE the override. A pre-2b draft has them filled in (they were
+      // seeded from the guest back then), so it opens with the override already on and keeps
+      // exactly the dates it had — nothing shifts under the owner. A 2b draft has them null and
+      // inherits its season.
+      const hasOverride = !!(c.season_opens || c.season_closes)
+      setOverrideOn(hasOverride)
+      setOvOpens(c.season_opens || '')
+      setOvCloses(c.season_closes || '')
+
+      // Resolve the season the contract is filed under. The camper page still links here with
+      // ?year=, which is fine — the contract itself carries the season, so that is what we read.
+      if (c.season_id) {
+        try {
+          const sRes = await fetch('/api/seasons')
+          const sData = await sRes.json()
+          setSeason((sData?.seasons || []).find((x: Season) => x.id === c.season_id) || null)
+        } catch { /* the screen still works without it; dates just fall back to the override */ }
+      }
     } catch { setErr('Could not load camper.') }
     setLoading(false)
   }, [guestId, year])
@@ -106,6 +127,15 @@ export default function SeasonalReviewPage() {
 
   const g: SeasonalGuest = data?.guest || { id: '' }
   const totalDueCents = totalDue ? Math.round(parseFloat(totalDue) * 100) : null
+
+  // The override exactly as it will be saved, and the dates the packet actually runs on.
+  const overrideDates = {
+    season_opens: overrideOn ? (ovOpens || null) : null,
+    season_closes: overrideOn ? (ovCloses || null) : null,
+  }
+  const eff = effectiveSeasonDates(overrideDates, season)
+  const fmtShort = (d?: string | null) => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''
+  const fmtRange = (a?: string | null, b?: string | null) => [fmtShort(a), fmtShort(b)].filter(Boolean).join(' – ')
 
   // What the preview renders. The GUEST supplies name/site/rig/home address — matching the
   // freeze, which snapshots rig and site off the guest record rather than the draft. The CONTRACT
@@ -117,8 +147,7 @@ export default function SeasonalReviewPage() {
     occupants,
     total_due_cents: totalDueCents,
     charge_note: chargeNote,
-    season_opens: opens || null,
-    season_closes: closes || null,
+    ...overrideDates,
   }
 
   // Recomputed here (rather than read out of PacketPreview) only to build the "still needed"
@@ -127,7 +156,9 @@ export default function SeasonalReviewPage() {
   const waiverText = settings?.waiver_text || ''
   const missing = missingPacketFields({
     name: g.name, siteNumber: g.site_number,
-    seasonOpens: opens, seasonCloses: closes,
+    // EFFECTIVE dates: inheriting a dated season passes; a season with no dates and no override
+    // is blocked, with a message naming both ways to fix it.
+    seasonOpens: eff.opens, seasonCloses: eff.closes,
     homeStreet: g.home_street, homeCity: g.home_city, homeState: g.home_state, homeZip: g.home_zip,
     // The rendered body, not the raw template: a template that renders to nothing is just as
     // empty as an unset one, and freezePacket refuses both.
@@ -145,8 +176,9 @@ export default function SeasonalReviewPage() {
         occupants,
         total_due_cents: totalDueCents,
         charge_note: chargeNote.trim() || null,
-        season_opens: opens || null,
-        season_closes: closes || null,
+        // Null unless the owner explicitly chose different dates — a null override is what makes
+        // this contract inherit its season. The freeze resolves and snapshots the result.
+        ...overrideDates,
       }),
     })
     if (res.ok) return true
@@ -205,7 +237,7 @@ export default function SeasonalReviewPage() {
         <Link href={backHref} className="text-sm text-gray-400 hover:text-gray-600">← {g.name || 'Camper'}</Link>
         <h2 className="text-2xl font-bold text-gray-900">Review before sending</h2>
         <p className="text-sm text-gray-500">
-          {g.name || '—'} · Site {g.site_number || '—'} · {year} season
+          {g.name || '—'} · Site {g.site_number || '—'} · {season?.name || `${year} season`}
         </p>
       </div>
 
@@ -229,15 +261,36 @@ export default function SeasonalReviewPage() {
           Prefilled from the camper&rsquo;s standing party. Changes here apply to this packet only — to change the
           standing party, edit it on the camper page.
         </p>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className={lbl}>Season opens</label>
-            <input type="date" value={opens} onChange={e => setOpens(e.target.value)} className={inp} />
-          </div>
-          <div>
-            <label className={lbl}>Season closes</label>
-            <input type="date" value={closes} onChange={e => setCloses(e.target.value)} className={inp} />
-          </div>
+        <div>
+          <label className={lbl}>Season</label>
+          <p className="text-sm font-semibold text-gray-900">{season?.name || `${year} season`}</p>
+          {!overrideOn ? (
+            <div className="flex items-start justify-between gap-3 mt-1">
+              <p className="text-sm text-gray-600">
+                {eff.opens || eff.closes
+                  ? <>Runs <strong>{fmtRange(eff.opens, eff.closes)}</strong> <span className="text-gray-400">— from the season</span></>
+                  : <span className="text-amber-700">This season has no dates set yet. Add them under Manage seasons, or set dates just for this camper.</span>}
+              </p>
+              <button type="button" onClick={() => { setOverrideOn(true); setOvOpens(season?.opens || ''); setOvCloses(season?.closes || '') }}
+                className="text-xs font-semibold whitespace-nowrap" style={{ color: 'var(--accent-color, #2E6B8A)' }}>
+                Use different dates
+              </button>
+            </div>
+          ) : (
+            <div className="mt-2">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Dates for this camper only</p>
+                <button type="button" onClick={() => { setOverrideOn(false); setOvOpens(''); setOvCloses('') }}
+                  className="text-xs font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>
+                  Use the season&rsquo;s dates
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className={lbl}>Opens</label><input type="date" value={ovOpens} onChange={e => setOvOpens(e.target.value)} className={inp} /></div>
+                <div><label className={lbl}>Closes</label><input type="date" value={ovCloses} onChange={e => setOvCloses(e.target.value)} className={inp} /></div>
+              </div>
+            </div>
+          )}
         </div>
         <div className="mt-3">
           <label className={lbl}>Total due (display only, $)</label>
@@ -259,7 +312,7 @@ export default function SeasonalReviewPage() {
       <div className={cardCls}>
         <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide mb-3">The packet</h3>
         <p className="text-xs text-gray-500 mb-2">This is exactly what the camper will see and sign:</p>
-        <PacketPreview guest={g} contract={previewContract} settings={settings} maxHeight="45vh" />
+        <PacketPreview guest={g} contract={previewContract} settings={settings} season={season} maxHeight="45vh" />
       </div>
 
       {/* ── Actions ─────────────────────────────────────────────────────────────────────────── */}

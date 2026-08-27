@@ -20,6 +20,8 @@ export type PacketPreviewProps = {
   guest: Parameters<typeof renderPacketDocuments>[0]
   contract: Parameters<typeof renderPacketDocuments>[1]
   settings: Parameters<typeof renderPacketDocuments>[2]
+  /** Phase 2b. The contract's season — supplies the inherited dates and {{season_name}}. */
+  season?: Parameters<typeof renderPacketDocuments>[3]
   /** Height cap for each document box. The intake form uses 30vh; the review screen gives more. */
   maxHeight?: string
 }
@@ -32,8 +34,8 @@ export type PacketPreviewProps = {
  * Settings before sending"), so the preview names the same fix in the same place the owner is
  * looking.
  */
-export default function PacketPreview({ guest, contract, settings, maxHeight = '30vh' }: PacketPreviewProps) {
-  const { contractTitle, contractText, waiverText } = renderPacketDocuments(guest, contract, settings)
+export default function PacketPreview({ guest, contract, settings, season, maxHeight = '30vh' }: PacketPreviewProps) {
+  const { contractTitle, contractText, waiverText } = renderPacketDocuments(guest, contract, settings, season)
   const box = { ...paper, maxHeight }
   return (
     <>
@@ -60,6 +62,8 @@ export default function PacketPreview({ guest, contract, settings, maxHeight = '
 export function missingPacketFields(input: {
   name?: string | null
   siteNumber?: string | null
+  /** Phase 2b: pass the EFFECTIVE dates (effectiveSeasonDates), not the raw override columns —
+   *  a camper inheriting a dated season must pass, and one whose season has no dates must not. */
   seasonOpens?: string | null
   seasonCloses?: string | null
   homeStreet?: string | null
@@ -72,8 +76,8 @@ export function missingPacketFields(input: {
   const missing: string[] = []
   if (!(input.name || '').trim()) missing.push('name')
   if (!(input.siteNumber || '').trim()) missing.push('site')
-  if (!input.seasonOpens) missing.push('season opens')
-  if (!input.seasonCloses) missing.push('season closes')
+  if (!input.seasonOpens) missing.push('season opens (set it on the season, or override it here)')
+  if (!input.seasonCloses) missing.push('season closes (set it on the season, or override it here)')
   if (!(input.homeStreet && input.homeCity && input.homeState && input.homeZip)) missing.push('home address')
   if (!input.contractText.trim()) missing.push('contract text (set it in Settings)')
   if (!input.waiverText.trim()) missing.push('waiver text (set it in Settings)')

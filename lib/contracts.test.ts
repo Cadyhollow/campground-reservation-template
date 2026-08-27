@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   renderTemplate, formatContractDate, formatCents, buildContractVars,
-  guestRigSnapshot, renderPacketDocuments,
+  guestRigSnapshot, renderPacketDocuments, effectiveSeasonDates,
 } from './contracts.ts'
 
 // The seasonal contract's rendering rules.
@@ -386,4 +386,100 @@ test('the charge note reaches the rendered document through this path too', () =
   const { contractText } = renderPacketDocuments(
     {}, { season_year: 2026, charge_note: 'Includes the golf cart.' }, settingsText)
   assert.match(contractText, /Includes the golf cart\./)
+})
+
+
+// ── Phase 2b: seasons drive the dates and the name ───────────────────────────────────────────
+
+const seasonBody = {
+  contract_text: '{{season_name}} | {{opens}} to {{closes}} | Site {{site_number}}',
+  waiver_text: 'I assume all risk.',
+}
+const spring = { name: '2027 Spring', opens: '2027-05-01', closes: '2027-06-30' }
+
+test('effective dates INHERIT the season when the contract has no override', () => {
+  assert.deepEqual(effectiveSeasonDates({}, spring), { opens: '2027-05-01', closes: '2027-06-30' })
+  assert.deepEqual(effectiveSeasonDates({ season_opens: null, season_closes: null }, spring),
+    { opens: '2027-05-01', closes: '2027-06-30' })
+})
+
+test('a contract OVERRIDE beats the season', () => {
+  assert.deepEqual(
+    effectiveSeasonDates({ season_opens: '2027-05-15', season_closes: '2027-06-15' }, spring),
+    { opens: '2027-05-15', closes: '2027-06-15' })
+  // Half an override is legal: one date overridden, the other inherited.
+  assert.deepEqual(effectiveSeasonDates({ season_opens: '2027-05-15' }, spring),
+    { opens: '2027-05-15', closes: '2027-06-30' })
+})
+
+test('THE PRE-2b TRANSITION: a contract that already carries dates keeps them exactly', () => {
+  // Every contract created before 2b had season_opens/closes seeded from the guest record. Under
+  // the override rule those read as overrides, so a park mid-season sees NOTHING shift — even if
+  // the season it was backfilled into has different dates, or none.
+  const legacy = { season_opens: '2027-04-15', season_closes: '2027-10-15' }
+  assert.deepEqual(effectiveSeasonDates(legacy, spring), { opens: '2027-04-15', closes: '2027-10-15' })
+  assert.deepEqual(effectiveSeasonDates(legacy, { name: '2027 Season' }), { opens: '2027-04-15', closes: '2027-10-15' })
+})
+
+test('empty strings are treated as unset, not as a blank date', () => {
+  // A cleared date input posts '', which must fall through to the season rather than blanking the
+  // contract's dates on the printed agreement.
+  assert.deepEqual(effectiveSeasonDates({ season_opens: '', season_closes: '  ' }, spring),
+    { opens: '2027-05-01', closes: '2027-06-30' })
+})
+
+test('no override and no season dates is null — the send gate is what refuses it', () => {
+  assert.deepEqual(effectiveSeasonDates({}, { name: '2027 Season' }), { opens: null, closes: null })
+  assert.deepEqual(effectiveSeasonDates({}, null), { opens: null, closes: null })
+  assert.deepEqual(effectiveSeasonDates(null, undefined), { opens: null, closes: null })
+})
+
+test('{{season_name}} renders the season name, and empty when there is none', () => {
+  assert.match(renderPacketDocuments({}, { season_year: 2027 }, seasonBody, spring).contractText,
+    /^2027 Spring \|/)
+  // Null-safe like every other token: never the literal {{season_name}}, never "null".
+  const none = renderPacketDocuments({}, { season_year: 2027 }, seasonBody, null).contractText
+  assert.match(none, /^ \|/)
+  assert.doesNotMatch(none, /\{\{|null/)
+  assert.equal(buildContractVars({}, {}).season_name, '')
+})
+
+test('the printed dates are the EFFECTIVE dates', () => {
+  const inherited = renderPacketDocuments({}, { season_year: 2027 }, seasonBody, spring).contractText
+  assert.match(inherited, /May 1, 2027 to June 30, 2027/)
+
+  const overridden = renderPacketDocuments(
+    {}, { season_year: 2027, season_opens: '2027-05-15', season_closes: '2027-06-15' }, seasonBody, spring).contractText
+  assert.match(overridden, /May 15, 2027 to June 15, 2027/)
+  assert.doesNotMatch(overridden, /May 1, 2027/)
+})
+
+test('THE FAITHFULNESS GUARANTEE HOLDS ACROSS SEASONS: preview and freeze render identically', () => {
+  // The property Phase 1.5 exists to protect, re-asserted now that a season feeds the render.
+  // The preview screens call renderPacketDocuments with the LIVE contract + its season; the
+  // freeze calls it with the same contract + the same season, immediately before writing the
+  // document text. If those two ever diverged, a screen that says "this is what they will sign"
+  // would be lying. Both cases below — inheriting and overridden — must match byte for byte.
+  const guest = { site_number: '7', camper_make: 'Jayco', camper_model: 'Eagle', camper_year: 2019 }
+
+  for (const contract of [
+    { season_year: 2027, occupants: [{ name: 'Ana' }], total_due_cents: 250000 },                  // inherits
+    { season_year: 2027, season_opens: '2027-05-15', season_closes: '2027-06-15' },                // overrides
+  ]) {
+    const preview = renderPacketDocuments(guest, contract, seasonBody, spring)
+    const freeze = renderPacketDocuments(guest, contract, seasonBody, spring)
+    assert.deepEqual(preview, freeze)
+    assert.doesNotMatch(preview.contractText, /\{\{|undefined|null|NaN/)
+  }
+})
+
+test('the freeze snapshot pattern: once dates are written down, editing the season cannot move them', () => {
+  // freezePacket resolves the inheritance and writes the answer onto the contract. This models
+  // that: a contract holding resolved dates renders the same no matter what the season later says.
+  const frozen = { season_year: 2027, season_opens: '2027-05-01', season_closes: '2027-06-30' }
+  const before = renderPacketDocuments({}, frozen, seasonBody, spring).contractText
+  const seasonLaterEdited = { name: '2027 Spring', opens: '2030-01-01', closes: '2030-12-31' }
+  const after = renderPacketDocuments({}, frozen, seasonBody, seasonLaterEdited).contractText
+  assert.equal(before, after, 'a sent agreement must not move when the season is edited')
+  assert.match(after, /May 1, 2027 to June 30, 2027/)
 })

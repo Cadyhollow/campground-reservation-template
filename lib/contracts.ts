@@ -71,6 +71,8 @@ type ContractLike = {
   camper_year?: number | null
   total_due_cents?: number | null
   charge_note?: string | null
+  /** Phase 2b. The season's name, passed in by renderPacketDocuments — see {{season_name}}. */
+  season_name?: string | null
 }
 type SettingsLike = { season_opens?: string | null; season_closes?: string | null } | null | undefined
 
@@ -92,6 +94,16 @@ type RigGuestLike = GuestLike & {
   camper_amperage?: string | null
 }
 type SnapshotContractLike = ContractLike & { site_number?: string | null }
+
+/** A row of `seasons`, as much of it as the renderer needs. */
+export type SeasonLike = {
+  name?: string | null
+  opens?: string | null
+  closes?: string | null
+} | null | undefined
+
+/** The dates a contract actually runs on, after the override/inherit rule. */
+export type EffectiveSeasonDates = { opens: string | null; closes: string | null }
 
 /** The two document bodies a packet is made of, plus the contract's title. */
 export type PacketDocuments = {
@@ -137,6 +149,10 @@ export function buildContractVars(guest: GuestLike, contract: ContractLike, sett
     closes: formatContractDate(pick(contract.season_closes, settings?.season_closes, guest.season_end)),
     party_names,
     camper_make_year,
+    // Phase 2b. The season's NAME ("2027 Spring"), so a contract can say which season it is for
+    // rather than only which year. Null-safe like every other var: unset renders '', never the
+    // literal token and never the word "null".
+    season_name: pick(contract.season_name),
     total_due: formatCents(contract.total_due_cents),
     // The owner's CUSTOMER-FACING explanation of the total ("includes 2 extra family members,
     // golf cart, second site"). Same null-safe treatment as every other var: null/undefined
@@ -200,13 +216,56 @@ export function guestRigSnapshot(guest: RigGuestLike, contract?: SnapshotContrac
  * unrendered for that reason. Do not "fix" that here without changing the freeze in the same
  * commit — they are the same code path now.
  */
+/**
+ * The dates a contract actually runs on — Phase 2b.
+ *
+ * THE MODEL: a season's dates are the DEFAULT; a contract's own season_opens/season_closes are a
+ * PER-CAMPER OVERRIDE. Set → they win. Null → the contract inherits its season's dates. Null on
+ * both → null, and the "still needed" gate on the send screens is what refuses that.
+ *
+ * Everything downstream reads through here: the on-screen dates, the preview, the printed
+ * contract, the missing-fields check, and the snapshot the freeze writes. One rule, one place.
+ *
+ * ⚠ THE TRANSITION IS GRACEFUL BY CONSTRUCTION, AND THAT IS WHY THE OVERRIDE WINS RATHER THAN THE
+ * SEASON. Every contract created before Phase 2b already has season_opens/season_closes filled in
+ * (the create route seeded them from the guest record). Under this rule those read as overrides,
+ * so those contracts keep the exact dates they already had — nothing shifts under a park mid-
+ * season. Contracts created from 2b onward leave the columns null and inherit instead.
+ *
+ * Empty string is treated as unset, not as a date: a cleared date input posts '' and must fall
+ * through to the season rather than blanking the contract.
+ */
+export function effectiveSeasonDates(
+  contract: { season_opens?: string | null; season_closes?: string | null } | null | undefined,
+  season: SeasonLike,
+): EffectiveSeasonDates {
+  const use = (override?: string | null, fallback?: string | null): string | null =>
+    (override && override.trim()) || (fallback && fallback.trim()) || null
+  return {
+    opens: use(contract?.season_opens, season?.opens),
+    closes: use(contract?.season_closes, season?.closes),
+  }
+}
+
 export function renderPacketDocuments(
   guest: RigGuestLike,
   contract: SnapshotContractLike,
   settings: { contract_text?: string | null; waiver_text?: string | null } | null | undefined,
+  /** Phase 2b. The contract's season — supplies the fallback dates and {{season_name}}. Optional
+   *  so a caller with no season yet still renders, exactly as it did before 2b. */
+  season?: SeasonLike,
 ): PacketDocuments {
   const snapshot = guestRigSnapshot(guest, contract)
-  const vars = buildContractVars(guest, { ...contract, ...snapshot }, undefined)
+  const dates = effectiveSeasonDates(contract, season)
+  // The EFFECTIVE dates and the season name are folded into the contract object the vars are
+  // built from, so {{opens}}/{{closes}}/{{season_name}} all resolve through the one builder.
+  const vars = buildContractVars(guest, {
+    ...contract,
+    ...snapshot,
+    season_opens: dates.opens,
+    season_closes: dates.closes,
+    season_name: season?.name ?? contract.season_name ?? null,
+  }, undefined)
   return {
     contractTitle: `${contract.season_year ?? ''} Seasonal Admission Agreement`,
     contractText: renderTemplate(settings?.contract_text || '', vars),
