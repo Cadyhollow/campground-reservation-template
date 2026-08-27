@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { planAtLeast } from '@/lib/plan'
-import { currentSeasonYear } from '@/lib/season'
+import SeasonPicker, { useSeasons } from '../SeasonPicker'
 import SeasonalSections from '../SeasonalSections'
 import AddressEditor from '../AddressEditor'
 import RigEditor from '../RigEditor'
@@ -28,8 +28,10 @@ export default function SeasonalCamperPage() {
   const params = useParams()
   const router = useRouter()
   const guestId = params.guestId as string
-  const cy = currentSeasonYear()
-  const [year, setYear] = useState(cy)   // the season being viewed/acted on — a forced, visible choice
+  // Phase 2c: the SEASON being viewed/acted on — a forced, visible choice, and what decides which
+  // contract this page shows and sends. Replaces the year picker.
+  const { seasons, loaded: seasonsLoaded, defaultId } = useSeasons()
+  const [seasonId, setSeasonId] = useState('')
 
   const [data, setData] = useState<SeasonalGuestData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -70,17 +72,19 @@ export default function SeasonalCamperPage() {
 
   // useCallback so the effect can declare it, and because the send/resend/save flows all re-run
   // it after a successful write.
+  useEffect(() => { if (!seasonId && defaultId) setSeasonId(defaultId) }, [defaultId, seasonId])
+
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     try {
-      const res = await fetch(`/api/seasonals/guest/${guestId}?year=${year}`)
+      const res = await fetch(`/api/seasonals/guest/${guestId}?season_id=${encodeURIComponent(seasonId)}`)
       const d = await res.json()
       if (!res.ok) setErr(d.error || 'Could not load camper.')
       else { setData(d); setRig({ ...d.guest }); setAddr({ ...d.guest }); setParty(Array.isArray(d.guest?.party) ? d.guest.party : []) }
     } catch { setErr('Could not load camper.') }
     setLoading(false)
-  }, [guestId, year])
-  useEffect(() => { void load() }, [load])
+  }, [guestId, seasonId])
+  useEffect(() => { if (seasonsLoaded && seasonId) void load() }, [load, seasonsLoaded, seasonId])
 
   // The review screen sends, then returns here with the outcome on the query string — the modal
   // used to close in place and set this state directly. Read it once, show the same banner, and
@@ -177,11 +181,12 @@ export default function SeasonalCamperPage() {
   // total but never the DOCUMENTS — with a full review screen that renders the real contract and
   // waiver before anything is frozen. This only navigates; the draft is created there.
   function goToReview() {
-    // Backstop against an off-year send, unchanged from the modal it replaces: the year is
-    // already visible in the picker and on the button, but confirm if it deviates from the
-    // computed current season.
-    if (year !== cy && !window.confirm(`Creating a ${year} contract — the current season is ${cy}. Is that right?`)) return
-    router.push(`/admin/seasonals/${guestId}/review?year=${year}`)
+    if (!seasonId) return
+    // Phase 2c: the review screen is opened BY SEASON, which is what lets this camper hold a
+    // Spring and a Fall and still land on the right contract. The off-year confirm the modal
+    // carried is gone with the year picker — the season is named on the button itself now, so
+    // there is no ambiguous number to mistake.
+    router.push(`/admin/seasonals/${guestId}/review?season_id=${encodeURIComponent(seasonId)}`)
   }
 
   // Retract a sent-but-unsigned packet. The route voids the packet's signature rows (killing the
@@ -192,7 +197,7 @@ export default function SeasonalCamperPage() {
     const id = data?.currentContract?.id
     if (!id) return
     if (!window.confirm(
-      `Cancel the ${year} packet?\n\n` +
+      `Cancel the ${selectedSeason?.name || ''} packet?\n\n` +
       `The link already emailed to ${data?.guest?.name || 'this camper'} will stop working, and the packet goes back to a draft you can edit.\n\n` +
       `You will need to send it again afterwards. Anything already signed is not affected.`
     )) return
@@ -222,6 +227,7 @@ export default function SeasonalCamperPage() {
   const g: SeasonalGuest = data?.guest || { id: '' }
   const hasAddress = !!(g.home_street && g.home_city && g.home_state && g.home_zip)
   const roster: Occupant[] = Array.isArray(g.party) ? (g.party as Occupant[]) : []
+  const selectedSeason = seasons.find(s => s.id === seasonId) || null
 
   return (
     <div className="p-4 md:p-6 max-w-3xl">
@@ -230,15 +236,13 @@ export default function SeasonalCamperPage() {
         <div>
           <Link href="/admin/seasonals" className="text-sm text-gray-400 hover:text-gray-600">← Seasonals</Link>
           <h2 className="text-2xl font-bold text-gray-900">{data?.guest?.name}</h2>
-          <p className="text-sm text-gray-500">Site {data?.guest?.site_number || '—'} · {year} season</p>
+          <p className="text-sm text-gray-500">Site {data?.guest?.site_number || '—'} · {selectedSeason?.name || 'season'}</p>
         </div>
         <div className="flex items-center gap-2">
           <Link href={`/admin/seasonals/new?guestId=${guestId}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">↗ Full form</Link>
           <label className="text-xs font-medium text-gray-500">Season</label>
-          <select value={year} onChange={e => setYear(parseInt(e.target.value))}
-            className="border border-gray-200 rounded-lg px-3 py-2 text-sm font-bold text-gray-900">
-            {[cy - 1, cy, cy + 1].map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
+          <SeasonPicker seasons={seasons} value={seasonId} onChange={setSeasonId} disabled={!seasonsLoaded}
+            className="border border-gray-200 rounded-lg px-3 py-2 text-sm font-bold text-gray-900" />
           {status === 'signed'
             ? <span className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: '#f0fdf4', color: '#15803d' }}>✓ Packet signed</span>
             : status === 'sent'
@@ -251,7 +255,7 @@ export default function SeasonalCamperPage() {
                     {working ? '…' : 'Cancel packet'}
                   </button>
                 </>
-              : <button onClick={goToReview} disabled={working} className="px-4 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{working ? '…' : `✉ Review & send ${year} packet`}</button>}
+              : <button onClick={goToReview} disabled={working} className="px-4 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{working ? '…' : `✉ Review & send ${selectedSeason?.name || ''} packet`}</button>}
         </div>
       </div>
 

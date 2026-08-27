@@ -3,8 +3,15 @@ import { svc, isSummit } from '@/lib/contract-server'
 import { notVoided } from '@/lib/ledger'
 import { requireRole } from '@/lib/require-role'
 
-// GET /api/seasonals/guest/[guestId]?year=YYYY — summit-gated. Everything the
+// GET /api/seasonals/guest/[guestId]?season_id=…  (or ?year=YYYY) — summit-gated. Everything the
 // camper page needs (service-role: reads the RLS-zero-policy tables).
+//
+// Phase 2c: `currentContract` is selected by SEASON when one is named — that is what lets a
+// camper hold a Spring and a Fall and the screen show the right one. `?year=` still works.
+//
+// THE FULL CONTRACT HISTORY IS UNCHANGED: `contracts` still carries every year, so the camper
+// page's "Prior years" panel keeps working exactly as it did. Only the CURRENT SELECTION moved
+// onto seasons. The response shape is otherwise identical, `year` included.
 export async function GET(request: NextRequest, { params }: { params: Promise<{ guestId: string }> }) {
   const denied = await requireRole(request, 'staff')
   if (denied) return denied
@@ -12,7 +19,12 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (!(await isSummit())) return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })
   const { guestId } = await params
   const url = new URL(request.url)
-  const year = parseInt(url.searchParams.get('year') || '', 10) || new Date().getFullYear()
+  const season_id = url.searchParams.get('season_id') || ''
+  let year = parseInt(url.searchParams.get('year') || '', 10) || new Date().getFullYear()
+  if (season_id) {
+    const { data: season } = await svc.from('seasons').select('year').eq('id', season_id).maybeSingle()
+    if (season?.year) year = season.year
+  }
 
   const { data: guest, error } = await svc.from('guests').select('*').eq('id', guestId).single()
   if (error || !guest) return NextResponse.json({ error: 'Guest not found' }, { status: 404 })
@@ -33,7 +45,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     contract_signature: c.contract_signature_id ? sigById.get(c.contract_signature_id) || null : null,
     waiver_signature: c.waiver_signature_id ? sigById.get(c.waiver_signature_id) || null : null,
   }))
-  const currentContract = contractsOut.find(c => c.season_year === year) || null
+  const currentContract = season_id
+    ? (contractsOut.find(c => c.season_id === season_id) || null)
+    : (contractsOut.find(c => c.season_year === year) || null)
 
   // Notes (append-only).
   const { data: notes } = await svc.from('guest_notes')

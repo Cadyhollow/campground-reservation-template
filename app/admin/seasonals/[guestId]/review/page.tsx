@@ -36,18 +36,24 @@ export default function SeasonalReviewPage() {
   const guestId = params.guestId as string
   const cy = currentSeasonYear()
 
-  // The season being sent. Read from ?year= so the camper page's picker carries through; falls
-  // back to the computed current season when the link is opened bare.
+  // Phase 2c: the SEASON being sent, from ?season_id=. That is what makes "open or create the
+  // contract for exactly this season" work, and it is what lets a camper hold a Spring and a Fall.
+  // ?year= is still honoured for any older link.
   //
   // Read in an EFFECT rather than a lazy useState initializer, and from window.location rather
   // than useSearchParams — both deliberate, both matching app/admin/seasonals/new/page.tsx.
-  // useSearchParams would force a Suspense boundary; a lazy initializer would return `cy` during
-  // the server render and the URL's year on the client's first render, which is a hydration
-  // mismatch whenever the owner is sending for a non-current season.
+  // useSearchParams would force a Suspense boundary; a lazy initializer would read the URL during
+  // the client's first render but not the server's, which is a hydration mismatch.
   const [year, setYear] = useState(cy)
+  const [seasonIdParam, setSeasonIdParam] = useState('')
+  const [paramsRead, setParamsRead] = useState(false)
   useEffect(() => {
-    const y = parseInt(new URLSearchParams(window.location.search).get('year') || '', 10)
+    const q = new URLSearchParams(window.location.search)
+    const sid = q.get('season_id') || ''
+    if (sid) setSeasonIdParam(sid)
+    const y = parseInt(q.get('year') || '', 10)
     if (Number.isFinite(y) && y > 0 && y !== cy) setYear(y)
+    setParamsRead(true)
   }, [cy])
 
   const [settings, setSettings] = useState<SeasonalSettings | null>(null)
@@ -83,14 +89,18 @@ export default function SeasonalReviewPage() {
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     try {
-      const res = await fetch(`/api/seasonals/guest/${guestId}?year=${year}`)
+      const res = await fetch(`/api/seasonals/guest/${guestId}?` + (seasonIdParam
+        ? `season_id=${encodeURIComponent(seasonIdParam)}`
+        : `year=${year}`))
       const d = await res.json()
       if (!res.ok) { setErr(d.error || 'Could not load camper.'); setLoading(false); return }
       setData(d)
 
       const cRes = await fetch('/api/seasonal-contracts/create', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guest_id: guestId, season_year: year }),
+        // season_id is what create keys idempotency on (2b), so arriving here opens or creates
+        // the contract for EXACTLY the chosen season rather than "this camper's contract this year".
+        body: JSON.stringify({ guest_id: guestId, season_year: year, season_id: seasonIdParam || undefined }),
       })
       const cData = await cRes.json()
       if (!cRes.ok || !cData.contract) { setErr(cData.error || 'Could not open the packet.'); setLoading(false); return }
@@ -122,8 +132,9 @@ export default function SeasonalReviewPage() {
       }
     } catch { setErr('Could not load camper.') }
     setLoading(false)
-  }, [guestId, year])
-  useEffect(() => { void load() }, [load])
+  }, [guestId, year, seasonIdParam])
+  // Wait until the query string has been read, so the first load already knows its season.
+  useEffect(() => { if (paramsRead) void load() }, [load, paramsRead])
 
   const g: SeasonalGuest = data?.guest || { id: '' }
   const totalDueCents = totalDue ? Math.round(parseFloat(totalDue) * 100) : null

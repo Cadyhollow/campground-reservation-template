@@ -4,9 +4,14 @@ import { notVoided } from '@/lib/ledger'
 import { currentSeasonYear } from '@/lib/season'
 import { requireRole } from '@/lib/require-role'
 
-// GET /api/seasonals/list?year=YYYY — summit-gated. One aggregated payload for the
-// /admin/seasonals list (seasonal_contracts + guest_notes are RLS-zero-policy, so
-// the admin anon client can't read them; this service-role route does).
+// GET /api/seasonals/list?season_id=…  (or ?year=YYYY) — summit-gated. One aggregated payload
+// for the /admin/seasonals list (seasonal_contracts + guest_notes are RLS-zero-policy, so the
+// admin anon client can't read them; this service-role route does).
+//
+// Phase 2c: the list filters by SEASON. `season_id` is what the screen sends now, so a park with
+// a Spring and a Fall in one year can tell them apart. `?year=` is kept working — it is the
+// pre-2c contract of this route and costs one branch — and the RESPONSE SHAPE IS UNCHANGED,
+// including the `year` field, which is now the selected season's year.
 export async function GET(request: NextRequest) {
   const denied = await requireRole(request, 'staff')
   if (denied) return denied
@@ -14,7 +19,13 @@ export async function GET(request: NextRequest) {
   if (!(await isSummit())) return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })
 
   const url = new URL(request.url)
-  const year = parseInt(url.searchParams.get('year') || '', 10) || currentSeasonYear()
+  const season_id = url.searchParams.get('season_id') || ''
+  // `year` still travels in the response, so resolve it from the season when one is named.
+  let year = parseInt(url.searchParams.get('year') || '', 10) || currentSeasonYear()
+  if (season_id) {
+    const { data: season } = await svc.from('seasons').select('year').eq('id', season_id).maybeSingle()
+    if (season?.year) year = season.year
+  }
 
   const { data: guests } = await svc.from('guests')
     .select('id, name, site_number')
@@ -26,9 +37,13 @@ export async function GET(request: NextRequest) {
   }
 
   // Contracts for the year + their linked signatures.
-  const { data: contracts } = await svc.from('seasonal_contracts')
+  // Filter by season when one is named, else by year (the pre-2c behaviour).
+  const contractQuery = svc.from('seasonal_contracts')
     .select('id, guest_id, status, packet_id, contract_signature_id, waiver_signature_id')
-    .eq('season_year', year).in('guest_id', ids)
+    .in('guest_id', ids)
+  const { data: contracts } = await (season_id
+    ? contractQuery.eq('season_id', season_id)
+    : contractQuery.eq('season_year', year))
   const byGuest = new Map((contracts || []).map(c => [c.guest_id, c]))
   const sigIds = (contracts || []).flatMap(c => [c.contract_signature_id, c.waiver_signature_id]).filter(Boolean)
   const sigStatus = new Map<string, string>()
