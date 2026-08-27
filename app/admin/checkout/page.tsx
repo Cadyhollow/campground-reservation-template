@@ -24,7 +24,8 @@ import Link from 'next/link'
 import { planAtLeast } from '@/lib/plan'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { loadSquarePayments } from '@/lib/square-card-client'
-import { LANES, normalizeBillingMode, type Lane } from '@/lib/ledger-lanes'
+import { normalizeBillingMode, type Lane } from '@/lib/ledger-lanes'
+import { methodLabel as methodLabelOf } from '@/lib/transactions'
 import type { SeasonalGuestData } from '@/lib/seasonal-types'
 import toast, { Toaster } from 'react-hot-toast'
 
@@ -48,6 +49,7 @@ export default function LaneCheckoutPage() {
 
   const [mode, setMode] = useState<'combined' | 'separated' | null>(null)
   const [surchargePct, setSurchargePct] = useState(0)
+  const [maxCreditAmount, setMaxCreditAmount] = useState(0)
   const [customMethods, setCustomMethods] = useState<string[]>([])
 
   // Camper selection
@@ -65,6 +67,12 @@ export default function LaneCheckoutPage() {
   const [method, setMethod] = useState('cash')
   const [note, setNote] = useState('')
   const [waiveFee, setWaiveFee] = useState(false)
+  // Cash handed over. Exactly the folio's model: the LANE AMOUNTS are what gets recorded, this is
+  // what was physically received, and the difference is change-or-credit.
+  const [cashTendered, setCashTendered] = useState('')
+  /** Set by "Apply as Credit", cleared by "Give Change". Declared with the other state rather
+   *  than beside the derived values — a hook must never sit in a conditional region. */
+  const [keepAsCredit, setKeepAsCredit] = useState(false)
   const [saving, setSaving] = useState(false)
   const [cardReady, setCardReady] = useState(false)
   const [squareErr, setSquareErr] = useState('')
@@ -73,7 +81,7 @@ export default function LaneCheckoutPage() {
   const [cardRef, setCardRef] = useState<{ tokenize: () => Promise<{ status: string; token?: string }> } | null>(null)
 
   useEffect(() => {
-    supabase.from('settings').select('plan, billing_mode, card_surcharge_percent, custom_payment_methods').single()
+    supabase.from('settings').select('plan, billing_mode, card_surcharge_percent, custom_payment_methods, max_credit_amount').single()
       .then(({ data, error }) => {
         // Fail safe to combined: a park without the Phase 4 column must land on the flow it
         // already has, never on a lane screen it cannot use.
@@ -81,6 +89,7 @@ export default function LaneCheckoutPage() {
         if (!planAtLeast(data?.plan, 'summit')) { router.replace('/admin'); return }
         setMode(normalizeBillingMode(data?.billing_mode))
         setSurchargePct(Number(data?.card_surcharge_percent) || 0)
+        setMaxCreditAmount(Number(data?.max_credit_amount) || 0)
         setCustomMethods((data?.custom_payment_methods as string[]) || [])
       })
   }, [router])
@@ -136,6 +145,22 @@ export default function LaneCheckoutPage() {
     : 0
   const grandTotal = baseTotal + surcharge
 
+  // ── THE CREDIT-OR-CHANGE OVERAGE (Phase 4 PR 3b, Part B) ──────────────────────────────────
+  //
+  // The SAME mechanism the folio has always used, and not a new one: a credit is not a record of
+  // its own, it is simply a payment recorded for more than was owed, which drives the balance
+  // negative. Here the lane rows carry what each lane is paying, and a kept overage is recorded
+  // as ONE UNTAGGED row — untagged being precisely what "an account credit, applicable to any
+  // lane later" already means everywhere else in Phase 4.
+  //
+  // Cash is the only tender that can give change, so it is the only one offered the choice —
+  // again matching the folio, where an electronic overage can only become a credit.
+  const tenderedCents = method === 'cash' ? toCents(cashTendered) : 0
+  const overageCents = method === 'cash' && cashTendered !== '' ? Math.max(0, tenderedCents - grandTotal) : 0
+  const overageExceedsCap = maxCreditAmount > 0 && overageCents > maxCreditAmount
+  const shortCents = method === 'cash' && cashTendered !== '' ? Math.max(0, grandTotal - tenderedCents) : 0
+  const creditCents = keepAsCredit ? overageCents : 0
+
   async function mountCard() {
     setSquareErr('')
     try {
@@ -187,23 +212,37 @@ export default function LaneCheckoutPage() {
       } else {
         // The same insert the folio pages perform, one row per lane, plus the lane tag. A single
         // insert call so a multi-lane payment cannot land half-recorded.
-        const { error } = await supabase.from('folio_payments').insert(
-          split.map(l => ({
-            folio_id: data.folioId,
-            method,
-            amount: l.amount,
-            surcharge_amount: 0,
-            status: 'completed',
-            note,
-            lane: l.lane,
-          }))
-        )
+        // `lane: string | null` — the credit row below carries null, which is the whole point of
+        // it (an account credit belongs to no single lane).
+        const rows: Record<string, unknown>[] = split.map(l => ({
+          folio_id: data.folioId,
+          method,
+          amount: l.amount,
+          surcharge_amount: 0,
+          status: 'completed',
+          note,
+          lane: l.lane,
+        }))
+        // A KEPT OVERPAYMENT IS ONE UNTAGGED ROW. Untagged is exactly what "an account credit,
+        // applicable to any lane later" already means in Phase 4 — it belongs to the account
+        // rather than to any one lane, which is the meaning this choice has always had.
+        if (creditCents > 0) {
+          rows.push({
+            folio_id: data.folioId, method, amount: creditCents, surcharge_amount: 0,
+            status: 'completed', note: (note ? note + ' · ' : '') + 'Account credit',
+            lane: null,
+          })
+        }
+        const { error } = await supabase.from('folio_payments').insert(rows)
         if (error) { toast.error('Could not record the payment: ' + error.message); setSaving(false); return }
       }
 
       // PR 4 leaves a receipt hook here — deliberately NOT sent in this PR.
-      toast.success(`${money(grandTotal)} recorded.`)
+      toast.success(creditCents > 0
+        ? `${money(grandTotal)} recorded, plus ${money(creditCents)} account credit.`
+        : `${money(grandTotal)} recorded.`)
       setSelected({}); setAmounts({}); setNote(''); setWaiveFee(false)
+      setCashTendered(''); setKeepAsCredit(false)
       await load(guestId)
       router.push(`/admin/seasonals/${guestId}`)
     } catch {
@@ -370,6 +409,69 @@ export default function LaneCheckoutPage() {
               </div>
             )}
 
+            {method === 'cash' && baseTotal > 0 && (
+              <div className="mt-3">
+                <label className="block text-xs text-gray-500 mb-1">Cash tendered</label>
+                <div className="flex items-center gap-1 mb-2">
+                  <span className="text-sm text-gray-500">$</span>
+                  <input type="number" step="0.01" min="0" value={cashTendered}
+                    onChange={e => { setCashTendered(e.target.value); setKeepAsCredit(false) }}
+                    placeholder="0.00" className={`${inp} font-bold`} />
+                </div>
+                {cashTendered !== '' && (overageCents > 0 || shortCents > 0) && (
+                  <div className="rounded-lg px-3 py-2 mb-2 flex items-center justify-between text-sm font-semibold"
+                    style={shortCents > 0
+                      ? { background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626' }
+                      : { background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#15803d' }}>
+                    <span>{shortCents > 0 ? 'Amount short' : keepAsCredit ? 'Kept as credit' : 'Change due'}</span>
+                    <span className="font-extrabold">{money(shortCents > 0 ? shortCents : overageCents)}</span>
+                  </div>
+                )}
+                {/* The SAME choice, the same wording, the same credit cap as the folio. */}
+                {overageCents > 0 && maxCreditAmount > 0 && (
+                  <>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setKeepAsCredit(false)}
+                        className="flex-1 rounded-lg px-3 py-2 text-xs font-semibold border"
+                        style={!keepAsCredit
+                          ? { background: '#f3f4f6', borderColor: '#9ca3af', color: '#374151' }
+                          : { background: '#fff', borderColor: '#e5e7eb', color: '#6b7280' }}>
+                        Give {money(overageCents)} Change
+                      </button>
+                      <button type="button" disabled={overageExceedsCap}
+                        onClick={() => !overageExceedsCap && setKeepAsCredit(true)}
+                        className="flex-1 rounded-lg px-3 py-2 text-xs font-semibold border disabled:opacity-60"
+                        style={keepAsCredit
+                          ? { background: '#f0fdf4', borderColor: '#15803d', color: '#15803d' }
+                          : { background: '#fff', borderColor: '#e5e7eb', color: overageExceedsCap ? '#9ca3af' : '#15803d' }}>
+                        Apply {money(overageCents)} as Credit
+                      </button>
+                    </div>
+                    {overageExceedsCap && (
+                      <p className="text-xs mt-1 rounded px-2 py-1.5" style={{ background: '#fef3c7', border: '1px solid #fde68a', color: '#92400e' }}>
+                        Overpayment of {money(overageCents)} exceeds the {money(maxCreditAmount)} credit limit — please give change instead.
+                      </p>
+                    )}
+                    {keepAsCredit && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        Recorded as an <strong>account credit</strong> — it applies to any lane and comes off their next charge.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* An electronic tender cannot give change, so an overage there can only be a credit —
+                and it lands in the LANE that was overpaid, not on the account. Same reasoning the
+                folio prints for a card or check. */}
+            {method !== 'cash' && PAYABLE.some(p => lineFor(p.lane) > dueFor(p.lane)) && (
+              <p className="text-xs mt-3 rounded-lg px-3 py-2" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534' }}>
+                One of these amounts is more than that lane owes. {methodLabelOf(method)} can&rsquo;t give change, so the
+                extra stays as a credit in that lane and comes off its next charge.
+              </p>
+            )}
+
             <div className="mt-3">
               <label className="block text-xs text-gray-500 mb-1">Note (optional)</label>
               <input value={note} onChange={e => setNote(e.target.value)} className={inp} />
@@ -388,6 +490,7 @@ export default function LaneCheckoutPage() {
                   {PAYABLE.filter(p => lineFor(p.lane) > 0).map(p => p.label).join(' + ') || 'Nothing selected'}
                 </p>
                 {surcharge > 0 && <p className="text-[11px] text-gray-400">includes {money(surcharge)} card fee</p>}
+                {creditCents > 0 && <p className="text-[11px] text-green-700">plus {money(creditCents)} kept as account credit</p>}
               </div>
               <p className="text-2xl font-bold text-gray-900">{money(grandTotal)}</p>
             </div>
