@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   renderTemplate, formatContractDate, formatCents, buildContractVars,
+  guestRigSnapshot, renderPacketDocuments,
 } from './contracts.ts'
 
 // The seasonal contract's rendering rules.
@@ -286,4 +287,103 @@ test('a full contract body renders end to end with nothing left unresolved', () 
   assert.match(out, /Includes 2 extra family members and a golf cart\./)
   assert.match(out, /This agreement is not a lease of real estate\.$/,
     'the legally-exact closing clause is untouched, including its position')
+})
+
+
+// ── guestRigSnapshot / renderPacketDocuments ─────────────────────────────────────────────────
+//
+// Phase 1.5. These two functions are the ONE renderer: freezePacket() calls them to produce the
+// documents a camper signs, and the New Camper form and the review screen call them to show the
+// owner what is about to be sent. The tests below pin the properties that make a preview
+// trustworthy — if any of them break, a screen that says "this is what they will sign" starts
+// lying, which is worse than having no preview.
+
+const settingsText = {
+  contract_text: 'Site {{site_number}} — {{camper_make_year}} — {{opens}} to {{closes}}\n{{charge_note}}',
+  waiver_text: 'I assume all risk.',
+}
+
+test('the rig snapshot comes from the GUEST, overriding a stale draft copy', () => {
+  // The asymmetry freezePacket has always had: the guest record is current truth about the rig,
+  // the draft carries the staff-edited party/dates/total. A camper who changed rigs since the
+  // draft was created must be sent the rig they actually have.
+  const snap = guestRigSnapshot(
+    { site_number: '7', camper_make: 'Jayco', camper_model: 'Eagle', camper_year: 2019, camper_type: 'TT', camper_length: 30, camper_amperage: '50' },
+    { site_number: '22', camper_make: 'STALE', camper_model: 'STALE', camper_year: 1999 },
+  )
+  assert.equal(snap.site_number, '7')
+  assert.equal(snap.camper_make, 'Jayco')
+  assert.equal(snap.camper_year, 2019)
+  assert.equal(snap.camper_length, 30)
+})
+
+test('site_number falls back guest -> contract -> empty string', () => {
+  assert.equal(guestRigSnapshot({ site_number: '7' }, { site_number: '22' }).site_number, '7')
+  assert.equal(guestRigSnapshot({ site_number: '' }, { site_number: '22' }).site_number, '22')
+  assert.equal(guestRigSnapshot({}, {}).site_number, '', 'never undefined — the column is NOT NULL')
+})
+
+test('missing rig fields snapshot as null, never undefined', () => {
+  // They are written straight onto the contract row by the freeze, so undefined would drop the
+  // column from the UPDATE rather than clear it.
+  const snap = guestRigSnapshot({}, {})
+  for (const [k, v] of Object.entries(snap)) {
+    if (k === 'site_number') continue
+    assert.equal(v, null, `${k} should be null`)
+  }
+})
+
+test('renderPacketDocuments renders the rig from the guest, not the draft', () => {
+  const { contractText } = renderPacketDocuments(
+    { site_number: '7', camper_make: 'Jayco', camper_model: 'Eagle', camper_year: 2019 },
+    { season_year: 2026, site_number: '22', camper_make: 'STALE', camper_model: 'STALE', camper_year: 1999,
+      season_opens: '2026-05-01', season_closes: '2026-09-30' },
+    settingsText,
+  )
+  assert.match(contractText, /Site 7/)
+  assert.match(contractText, /2019 Jayco Eagle/)
+  assert.doesNotMatch(contractText, /STALE|Site 22/)
+})
+
+test('THE DORMANT SEASON-DATES TIER STAYS DORMANT — a settings row cannot change the dates', () => {
+  // The single most load-bearing property here. buildContractVars supports
+  //     contract.season_opens -> settings.season_opens -> guest.season_start
+  // but `settings` has season_start/season_end, NOT season_opens/season_closes, so tier 2 has
+  // never fired. renderPacketDocuments passes `undefined` for settings exactly as the freeze
+  // does. Activating that tier would change which dates print on a signed legal agreement.
+  const guestOnly = { season_start: '2026-04-15', season_end: '2026-10-15' }
+  const withSeasonyLookingSettings = {
+    ...settingsText,
+    // Deliberately shaped like the trap: if these were ever forwarded, the dates would change.
+    season_opens: '1999-01-01', season_closes: '1999-12-31',
+  } as Record<string, unknown> as typeof settingsText
+
+  const { contractText } = renderPacketDocuments(guestOnly, { season_year: 2026 }, withSeasonyLookingSettings)
+  assert.match(contractText, /April 15, 2026 to October 15, 2026/)
+  assert.doesNotMatch(contractText, /1999/, 'the settings tier must stay dormant')
+})
+
+test('the contract title is the season year, and the waiver is returned unrendered', () => {
+  const docs = renderPacketDocuments({}, { season_year: 2026 }, {
+    contract_text: 'x', waiver_text: 'Waiver with a {{token}} that must NOT be substituted.',
+  })
+  assert.equal(docs.contractTitle, '2026 Seasonal Admission Agreement')
+  // The freeze assigns settings.waiver_text verbatim — no merge fields today. Pinned so a preview
+  // cannot start rendering it while the freeze does not.
+  assert.equal(docs.waiverText, 'Waiver with a {{token}} that must NOT be substituted.')
+})
+
+test('absent contract/waiver text render as empty strings — the empty-document guard is what refuses', () => {
+  // renderPacketDocuments never throws on missing settings; freezePacket's own guard is what
+  // blocks the send, and the screens use the same emptiness to build their "still needed" list.
+  const docs = renderPacketDocuments({}, { season_year: 2026 }, null)
+  assert.equal(docs.contractText, '')
+  assert.equal(docs.waiverText, '')
+  assert.equal(renderPacketDocuments({}, { season_year: 2026 }, undefined).contractText, '')
+})
+
+test('the charge note reaches the rendered document through this path too', () => {
+  const { contractText } = renderPacketDocuments(
+    {}, { season_year: 2026, charge_note: 'Includes the golf cart.' }, settingsText)
+  assert.match(contractText, /Includes the golf cart\./)
 })

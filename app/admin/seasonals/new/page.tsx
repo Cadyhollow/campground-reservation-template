@@ -4,10 +4,11 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { planAtLeast } from '@/lib/plan'
 import { currentSeasonYear } from '@/lib/season'
-import { buildContractVars, renderTemplate } from '@/lib/contracts'
+import { renderPacketDocuments } from '@/lib/contracts'
 import AddressEditor, { type Address } from '../AddressEditor'
 import RigEditor, { type Rig } from '../RigEditor'
 import PartyEditor, { type Occupant } from '../PartyEditor'
+import PacketPreview, { missingPacketFields } from '../PacketPreview'
 import toast, { Toaster } from 'react-hot-toast'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import type { SeasonalContract } from '@/lib/seasonal-types'
@@ -113,22 +114,23 @@ export default function NewSeasonalCamperPage() {
     occupants, total_due_cents: totalDueCents, charge_note: chargeNote,
     camper_make: rig.camper_make, camper_model: rig.camper_model, camper_year: rig.camper_year == null ? null : Number(rig.camper_year),
   }
-  // The preview renders the same merge fields the real contract will, so it goes through the
-  // same builder. settings is omitted for the same reason the server omits it — see the note in
-  // lib/contract-server.ts about the dormant season-dates tier.
-  const vars = buildContractVars(previewGuest, previewContract, undefined)
-  const contractText = renderTemplate(settings?.contract_text || '', vars)
-  const waiverText = settings?.waiver_text || ''
+  // The preview renders through renderPacketDocuments — the SAME function freezePacket calls, so
+  // what is shown below cannot drift from what is actually frozen. (It also omits the settings
+  // argument to buildContractVars for the reason documented there: the dormant season-dates tier.)
+  //
+  // Note this screen previews a camper who may not exist yet, so the "guest" it renders from is
+  // the form's own fields rather than a saved row. That is unchanged from before the extraction —
+  // and it is what the owner is about to save, so it is the right source here.
+  const { contractText, waiverText } = renderPacketDocuments(previewGuest, previewContract, settings)
 
-  // Contract-critical fields — the source-level guard against a blank freeze.
-  const missing: string[] = []
-  if (!name.trim()) missing.push('name')
-  if (!siteNumber.trim()) missing.push('site')
-  if (!seasonOpens) missing.push('season opens')
-  if (!seasonCloses) missing.push('season closes')
-  if (!(addr.home_street && addr.home_city && addr.home_state && addr.home_zip)) missing.push('home address')
-  if (!contractText.trim()) missing.push('contract text (set it in Settings)')
-  if (!waiverText.trim()) missing.push('waiver text (set it in Settings)')
+  // Contract-critical fields — the source-level guard against a blank freeze. Shared with the
+  // review screen so both block a send on identical conditions.
+  const missing = missingPacketFields({
+    name, siteNumber,
+    seasonOpens, seasonCloses,
+    homeStreet: addr.home_street, homeCity: addr.home_city, homeState: addr.home_state, homeZip: addr.home_zip,
+    contractText, waiverText,
+  })
   const ready = missing.length === 0
 
   async function prepareDraft(): Promise<string | null> {
@@ -285,18 +287,7 @@ export default function NewSeasonalCamperPage() {
           <p className="text-xs text-gray-400 mt-1">The camper sees this. It appears in the preview below wherever the contract body uses <code>{'{{charge_note}}'}</code>.</p>
         </div>
         <p className="text-xs text-gray-500 mb-2">This is exactly what the camper will see and sign:</p>
-        <div className="mb-2">
-          <p className="text-xs font-bold text-gray-700 mb-1">{seasonYear} Seasonal Admission Agreement</p>
-          <div style={{ background: '#FBF8F1', border: '1px solid #F3EEE2', borderRadius: 10, padding: '1rem', maxHeight: '30vh', overflowY: 'auto', fontSize: 13, lineHeight: 1.5, color: '#374151', whiteSpace: 'pre-wrap' }}>
-            {contractText.trim() || 'Contract text is not set in Settings.'}
-          </div>
-        </div>
-        <div>
-          <p className="text-xs font-bold text-gray-700 mb-1">Liability Waiver</p>
-          <div style={{ background: '#FBF8F1', border: '1px solid #F3EEE2', borderRadius: 10, padding: '1rem', maxHeight: '30vh', overflowY: 'auto', fontSize: 13, lineHeight: 1.5, color: '#374151', whiteSpace: 'pre-wrap' }}>
-            {waiverText.trim() || 'Waiver text is not set in Settings.'}
-          </div>
-        </div>
+        <PacketPreview guest={previewGuest} contract={previewContract} settings={settings} />
       </div>
 
       {/* ACTIONS */}

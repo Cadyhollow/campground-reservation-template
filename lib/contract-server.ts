@@ -6,7 +6,7 @@ import { randomBytes, randomUUID } from 'crypto'
 import { createClient } from '@supabase/supabase-js'
 import { Resend } from 'resend'
 import { planAtLeast } from '@/lib/plan'
-import { renderTemplate, buildContractVars } from '@/lib/contracts'
+import { guestRigSnapshot, renderPacketDocuments } from '@/lib/contracts'
 
 // Service-role client (bypasses RLS). Constructed at import is fine — createClient
 // doesn't throw on missing env (unlike Resend, which we keep lazy below).
@@ -125,15 +125,7 @@ export async function freezePacket(contractId: string, opts?: { requireEmail?: b
   // The guest record is current truth; the contract is a frozen copy. Snapshot ALL
   // SIX rig fields + site_number from the guest, and render from that. (Occupants,
   // season dates, and total_due stay as the staff-edited draft.)
-  const snapshot = {
-    site_number: guest.site_number || contract.site_number || '',
-    camper_type: guest.camper_type ?? null,
-    camper_length: guest.camper_length ?? null,
-    camper_amperage: guest.camper_amperage ?? null,
-    camper_make: guest.camper_make ?? null,
-    camper_model: guest.camper_model ?? null,
-    camper_year: guest.camper_year ?? null,
-  }
+  const snapshot = guestRigSnapshot(guest, contract)
 
   // Typed rather than cast: this row is fetched with a NAMED column list a few lines up, so its
   // shape is known and the three `as any` casts Cady carried here were never necessary.
@@ -142,26 +134,28 @@ export async function freezePacket(contractId: string, opts?: { requireEmail?: b
     contract_text?: string | null; waiver_text?: string | null
   } | null
 
-  // ⚠ THE SETTINGS ARGUMENT IS DELIBERATELY OMITTED, AND THAT IS NOT A REGRESSION.
+  // ⚠ THE RENDERING NOW LIVES IN lib/contracts.ts AND THIS IS NOT A REFACTOR FOR TIDINESS.
   //
-  // buildContractVars documents a three-tier fallback for the season dates:
-  //     contract.season_opens  ->  settings.season_opens  ->  guest.season_start
+  // Phase 1.5 added a full-page review screen that shows the owner the finished documents before
+  // anything is frozen. A preview that renders through its own copy of this logic is a screen
+  // that promises "this is what they will sign" and is free to be wrong. So the snapshot and the
+  // rendering were lifted into renderPacketDocuments()/guestRigSnapshot() in lib/contracts.ts —
+  // a pure module the browser can import — and THE FREEZE CALLS THE SAME FUNCTIONS. There is no
+  // second renderer left to drift.
   //
-  // The middle tier has never fired, on Cady or anywhere. `settings` HAS NO season_opens OR
-  // season_closes COLUMN — the table's columns are season_start / season_end — so the lookup was
-  // always undefined. Cady passed the row through `as any`, which silenced the type error that
-  // would have said so; removing the cast during this port is what surfaced it.
+  // The behaviour is unchanged, including the one subtlety worth restating here because it is
+  // load-bearing and easy to "fix" by accident:
   //
-  // Passing `undefined` here is therefore BYTE-IDENTICAL to the behaviour that has been running
-  // against real seasonal campers: the contract's own dates win, and the guest record is the
-  // fallback. Passing the row with its columns remapped (season_start -> season_opens) would
-  // ACTIVATE a dormant tier and could change which dates print on a legal agreement — that is a
-  // product decision, not a porting decision, and it is flagged for Charissa rather than taken
-  // here.
-  const vars = buildContractVars(guest, { ...contract, ...snapshot }, undefined)
-  const contractText = renderTemplate(st?.contract_text || '', vars)
-  const waiverText = st?.waiver_text || '' // no merge fields today; rendered as-is
-  const contractTitle = `${contract.season_year} Seasonal Admission Agreement`
+  //   THE SETTINGS ARGUMENT TO buildContractVars IS DELIBERATELY OMITTED. buildContractVars
+  //   documents a three-tier fallback for the season dates:
+  //       contract.season_opens  ->  settings.season_opens  ->  guest.season_start
+  //   The middle tier has never fired, on Cady or anywhere. `settings` HAS NO season_opens OR
+  //   season_closes COLUMN — the table's columns are season_start / season_end — so the lookup
+  //   was always undefined. Cady passed the row through `as any`, which silenced the type error
+  //   that would have said so. Passing the row with its columns remapped would ACTIVATE a dormant
+  //   tier and could change which dates print on a legal agreement — a product decision, not a
+  //   refactoring one. renderPacketDocuments preserves the omission and says so in its own note.
+  const { contractTitle, contractText, waiverText } = renderPacketDocuments(guest, contract, st)
 
   // GUARD: never freeze an empty legal document. Blocks BEFORE any rows are written.
   if (!contractText.trim()) {
