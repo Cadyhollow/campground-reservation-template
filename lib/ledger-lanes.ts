@@ -45,6 +45,10 @@ export function normalizeBillingMode(value: unknown): BillingMode {
   return typeof value === 'string' && value.trim().toLowerCase() === 'separated' ? 'separated' : 'combined'
 }
 
+/** Is this string one of our lanes? Anything else counts as untagged / unrecognised. */
+const asLane = (v: unknown): Lane | null =>
+  typeof v === 'string' && (LANES as readonly string[]).includes(v.trim().toLowerCase()) ? (v.trim().toLowerCase() as Lane) : null
+
 /** As much of a folio_line_item as classification needs. */
 export type LaneLineItem = {
   id: string
@@ -52,6 +56,9 @@ export type LaneLineItem = {
   voided?: boolean | null
   product_id?: string | null
   category?: string | null
+  /** PR 2. An explicit lane declared by whatever posted the charge. NULL on every pre-Phase-4
+   *  row, which is why the inference below still governs all of them. */
+  lane?: string | null
 }
 
 /** As much of a folio_payment as lane maths needs. `lane` is Phase 4's new column. */
@@ -105,11 +112,23 @@ export type LaneContext = {
  *    catch-all precisely so an unforeseen row lands somewhere honest rather than being
  *    misfiled into a lane a camper is billed for.
  *
- * 4. SEASONAL — RESERVED. Nothing classifies here yet; the seasonal fee is not posted to a folio
- *    until the next PR. The lane exists now so the UI, the payment tag and the balance shape are
- *    all in place before the money arrives, rather than being retrofitted around it.
+ * 4. SEASONAL — declared, never inferred (see rule 0 below). The seasonal fee has no product_id
+ *    and no electric reading, so inference alone would file it under `other`, indistinguishable
+ *    from a manual custom charge. It carries an explicit lane instead.
+ *
+ * ── RULE 0, ADDED IN PR 2: AN EXPLICIT TAG WINS ──────────────────────────────────────────────
+ *
+ * `folio_line_items.lane` is checked FIRST. A charge that knows what it is for says so, rather
+ * than being guessed at from side-effects of how it happened to be written.
+ *
+ * ⚠ THIS CHANGES NOTHING FOR ANY EXISTING ROW. The column is NULL on every row that existed
+ * before PR 2's migration, and NULL falls straight through to the inference above — so every
+ * historical charge classifies exactly as it did in PR 1. An unrecognised string does the same,
+ * rather than inventing a lane nobody defined. Both are pinned by tests.
  */
 export function classifyLineItem(item: LaneLineItem, ctx: LaneContext): Lane {
+  const declared = asLane(item.lane)
+  if (declared) return declared
   if (ctx.electricLineItemIds.has(item.id)) return 'electric'
   if (item.product_id) return 'store'
   return 'other'
@@ -137,10 +156,6 @@ const emptyTotals = (): LaneTotals => ({ charges: 0, payments: 0, balance: 0 })
 /** A payment's value to the account: the amount NET of any card surcharge, matching
  *  buildLedger() in lib/ledger.ts, so lane maths and the folio agree to the cent. */
 const netOf = (p: LanePayment): number => p.amount - (p.surcharge_amount || 0)
-
-/** Is this string one of our lanes? Anything else counts as untagged. */
-const asLane = (v: unknown): Lane | null =>
-  typeof v === 'string' && (LANES as readonly string[]).includes(v) ? (v as Lane) : null
 
 /**
  * Split a camper's folio into lanes.

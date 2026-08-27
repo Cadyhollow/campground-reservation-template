@@ -171,3 +171,76 @@ test('filterToLane keeps voided items for display; totals still exclude them', (
   assert.deepEqual(f.items.map(i => i.id), ['pos-1', 'void-1'])
   assert.equal(laneBalances(f.items, [], ctx).byLane.store.charges, 1500)
 })
+
+// ── PR 2: the explicit lane tag ──────────────────────────────────────────────────────────────
+
+test('an explicit lane tag WINS over inference', () => {
+  // The seasonal fee has no product_id and no electric reading, so inference alone would file it
+  // under `other`. It declares itself instead.
+  assert.equal(classifyLineItem({ id: 's1', line_total: 250000, lane: 'seasonal' }, ctx), 'seasonal')
+  // And a tag overrides what inference would otherwise have said.
+  assert.equal(classifyLineItem({ id: 'elec-1', line_total: 100, lane: 'store' }, ctx), 'store')
+  assert.equal(classifyLineItem({ id: 'x', line_total: 100, product_id: 'p1', lane: 'other' }, ctx), 'other')
+})
+
+test('EVERY PRE-PR-2 ROW CLASSIFIES EXACTLY AS IT DID BEFORE', () => {
+  // The safety property of the whole change. The column is NULL on every row that existed before
+  // the migration, and NULL falls straight through to PR 1's inference.
+  const historical = [
+    { row: { id: 'elec-1', line_total: 4200, category: 'Fees' }, was: 'electric' },
+    { row: { id: 'pos-1', line_total: 1500, product_id: 'p1' }, was: 'store' },
+    { row: { id: 'man-1', line_total: 1000, category: 'General' }, was: 'other' },
+  ] as const
+  for (const { row, was } of historical) {
+    assert.equal(classifyLineItem(row, ctx), was, `${row.id} must still be ${was}`)
+    assert.equal(classifyLineItem({ ...row, lane: null }, ctx), was, 'explicit NULL behaves the same')
+  }
+})
+
+test('an unrecognised lane string falls back to inference rather than inventing a lane', () => {
+  assert.equal(classifyLineItem({ id: 'pos-1', line_total: 100, product_id: 'p1', lane: 'firewood' }, ctx), 'store')
+  assert.equal(classifyLineItem({ id: 'elec-1', line_total: 100, lane: '' }, ctx), 'electric')
+  assert.equal(classifyLineItem({ id: 'z', line_total: 100, lane: '   ' }, ctx), 'other')
+})
+
+test('a tag is read case- and whitespace-insensitively', () => {
+  assert.equal(classifyLineItem({ id: 'z', line_total: 100, lane: ' Seasonal ' }, ctx), 'seasonal')
+})
+
+test('a posted seasonal fee lands in the seasonal lane and nowhere else', () => {
+  const withSeasonal = [...items, { id: 'seas-1', line_total: 250000, lane: 'seasonal' }]
+  const b = laneBalances(withSeasonal, [], ctx)
+  assert.equal(b.byLane.seasonal.charges, 250000)
+  assert.equal(b.byLane.other.charges, 1000, 'it did NOT land in the catch-all')
+  assert.equal(b.byLane.electric.charges, 4200)
+  assert.equal(b.byLane.store.charges, 1500)
+})
+
+test('THE INVARIANT STILL HOLDS WITH A SEASONAL CHARGE POSTED', () => {
+  // PR 1's guarantee, re-asserted now that a fourth lane carries real money: lanes are a VIEW of
+  // the same rows and can neither lose nor invent a cent.
+  const withSeasonal = [...items, { id: 'seas-1', line_total: 250000, lane: 'seasonal' }]
+  const payments = [
+    { amount: 4200, lane: 'electric' },
+    { amount: 50000, lane: 'seasonal' },
+    { amount: 1000 },   // untagged
+  ]
+  const b = laneBalances(withSeasonal, payments, ctx)
+
+  const chargesToday = withSeasonal.filter(i => i.voided !== true).reduce((s, i) => s + i.line_total, 0)
+  const paymentsToday = payments.reduce((s, p) => s + (p.amount - (p.surcharge_amount || 0)), 0)
+  assert.equal(b.accountBalance, chargesToday - paymentsToday)
+
+  const laneCharges = LANES.reduce((s, l) => s + b.byLane[l].charges, 0)
+  const lanePayments = LANES.reduce((s, l) => s + b.byLane[l].payments, 0)
+  assert.equal(laneCharges, b.totalCharges)
+  assert.equal(lanePayments + b.untaggedPayments, b.totalPayments)
+  assert.equal(b.byLane.seasonal.balance, 200000, '$2500 owed less $500 paid')
+})
+
+test('a VOIDED seasonal charge leaves no debt — what cancel relies on', () => {
+  const cancelled = [...items, { id: 'seas-1', line_total: 250000, lane: 'seasonal', voided: true }]
+  const b = laneBalances(cancelled, [], ctx)
+  assert.equal(b.byLane.seasonal.charges, 0)
+  assert.equal(b.byLane.seasonal.balance, 0)
+})

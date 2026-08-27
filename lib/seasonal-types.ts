@@ -150,6 +150,8 @@ export type SeasonalLastPayment = {
 }
 
 /** The whole payload of GET /api/seasonals/guest/[guestId]. */
+import type { LaneBalances } from '@/lib/ledger-lanes'
+
 export type SeasonalGuestData = {
   year: number
   guest: SeasonalGuest
@@ -163,7 +165,17 @@ export type SeasonalGuestData = {
   /** '' when the guest has no folio yet. Its only use is deciding whether to show the
    *  "Open folio →" link, which is admin-only. */
   folioId: string
+  /**
+   * Phase 4 PR 2 — the same money as `balance_cents`, grouped into lanes. NULL on a COMBINED
+   * park, which is every park by default; the screen then renders exactly today's single blended
+   * balance. Never a replacement for balance_cents: that stays the whole-account figure.
+   */
+  lanes?: LaneBalances | null
 }
+
+// Re-exported so the seasonal screens can type the payload without reaching into the money
+// module themselves.
+export type { LaneBalances } from '@/lib/ledger-lanes'
 
 // SeasonalListRow WAS HERE AND HAS BEEN REMOVED (2026-08-19), because it was both unused and
 // wrong — the worst combination for a type in a shared file.
