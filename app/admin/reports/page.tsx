@@ -26,6 +26,21 @@ import {
   bucketGuestAccountCharges, rollUpLanes, segmentOf,
   type Segment, type GuestAccountBuckets,
 } from '@/lib/report-buckets'
+// ── REPORTS R2: THE MONEY VIEW ───────────────────────────────────────────────────────────────
+//
+// Same rule as R1 — imported, never reimplemented. The source colours for `seasonal`, `electric`
+// and `store` are READ OUT OF R1's lane colours inside lib/report-sources.ts, so the dashboard
+// and a camper's folio cannot drift into speaking different colour languages.
+import {
+  sumBySource, rankSources, barWidthPct, sourceOfPayment,
+  SOURCE_LABEL, SOURCE_COLOR, SOURCE_BLURB,
+  SOURCE_DESTINATION, type RevenueSource, type SourceFolio, type SourcePayment,
+  type BookingPayment,
+} from '@/lib/report-sources'
+import {
+  pickComparison, computeDelta, headlineRead, isRecordPeriod, monthKey,
+  type MonthTotal, type Window,
+} from '@/lib/report-periods'
 
 type Reservation = {
   id: string
@@ -91,6 +106,18 @@ type GaPaymentRow = {
   lane?: string | null; paid_at?: string | null
 }
 type SeasonalGuestRow = { id: string; name: string; email: string; site_number: string }
+/** Named so the places that navigate BETWEEN tabs — the tab bar, the drill-downs R2 adds — can
+ *  do it without an `as any` that would hide a typo in a tab name until someone clicked it. */
+type TabKey = 'dashboard'|'reservations'|'seasonal'|'transactions'|'store'
+// ── R2 row shapes ────────────────────────────────────────────────────────────────────────────
+// Carried ALL-TIME rather than per-window, because the money view has to answer three questions
+// at once — this period, the comparison period, and "is this a record?" — and a park's payment
+// history is a few narrow columns. One fetch beats three round trips that could disagree.
+type SrcPaymentRow = SourcePayment & {
+  id: string; method?: string | null
+  folios?: { guest_name?: string | null } | null
+}
+type SrcBookingRow = BookingPayment & { id: string; guest_name?: string | null }
 
 const COLORS = ['#2E6B8A','#12c9e5','#C4873C','#2D6A4F','#9B59B6','#E74C3C']
 
@@ -106,7 +133,7 @@ export default function ReportsPage() {
     })
   }, [])
 
-  const [activeTab, setActiveTab] = useState<'dashboard'|'reservations'|'seasonal'|'transactions'|'store'>('dashboard')
+  const [activeTab, setActiveTab] = useState<TabKey>('dashboard')
   const [posEnabled, setPosEnabled] = useState(false)
   const [seasonalEnabled, setSeasonalEnabled] = useState(false)
   const [reportBy, setReportBy] = useState<'payment_date'|'stay_date'>('payment_date')
@@ -138,6 +165,18 @@ export default function ReportsPage() {
     seasonalByLane: { electric: 0, store: 0, seasonal: 0, other: 0 },
     total: 0, unattributed: 0,
   })
+  // ── R2 money-view data ─────────────────────────────────────────────────────
+  const [srcPayments, setSrcPayments] = useState<SrcPaymentRow[]>([])
+  const [srcBookings, setSrcBookings] = useState<SrcBookingRow[]>([])
+  const [srcFolios, setSrcFolios] = useState<Map<string, SourceFolio>>(new Map())
+  /** The park's very first dollar. Decides whether a last-year comparison is even possible. */
+  const [firstRevenueISO, setFirstRevenueISO] = useState<string|null>(null)
+  /** The selected window, kept in state so the comparison maths can reach it outside fetchAll. */
+  const [win, setWin] = useState<Window>({ startISO: '', endISO: '' })
+  /** Which source row is expanded for drill-down. */
+  const [openSource, setOpenSource] = useState<RevenueSource|null>(null)
+  const [showBilledDetail, setShowBilledDetail] = useState(false)
+
   // Payments taken from seasonal campers INSIDE the period, by the lane they were filed against.
   const [laneCollected, setLaneCollected] = useState<LaneCollected>({
     byLane: { electric: 0, store: 0, seasonal: 0, other: 0 }, untagged: 0, total: 0,
@@ -468,6 +507,55 @@ export default function ReportsPage() {
       total: collectedLanes.totalPayments,
     })
 
+    // ── R2: EVERYTHING THE MONEY VIEW NEEDS, ALL TIME ──────────────────────────────────────
+    //
+    // Deliberately NOT scoped to the selected window. The dashboard answers three questions at
+    // once — what came in this period, what came in over the comparison period, and whether this
+    // is the park's best month yet — and the last one is only answerable from the whole history.
+    // Three windowed queries could also disagree with each other at a boundary; one history that
+    // is sliced in memory cannot.
+    //
+    // The columns are narrow on purpose (no line items, no notes), so this stays a small read
+    // even for a park with years of payments behind it.
+    setWin({ startISO, endISO })
+    const [{ data: allFolioRows }, { data: allPayRows }, { data: allBookingRows }] = await Promise.all([
+      supabase.from('folios').select('id, folio_type, reservation_id, guest_id'),
+      // Same status set as every R1 balance: a refund is a negative row plus a flipped status,
+      // and counting only 'completed' would drop both halves.
+      supabase.from('folio_payments')
+        .select('id, folio_id, amount, surcharge_amount, lane, paid_at, method, folios(guest_name)')
+        .in('status', REFUNDABLE_STATUSES).order('paid_at', { ascending: false }),
+      // Booking payments live on the reservation, not on any folio, so they are disjoint from the
+      // rows above and are ADDED rather than de-duplicated. Cancelled bookings stay in: a refund
+      // nets itself out, so what remains is what the business kept.
+      supabase.from('reservations').select('id, guest_name, amount_paid, surcharge_amount, created_at').gt('amount_paid', 0),
+    ])
+
+    // `segmentByFolio` above already knows which guest-account belongs to a seasonal camper and
+    // which to a long-term one. Reused rather than re-derived, so the dashboard's idea of "whose
+    // account is this" is the same one the buckets and the Seasonal tab use.
+    const folioSourceMap = new Map<string, SourceFolio>()
+    for (const f of ((allFolioRows||[]) as { id: string; folio_type: string|null; reservation_id: string|null }[])) {
+      folioSourceMap.set(f.id, {
+        folio_type: f.folio_type, reservation_id: f.reservation_id,
+        segment: segmentByFolio.get(f.id) ?? null,
+      })
+    }
+    const payRows = (allPayRows||[]) as unknown as SrcPaymentRow[]
+    const bookRows = (allBookingRows||[]) as unknown as SrcBookingRow[]
+    setSrcFolios(folioSourceMap)
+    setSrcPayments(payRows)
+    setSrcBookings(bookRows)
+
+    // The park's first dollar, from either tender. This is the whole basis of the last-year vs
+    // last-month decision — see pickComparison(): the question is whether last-year data COULD
+    // exist, not whether it happens to be zero.
+    const stamps = [
+      ...payRows.map(r => r.paid_at || ''),
+      ...bookRows.map(r => r.created_at || ''),
+    ].filter(Boolean).sort()
+    setFirstRevenueISO(stamps[0] || null)
+
     if (resData) setReservations(resData as any)
     setCancelledCount(cancelledData?.length || 0)
     setCancelledReservations(cancelledData as any || [])
@@ -597,6 +685,59 @@ export default function ReportsPage() {
   const laneRollupHasOther = laneRollup.byLane.other.charges!==0||laneRollup.byLane.other.payments!==0
   const shownLanes: Lane[] = [...SEASONAL_CAMPER_LANES, ...(laneRollupHasOther?['other' as Lane]:[])]
 
+  // ── R2: THE MONEY VIEW ─────────────────────────────────────────────────────
+  //
+  // ⚠ ONE BASIS, ALL THE WAY DOWN: MONEY RECEIVED. Every source below is payments in the window,
+  // gross of the card surcharge — the convention every revenue figure on this page has always
+  // used, and the reason "Transaction fees collected" describes itself as a breakout rather than
+  // an addition. Because the sources and the headline come from the SAME call, the breakdown
+  // sums to the headline exactly; a dashboard whose parts do not add up to its own total is the
+  // failure R1 existed to fix.
+  //
+  // This is NOT the same figure as `totalCombined` below, and deliberately so — that one mixes
+  // payments (reservations, store) with charges (guest accounts). It is kept, unchanged, as
+  // "billed this period" in the secondary stats, so nothing was silently redefined.
+  const comparison = pickComparison(win, firstRevenueISO)
+  const currentSources = sumBySource(srcPayments, srcFolios, srcBookings, win)
+  const priorSources = sumBySource(srcPayments, srcFolios, srcBookings, comparison.window)
+  const rankedSources = rankSources(currentSources, priorSources)
+  const moneyIn = currentSources.total
+  const moneyDelta = computeDelta(currentSources.total, priorSources.total)
+
+  // Revenue per calendar month, ALL TIME — the record check's evidence, and the reason it can be
+  // trusted: "best month yet" is measured against every month the park has, not the chart window.
+  const monthTotals: MonthTotal[] = (() => {
+    const byKey = new Map<string, number>()
+    // monthKey(), not a string slice: the window boundaries are LOCAL days, so a payment taken at
+    // 10pm on 31 August must be filed under August and not under the September it already is in
+    // UTC — otherwise the record check compares two different months and never finds a record.
+    const add = (iso: string|null|undefined, cents: number) => {
+      const key = iso ? monthKey(iso) : ''
+      if (!key) return
+      byKey.set(key, (byKey.get(key) || 0) + cents)
+    }
+    for (const p of srcPayments) add(p.paid_at, p.amount || 0)
+    for (const b of srcBookings) add(b.created_at, (b.amount_paid || 0) + (b.surcharge_amount || 0))
+    return [...byKey.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([key, cents]) => ({
+      key, cents,
+      label: new Date(Number(key.slice(0,4)), Number(key.slice(5,7))-1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+    }))
+  })()
+  const isRecord = isRecordPeriod(win, monthTotals)
+  const headline = headlineRead(moneyDelta, comparison.label, isRecord)
+
+  // The payments behind ONE source, newest first — what a drilled-open row shows. Recomputed on
+  // expand rather than precomputed for all seven, because only one is ever open.
+  const paymentsForSource = (src: RevenueSource) => srcPayments
+    .filter(p => p.paid_at && p.paid_at >= win.startISO && p.paid_at <= win.endISO)
+    .filter(p => sourceOfPayment(srcFolios.get(p.folio_id || ''), p) === src)
+    .map(p => ({ id: p.id, who: p.folios?.guest_name || 'Walk-up', when: p.paid_at || '', cents: p.amount || 0, method: p.method || '' }))
+    .concat(src !== 'nightly' ? [] : srcBookings
+      .filter(b => b.created_at && b.created_at >= win.startISO && b.created_at <= win.endISO)
+      .map(b => ({ id: 'b-'+b.id, who: b.guest_name || 'Booking', when: b.created_at || '',
+                   cents: (b.amount_paid||0)+(b.surcharge_amount||0), method: 'booking' })))
+    .sort((a,b) => b.when.localeCompare(a.when))
+
   // Today's revenue — from the UNIFIED list (folio + online booking payments) so online
   // reservations count, bucketed by LOCAL day (not the UTC calendar day). Gross of the card
   // surcharge, like every other revenue figure here: unifiedTx already carries booking
@@ -682,7 +823,7 @@ export default function ReportsPage() {
     .filter(d => d.value !== 0)
 
   // ── Chart Components ───────────────────────────────────────────────────────
-  function BarChart({ data }: { data: { label: string; value: number }[] }) {
+  function BarChart({ data, color = '#2E6B8A' }: { data: { label: string; value: number }[]; color?: string }) {
     if (data.length===0) return <p className="text-gray-400 text-center py-8">No data for selected period</p>
     const max = Math.max(...data.map(d=>d.value),1)
     const chartH=180, barW=32, gap=8, leftPad=48
@@ -699,7 +840,7 @@ export default function ReportsPage() {
             const barH=Math.max(3,(d.value/max)*chartH)
             const x=leftPad+i*(barW+gap)
             const y=8+chartH-barH
-            return <g key={i}><rect x={x} y={y} width={barW} height={barH} fill="#2E6B8A" rx={4}/><text x={x+barW/2} y={chartH+22} textAnchor="middle" fontSize={10} fill="#6B7280">{d.label}</text><text x={x+barW/2} y={y-4} textAnchor="middle" fontSize={9} fill="#374151">${d.value>=1000?(d.value/1000).toFixed(1)+'k':d.value.toFixed(0)}</text></g>
+            return <g key={i}><rect x={x} y={y} width={barW} height={barH} fill={color} rx={4}/><text x={x+barW/2} y={chartH+22} textAnchor="middle" fontSize={10} fill="#6B7280">{d.label}</text><text x={x+barW/2} y={y-4} textAnchor="middle" fontSize={9} fill="#374151">${d.value>=1000?(d.value/1000).toFixed(1)+'k':d.value.toFixed(0)}</text></g>
           })}
         </svg>
       </div>
@@ -754,6 +895,75 @@ export default function ReportsPage() {
         {sub&&<p className="text-xs text-gray-400 mt-1">{sub}</p>}
         {onClick&&<p className="text-xs text-blue-500 mt-2 font-medium">Click to view →</p>}
       </div>
+    )
+  }
+
+  // ── R2 PRESENTATION ────────────────────────────────────────────────────────
+  //
+  // Money is printed with thousands separators here, not with .toFixed(2) alone: the headline
+  // figure is the single most-read number on the page, and "$1099099" vs "$10,990.99" is the
+  // difference between an answer and a puzzle.
+  const usd = (cents: number) =>
+    (cents < 0 ? '−$' : '$') + (Math.abs(cents)/100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+  /**
+   * ⚠ THE TONE PALETTE — a requirement, not styling. See lib/report-periods.ts.
+   *
+   * `win` celebrates. `watch` is AMBER and matter-of-fact, never alarm red: a slow month is
+   * information, and an owner trained to see red for ordinary seasonality stops seeing red at
+   * all. RED APPEARS EXACTLY ONCE ON THIS DASHBOARD — on money that should be there and is not,
+   * in "Still to collect" — and that is the whole point of withholding it here.
+   */
+  const TONE: Record<'win'|'flat'|'watch', { fg: string; bg: string; ring: string; arrow: string }> = {
+    win:   { fg: 'text-emerald-700', bg: 'bg-emerald-50', ring: 'ring-emerald-200', arrow: '▲' },
+    flat:  { fg: 'text-gray-600',    bg: 'bg-gray-50',    ring: 'ring-gray-200',    arrow: '•' },
+    watch: { fg: 'text-amber-700',   bg: 'bg-amber-50',   ring: 'ring-amber-200',   arrow: '▼' },
+  }
+
+  /**
+   * PART C: the tabs speak the dashboard's colour language.
+   *
+   * A small labelled chip, not a bare coloured rule — the point is that an owner who clicks
+   * "Nightly reservations" on the dashboard lands somewhere that visibly IS that source. Colour
+   * alone would not say so, hence the label, and the wording repeats SOURCE_LABEL verbatim so
+   * the two can never drift.
+   */
+  const SourceChip = ({ source, note }: { source: RevenueSource; note: string }) => (
+    <div className="flex items-center gap-2 mb-1">
+      <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{backgroundColor:SOURCE_COLOR[source]}} aria-hidden="true"/>
+      <span className="text-xs font-semibold uppercase tracking-wide" style={{color:SOURCE_COLOR[source]}}>{SOURCE_LABEL[source]}</span>
+      <span className="text-xs text-gray-400">· {note}</span>
+    </div>
+  )
+
+  /** A source row, a KPI or a bar can send you to the page that produced the number. */
+  function drillTo(dest: string) {
+    if (dest.startsWith('tab:')) setActiveTab(dest.slice(4) as TabKey)
+    else router.push(dest)
+  }
+
+  const rangeLabel = (() => {
+    if (!win.startISO) return ''
+    const f = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    return f(win.startISO) === f(win.endISO) ? f(win.startISO) : `${f(win.startISO)} – ${f(win.endISO)}`
+  })()
+
+  /** The comparison chip: arrow, absolute change, and either a percentage or a multiple. */
+  function DeltaChip({ delta, label, size = 'lg' }: { delta: ReturnType<typeof computeDelta>; label: string; size?: 'lg'|'sm' }) {
+    const t = TONE[delta.tone]
+    const pct = delta.multiple
+      ? `${delta.multiple.toFixed(delta.multiple >= 10 ? 0 : 1)}×`
+      : delta.changeFraction !== null
+        ? `${delta.changeFraction >= 0 ? '+' : ''}${Math.round(delta.changeFraction*100)}%`
+        : null
+    return (
+      <span className={`inline-flex items-center gap-1.5 rounded-full ring-1 ${t.bg} ${t.ring} ${t.fg} ${size==='lg'?'px-3 py-1.5 text-sm':'px-2 py-0.5 text-xs'} font-semibold`}>
+        <span aria-hidden="true">{t.arrow}</span>
+        <span>
+          {delta.changeCents === 0 ? 'level with' : `${usd(Math.abs(delta.changeCents))} ${delta.changeCents>0?'more than':'less than'}`} {label}
+        </span>
+        {pct && <span className="font-bold opacity-80">· {pct}</span>}
+      </span>
     )
   }
 
@@ -846,8 +1056,8 @@ export default function ReportsPage() {
           ...(seasonalEnabled ? [{key:'seasonal',label:'⛺ Seasonal'}] : []),
           {key:'transactions',label:'💳 Transactions'},
           ...(posEnabled?[{key:'store',label:'🛒 Store'}]:[]),
-        ] as {key:string,label:string}[]).map(tab=>(
-          <button key={tab.key} onClick={()=>setActiveTab(tab.key as any)}
+        ] as {key:TabKey,label:string}[]).map(tab=>(
+          <button key={tab.key} onClick={()=>setActiveTab(tab.key)}
             className="px-4 py-2.5 text-sm font-semibold whitespace-nowrap transition-colors rounded-t-lg"
             style={activeTab===tab.key?{backgroundColor:'#2E6B8A',color:'#fff',borderBottom:'2px solid #2E6B8A'}:{color:'#6B7280'}}>
             {tab.label}
@@ -858,54 +1068,149 @@ export default function ReportsPage() {
       {loading?<div className="p-12 text-center text-gray-400 text-lg">Loading reports...</div>:(
         <>
 
-        {/* ── DASHBOARD TAB ── */}
+        {/* ── DASHBOARD TAB — the money view (R2) ── */}
         {activeTab==='dashboard'&&(
           <div className="space-y-6">
-            {/* Hero KPIs */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <KPICard label="Today's Revenue" value={'$'+todayRevenue.toFixed(2)} sub="all payments today" color="text-emerald-600"/>
-              <KPICard label="Total Revenue" value={'$'+totalCombined.toFixed(2)} sub={reportBy==='payment_date'?'payments received':'reservations + charges'}/>
-              <KPICard label="Tonight's Occupancy" value={Math.min(100,Math.round(((tonightCount+seasonalCount)/totalSites)*100))+'%'} sub={(tonightCount+seasonalCount)+' of '+totalSites+' sites · '+tonightCabins+'/'+totalCabins+' cabins'} color={Math.round(((tonightCount+seasonalCount)/totalSites)*100)>80?'text-emerald-600':Math.round(((tonightCount+seasonalCount)/totalSites)*100)>50?'text-amber-600':'text-gray-900'} onClick={()=>setShowOccupancyDetail(true)}/>
-              <KPICard label="Future Bookings" value={futureCount.toString()} sub="confirmed ahead" onClick={()=>setActiveTab('reservations')}/>
-            </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <KPICard label="Reservation Revenue" value={'$'+resRevenue.toFixed(2)} sub={reservations.length+' bookings'}/>
-              {posEnabled&&<KPICard label="Store Revenue" value={'$'+posRevenue.toFixed(2)} sub={posSales.length+' transactions'} onClick={()=>setActiveTab('store')}/>}
-              <KPICard label="Seasonal Revenue" value={'$'+seasonalRevenue.toFixed(2)} sub="seasonal campers' charges" onClick={()=>setActiveTab('seasonal')}/>
-              {/* Renamed from "Monthly Revenue" and, more importantly, now COUNTED. Weekly and
-                  monthly stays are neither a nightly booking nor a seasonal fee; their charges
-                  used to sit on a card of their own that no total included. A camper flagged
-                  both seasonal and monthly is counted once, as seasonal — see
-                  lib/report-buckets.ts. */}
-              <KPICard label="Long-Term / Monthly" value={'$'+longTermRevenue.toFixed(2)} sub="weekly & monthly stays"/>
-              {/* Shown only when a park actually has one: a guest account belonging to someone
-                  who is neither seasonal nor long-term — an ordinary house tab. It was in no
-                  figure on this page before. */}
-              {otherAccountRevenue!==0&&<KPICard label="Other Guest Accounts" value={'$'+otherAccountRevenue.toFixed(2)} sub="house tabs"/>}
-              <KPICard label="Outstanding Balances" value={'$'+outstandingBalance.toFixed(2)} sub={overdueCampers.length+' camper'+(overdueCampers.length!==1?'s':'')+' with balance'} color={outstandingBalance>0?'text-red-600':'text-emerald-600'} highlight={outstandingBalance>0} onClick={()=>setActiveTab('seasonal')}/>
-              {/* Revenue above is gross, so this is a BREAKOUT of money already counted in it —
-                  not an extra amount to add on. Worded that way so the figure can be reconciled
-                  against the Square processing fees without reading as double-counting. */}
-              <KPICard label="Transaction Fees Collected" value={'$'+totalSurcharge.toFixed(2)} sub="included in revenue above"/>
-              <KPICard label="Avg Booking Lead Time" value={avgLeadTime.toFixed(1)+' days'} sub="booked in advance"/>
-            </div>
-
-            {/* Revenue trend */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-5">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">{reportBy==='payment_date'?'Revenue by Payment Date':'Revenue by Stay Date'}</h2>
-                  <p className="text-xs text-gray-400">{reportBy==='payment_date'?'When payments were received':'Attributed to arrival month'}</p>
+            {/* ─────────────── THE ANSWER, FIRST ───────────────
+                No grid of cards above this. An owner opening Reports is asking one question —
+                "how is my park doing?" — and it is answered in one number, one comparison and
+                one sentence before anything else competes for the eye. */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-6 md:p-8">
+              {isRecord && (
+                <div className="inline-flex items-center gap-2 mb-3 rounded-full bg-emerald-600 text-white px-3 py-1 text-xs font-bold tracking-wide">
+                  <span aria-hidden="true">🏆</span> BEST MONTH YET
                 </div>
+              )}
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                Money received{rangeLabel && <span className="text-gray-400 font-medium normal-case tracking-normal"> · {rangeLabel}</span>}
+              </p>
+              <p className="text-4xl md:text-6xl font-bold text-gray-900 mt-1 tracking-tight">{usd(moneyIn)}</p>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <DeltaChip delta={moneyDelta} label={comparison.label}/>
+                <span className="text-xs text-gray-400">
+                  compared with {usd(priorSources.total)} over {comparison.label}
+                </span>
               </div>
-              <BarChart data={monthlyData}/>
+              <p className="text-sm md:text-base text-gray-600 mt-3">{headline}</p>
+              <p className="text-xs text-gray-400 mt-3">
+                Every payment taken in this period, gross of card fees. Canceled charges and refunds
+                are already netted out, so this agrees with the folios it came from.
+              </p>
             </div>
 
-            {/* Occupancy trend */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-5">
-              <h2 className="text-lg font-semibold text-gray-900 mb-1">Occupancy Trend</h2>
-              <p className="text-xs text-gray-400 mb-4">Monthly average occupancy % · Sites vs Cabins</p>
+            {/* ─────────────── WHERE THE MONEY CAME FROM ───────────────
+                Ranked, full-width rows rather than a pie. Seasonal fees can be ~85% of a park's
+                revenue, which makes every other slice unreadable in a circle — and the small
+                sources are exactly the ones an owner is trying to grow. See rankSources(). */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+              <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+                <h2 className="text-lg font-semibold text-gray-900">Where the money came from</h2>
+                <span className="text-xs text-gray-400">Click any source to see the payments behind it</span>
+              </div>
+              <p className="text-xs text-gray-400 mb-4">Each source compared with {comparison.label}.</p>
+
+              {rankedSources.length===0?(
+                <p className="text-gray-400 text-sm py-8 text-center">No money came in during this period.</p>
+              ):(
+                <div className="divide-y divide-gray-50">
+                  {rankedSources.map(r=>{
+                    const open = openSource===r.source
+                    const d = r.priorAmount===null?null:computeDelta(r.amount, r.priorAmount)
+                    const dest = SOURCE_DESTINATION[r.source]
+                    return (
+                      <div key={r.source} className="py-3">
+                        <button onClick={()=>setOpenSource(open?null:r.source)}
+                          className="w-full text-left group" aria-expanded={open}>
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              {/* ⚠ Colour is never the only signal — the label is always printed. */}
+                              <span className="w-3 h-3 rounded-sm shrink-0" style={{backgroundColor:SOURCE_COLOR[r.source]}} aria-hidden="true"/>
+                              <span className="font-semibold text-gray-900 text-sm md:text-base truncate group-hover:underline">{SOURCE_LABEL[r.source]}</span>
+                              <span className="text-gray-300 text-xs shrink-0" aria-hidden="true">{open?'▾':'▸'}</span>
+                            </div>
+                            <div className="flex items-center gap-3 shrink-0">
+                              {d && <DeltaChip delta={d} label={comparison.label} size="sm"/>}
+                              <span className="font-bold text-gray-900 text-sm md:text-base tabular-nums">{usd(r.amount)}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3 mt-1.5">
+                            {/* The share bar. Floored so a $47.99 store month against an $11k
+                                seasonal month is still visibly there — the printed percentage
+                                beside it stays truthful. */}
+                            <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden flex-1">
+                              <div className="h-full rounded-full" style={{width:barWidthPct(r.share)+'%',backgroundColor:SOURCE_COLOR[r.source]}}/>
+                            </div>
+                            <span className="text-xs text-gray-500 tabular-nums w-12 text-right shrink-0">
+                              {r.share>0&&r.share<0.005?'<1':Math.round(r.share*100)}%
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-1">{SOURCE_BLURB[r.source]}</p>
+                        </button>
+
+                        {open && (
+                          <div className="mt-3 ml-5 border-l-2 pl-4 space-y-1" style={{borderColor:SOURCE_COLOR[r.source]}}>
+                            {paymentsForSource(r.source).length===0?(
+                              <p className="text-xs text-gray-400 py-2">No individual payments to show.</p>
+                            ):paymentsForSource(r.source).slice(0,8).map(pm=>(
+                              <div key={pm.id} className="flex items-center justify-between gap-3 text-xs py-1">
+                                <span className="text-gray-600 truncate">{pm.who}</span>
+                                <span className="text-gray-400 shrink-0">
+                                  {pm.when?new Date(pm.when).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''} · {pm.method}
+                                </span>
+                                <span className="font-semibold text-gray-900 tabular-nums shrink-0">{usd(pm.cents)}</span>
+                              </div>
+                            ))}
+                            {paymentsForSource(r.source).length>8&&(
+                              <p className="text-xs text-gray-400 pt-1">+{paymentsForSource(r.source).length-8} more</p>
+                            )}
+                            <button onClick={()=>drillTo(dest)}
+                              className="text-xs font-semibold pt-2 hover:underline" style={{color:SOURCE_COLOR[r.source]}}>
+                              {r.source==='electric'?'Open electric billing →'
+                                :r.source==='long_term'?'Open guests →'
+                                :r.source==='nightly'?'See all reservations →'
+                                :r.source==='seasonal'?'See the seasonal lane view →'
+                                :r.source==='store'?'See store sales →'
+                                :'See all transactions →'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                  <div className="pt-3 flex items-center justify-between">
+                    <span className="font-bold text-gray-900">Total received</span>
+                    <span className="font-bold text-gray-900 text-lg tabular-nums">{usd(currentSources.total)}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ─────────────── HOW FULL YOU ARE ─────────────── */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+              <div className="flex items-baseline justify-between gap-3 flex-wrap">
+                <h2 className="text-lg font-semibold text-gray-900">How full you are</h2>
+                <button onClick={()=>setShowOccupancyDetail(true)} className="text-xs font-semibold text-blue-600 hover:underline">
+                  Month by month →
+                </button>
+              </div>
+              <p className="text-3xl md:text-4xl font-bold text-gray-900 mt-2">
+                {occupancyPct}%
+                <span className="text-base md:text-lg font-semibold text-gray-500 ml-3">
+                  {tonightCount+seasonalCount} of {totalSites} sites tonight
+                </span>
+              </p>
+              <p className="text-sm text-gray-600 mt-1">
+                <span className="font-semibold">{seasonalCount} seasonal</span> + <span className="font-semibold">{tonightCount} nightly</span>
+                {totalCabins>0&&<> · cabins {tonightCabins} of {totalCabins}</>}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                {seasonalCount>0&&tonightCount+seasonalCount>0
+                  ? `Seasonal campers hold ${Math.round((seasonalCount/(tonightCount+seasonalCount))*100)}% of the sites you have filled — steady income that does not turn over.`
+                  : 'Every occupied site tonight is a nightly booking.'}
+              </p>
+
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-6 mb-2">Occupancy trend</h3>
               <div style={{width:'100%',overflowX:'auto'}}>
                 <svg width={Math.max(600, monthlyOccupancy.length*60+60)} height={200} style={{display:'block'}}>
                   {[0,50,100].map((pct,i)=>{
@@ -917,70 +1222,157 @@ export default function ReportsPage() {
                     const siteH=Math.max(2,(m.sites/100)*150)
                     const cabinH=Math.max(2,(m.cabins/100)*150)
                     return <g key={i}>
-                      <rect x={x-14} y={10+(1-m.sites/100)*150} width={12} height={siteH} fill="#2E6B8A" rx={3}/>
-                      <rect x={x+2} y={10+(1-m.cabins/100)*150} width={12} height={cabinH} fill="#C4873C" rx={3}/>
+                      <rect x={x-14} y={10+(1-m.sites/100)*150} width={12} height={siteH} fill={SOURCE_COLOR.seasonal} rx={3}/>
+                      <rect x={x+2} y={10+(1-m.cabins/100)*150} width={12} height={cabinH} fill={SOURCE_COLOR.nightly} rx={3}/>
                       <text x={x} y={175} textAnchor="middle" fontSize={10} fill="#6B7280">{m.label}</text>
                     </g>
                   })}
                 </svg>
                 <div className="flex items-center gap-6 mt-2 justify-center">
-                  <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm" style={{background:'#2E6B8A'}}/><span className="text-xs text-gray-500">Sites ({totalSites})</span></div>
-                  <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm" style={{background:'#C4873C'}}/><span className="text-xs text-gray-500">Cabins ({totalCabins})</span></div>
+                  <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm" style={{background:SOURCE_COLOR.seasonal}}/><span className="text-xs text-gray-500">Sites ({totalSites})</span></div>
+                  <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm" style={{background:SOURCE_COLOR.nightly}}/><span className="text-xs text-gray-500">Cabins ({totalCabins})</span></div>
                 </div>
               </div>
             </div>
 
-            {/* Payment methods + seasonal snapshot */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-white rounded-2xl border border-gray-200 p-5">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">Payment Methods</h2>
-                <div className="space-y-3">
-                  {methodTotals.map(mt=>{
-                    const m={label:methodLabel(mt.method),value:mt.value,color:methodColor(mt.method,customMethods)}
-                    const total=methodTotals.reduce((s,x)=>s+x.value,0)
-                    const pct=total>0?Math.round((m.value/total)*100):0
-                    return (
-                      <div key={m.label}>
-                        <div className="flex justify-between text-sm mb-1">
-                          <span className="font-medium text-gray-700">{m.label}</span>
-                          <span className="font-semibold text-gray-900">${m.value.toFixed(2)} <span className="text-gray-400 font-normal">({pct}%)</span></span>
-                        </div>
-                        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                          <div className="h-full rounded-full transition-all" style={{width:pct+'%',backgroundColor:m.color}}/>
-                        </div>
-                      </div>
-                    )
-                  })}
+            {/* ─────────────── STILL TO COLLECT ───────────────
+                ⚠ THE ONE PLACE RED IS ALLOWED. This is money that should be here and is not,
+                which is the only thing on this dashboard that warrants alarm. A credit is shown
+                in blue beside it rather than netted away, because post-R1 a camper who is paid
+                ahead is real and must not be hidden inside an "outstanding" figure. */}
+            {seasonalEnabled && (
+              <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+                <div className="flex items-baseline justify-between gap-3 flex-wrap mb-3">
+                  <h2 className="text-lg font-semibold text-gray-900">Still to collect</h2>
+                  <button onClick={()=>setActiveTab('seasonal')} className="text-xs font-semibold text-blue-600 hover:underline">
+                    Full lane breakdown →
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-baseline gap-x-8 gap-y-2">
+                  <div>
+                    <p className={`text-3xl font-bold ${outstandingBalance>0?'text-red-600':'text-emerald-600'}`}>${outstandingBalance.toFixed(2)}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      owed by {overdueCampers.length} camper{overdueCampers.length!==1?'s':''}
+                    </p>
+                  </div>
+                  {creditBalance>0&&(
+                    <div>
+                      <p className="text-3xl font-bold text-blue-600">${creditBalance.toFixed(2)}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        held in credit for {creditCampers.length} camper{creditCampers.length!==1?'s':''}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {seasonalCampers.length===0?(
+                  <p className="text-gray-400 text-sm mt-4">No seasonal campers found.</p>
+                ):(
+                  <div className="mt-4 divide-y divide-gray-50">
+                    {[...seasonalCampers].filter(c=>c.balance!==0).sort((a,b)=>b.balance-a.balance).map(c=>(
+                      <button key={c.id} onClick={()=>c.folioId&&router.push(`/admin/folio/guest/${c.id}`)}
+                        className="w-full flex items-center justify-between gap-3 py-2 text-left hover:bg-gray-50 rounded px-1 -mx-1">
+                        <span className="min-w-0">
+                          <span className="text-sm font-medium text-gray-900 truncate">{c.name}</span>
+                          {c.site_number&&<span className="text-xs text-gray-400 ml-2">Site {c.site_number}</span>}
+                        </span>
+                        <span className={`text-sm font-bold shrink-0 ${c.balance>0?'text-red-600':'text-blue-600'}`}>
+                          {c.balance<0?'Credit '+usd(-c.balance):usd(c.balance)}
+                        </span>
+                      </button>
+                    ))}
+                    {seasonalCampers.every(c=>c.balance===0)&&(
+                      <p className="text-sm text-emerald-600 font-medium py-2">✓ Every seasonal camper is settled up.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ─────────────── THE SMALLER NUMBERS, KEPT ───────────────
+                Everything that does not headline but that an owner still relies on. Reorganised
+                out of the old card grid, never removed: this section is the tidy secondary home
+                the redesign owes them. */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-1">The smaller numbers</h2>
+              <p className="text-xs text-gray-400 mb-4">Still here, just not shouting. Click any of them to see what is behind it.</p>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <KPICard label="Today's Revenue" value={'$'+todayRevenue.toFixed(2)} sub="all payments today" color="text-emerald-600" onClick={()=>setActiveTab('transactions')}/>
+                <KPICard label="Future Bookings" value={futureCount.toString()} sub="confirmed ahead" onClick={()=>setActiveTab('reservations')}/>
+                <KPICard label="Avg Booking Lead Time" value={avgLeadTime.toFixed(1)+' days'} sub="booked in advance" onClick={()=>setActiveTab('reservations')}/>
+                <KPICard label="Avg Stay" value={avgStay.toFixed(1)+' nights'} sub="per booking" onClick={()=>setActiveTab('reservations')}/>
+                {/* Gross revenue, so this is a BREAKOUT of money already counted above — not an
+                    extra amount to add on. */}
+                <KPICard label="Transaction Fees Collected" value={'$'+totalSurcharge.toFixed(2)} sub="included in revenue above" onClick={()=>setActiveTab('transactions')}/>
+                {/* ⚠ NOT the headline figure, and deliberately labelled so. `totalCombined` mixes
+                    payments (reservations, store) with CHARGES (guest accounts) — the definition
+                    this card has always had. It is kept exactly as it was rather than quietly
+                    restated onto the money-received basis, and it follows the Payment/Stay date
+                    toggle as it always has. */}
+                <div onClick={()=>setShowBilledDetail(v=>!v)}
+                  className="bg-white rounded-2xl border border-gray-200 p-4 md:p-5 cursor-pointer hover:shadow-md hover:border-blue-200 transition-all">
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Total Revenue (billed)</p>
+                  <p className="text-2xl md:text-3xl font-bold text-gray-900">${totalCombined.toFixed(2)}</p>
+                  <p className="text-xs text-gray-400 mt-1">{reportBy==='payment_date'?'bookings paid + charges raised':'stay dates + charges raised'}</p>
+                  <p className="text-xs text-blue-500 mt-2 font-medium">{showBilledDetail?'Hide breakdown ▾':'Click to view →'}</p>
                 </div>
               </div>
 
-              {seasonalEnabled && <div className="bg-white rounded-2xl border border-gray-200 p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold text-gray-900">Seasonal Snapshot</h2>
-                  <button onClick={()=>setActiveTab('seasonal')} className="text-xs text-blue-500 font-semibold hover:underline">View all →</button>
+              {showBilledDetail && (
+                <div className="mt-4 rounded-xl bg-gray-50 border border-gray-100 p-4">
+                  <p className="text-xs text-gray-500 mb-3">
+                    What was <span className="font-semibold">billed</span> this period, rather than what was received.
+                    Reservations and store count their payments; guest accounts count their charges — which is why
+                    this figure differs from the headline above.
+                  </p>
+                  {[
+                    { label: 'Reservation revenue', value: resRevenue, tab: 'reservations' as TabKey, color: SOURCE_COLOR.nightly, sub: reservations.length+' bookings' },
+                    ...(posEnabled?[{ label: 'Store revenue', value: posRevenue, tab: 'store' as TabKey, color: SOURCE_COLOR.store, sub: posSales.length+' transactions' }]:[]),
+                    { label: 'Seasonal charges', value: seasonalRevenue, tab: 'seasonal' as TabKey, color: SOURCE_COLOR.seasonal, sub: 'all lanes' },
+                    { label: 'Long-term / monthly', value: longTermRevenue, tab: 'seasonal' as TabKey, color: SOURCE_COLOR.long_term, sub: 'weekly & monthly stays' },
+                    ...(otherAccountRevenue!==0?[{ label: 'Other guest accounts', value: otherAccountRevenue, tab: 'transactions' as TabKey, color: SOURCE_COLOR.other, sub: 'house tabs' }]:[]),
+                  ].map(row=>(
+                    <button key={row.label} onClick={()=>setActiveTab(row.tab)}
+                      className="w-full flex items-center justify-between gap-3 py-1.5 text-left hover:underline">
+                      <span className="flex items-center gap-2 min-w-0">
+                        <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{backgroundColor:row.color}} aria-hidden="true"/>
+                        <span className="text-sm text-gray-700 truncate">{row.label}</span>
+                        <span className="text-xs text-gray-400 shrink-0 hidden sm:inline">{row.sub}</span>
+                      </span>
+                      <span className="text-sm font-semibold text-gray-900 tabular-nums shrink-0">${row.value.toFixed(2)}</span>
+                    </button>
+                  ))}
                 </div>
-                {seasonalCampers.length===0?(
-                  <p className="text-gray-400 text-sm text-center py-6">No seasonal campers found</p>
-                ):(
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-xs text-gray-500 font-semibold uppercase tracking-wide pb-1 border-b border-gray-100">
-                      <span>Camper</span><span>Balance</span>
-                    </div>
-                    {seasonalCampers.slice(0,5).map(c=>(
-                      <div key={c.id} onClick={()=>c.folioId&&router.push('/admin/guests')} className="flex items-center justify-between py-1 cursor-pointer hover:bg-gray-50 rounded px-1">
-                        <div>
-                          <span className="text-sm font-medium text-gray-900">{c.name}</span>
-                          <span className="text-xs text-gray-400 ml-2">Site {c.site_number}</span>
-                        </div>
-                        <span className={`text-sm font-bold ${c.balance>0?'text-red-600':c.balance<0?'text-blue-600':'text-emerald-600'}`}>
-                          {c.balance>0?'$'+(c.balance/100).toFixed(2):c.balance<0?'Credit: $'+(Math.abs(c.balance)/100).toFixed(2):'✓ Current'}
-                        </span>
+              )}
+
+              {/* Payment methods — kept, and now click-through: picking one drops you into the
+                  Transactions log already filtered to it. */}
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-6 mb-3">Payment methods</h3>
+              <div className="space-y-3">
+                {methodTotals.map(mt=>{
+                  const m={label:methodLabel(mt.method),value:mt.value,color:methodColor(mt.method,customMethods)}
+                  const total=methodTotals.reduce((s,x)=>s+x.value,0)
+                  const pct=total>0?Math.round((m.value/total)*100):0
+                  return (
+                    <button key={m.label} onClick={()=>{setTxMethodFilter(mt.method);setActiveTab('transactions')}} className="w-full text-left group">
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="font-medium text-gray-700 group-hover:underline">{m.label}</span>
+                        <span className="font-semibold text-gray-900">${m.value.toFixed(2)} <span className="text-gray-400 font-normal">({pct}%)</span></span>
                       </div>
-                    ))}
-                    {seasonalCampers.length>5&&<p className="text-xs text-gray-400 text-center pt-1">+{seasonalCampers.length-5} more</p>}
-                  </div>
-                )}
-              </div>}
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all" style={{width:pct+'%',backgroundColor:m.color}}/>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* Revenue trend — kept, and still driven by the Payment/Stay date toggle. */}
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-6 mb-1">
+                {reportBy==='payment_date'?'Revenue by payment date':'Revenue by stay date'}
+              </h3>
+              <p className="text-xs text-gray-400 mb-3">{reportBy==='payment_date'?'When payments were received':'Attributed to arrival month'}</p>
+              <BarChart data={monthlyData}/>
             </div>
           </div>
         )}
@@ -988,6 +1380,7 @@ export default function ReportsPage() {
         {/* ── RESERVATIONS TAB ── */}
         {activeTab==='reservations'&&(
           <div className="space-y-6">
+            <SourceChip source="nightly" note="the detail behind the dashboard's nightly line"/>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Reservation Revenue" value={'$'+resRevenue.toFixed(2)} sub={reportBy==='payment_date'?'payments received':'based on stay dates'}/>
               <KPICard label="Total Bookings" value={reservations.length.toString()} sub="active reservations"/>
@@ -1097,6 +1490,7 @@ export default function ReportsPage() {
         {/* ── SEASONAL TAB ── */}
         {activeTab==='seasonal'&&(
           <div className="space-y-6">
+            <SourceChip source="seasonal" note="seasonal campers, split into their money lanes"/>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Active Seasonals" value={seasonalCampers.length.toString()} sub="registered this season"/>
               <KPICard label="Campers Owe" value={'$'+outstandingBalance.toFixed(2)} sub={overdueCampers.length+' with a balance'} color={outstandingBalance>0?'text-red-600':'text-emerald-600'} highlight={outstandingBalance>0}/>
@@ -1365,6 +1759,7 @@ export default function ReportsPage() {
         {/* ── STORE TAB ── */}
         {activeTab==='store'&&posEnabled&&(
           <div className="space-y-6">
+            <SourceChip source="store" note="walk-up sales; campers' store tabs sit on their folios"/>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Store Revenue" value={'$'+posRevenue.toFixed(2)} sub={posSales.length+' transactions'}/>
               <KPICard label="Avg Ticket" value={posSales.length>0?'$'+(posRevenue/posSales.length).toFixed(2):'—'} sub="per transaction"/>
