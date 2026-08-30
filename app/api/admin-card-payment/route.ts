@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { requireRole } from '@/lib/require-role'
 import { getSquareCredentials, SquareCredentialsError } from '@/lib/square-credentials'
+import { normalizeLaneSplit, laneSplitTotal, recordCardPayment } from '@/lib/lane-payments'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -34,23 +35,14 @@ export async function POST(request: NextRequest) {
 
     // Normalise the lane split. Rows with no positive amount are dropped rather than written as
     // zero-value payments.
-    type LaneSplit = { lane: string; amount: number; surchargeAmount: number }
-    const laneSplit: LaneSplit[] = Array.isArray(lanes)
-      ? lanes
-          .map((l: { lane?: unknown; amount?: unknown; surchargeAmount?: unknown }) => ({
-            lane: String(l?.lane ?? ''),
-            amount: Math.round(Number(l?.amount ?? 0)),
-            surchargeAmount: Math.round(Number(l?.surchargeAmount ?? 0)) || 0,
-          }))
-          .filter(l => l.lane && Number.isFinite(l.amount) && l.amount > 0)
-      : []
+    // Normalised by the shared helper, so this path and the Terminal path read a split the
+    // same way — including a split that arrived as jsonb from the database.
+    const laneSplit = normalizeLaneSplit(lanes)
 
     // ⚠ THE CHARGED TOTAL IS THE SUM OF THE ROWS THAT WILL BE WRITTEN, not a separately-supplied
     // figure. Trusting `amount` alongside a split would let the two disagree — the card charged
     // for one number while the ledger recorded another, which is the worst possible money bug.
-    const chargeAmount = laneSplit.length
-      ? laneSplit.reduce((sum, l) => sum + l.amount, 0)
-      : amount
+    const chargeAmount = laneSplit.length ? laneSplitTotal(laneSplit) : amount
 
     if (!sourceId || !chargeAmount || (!folioId && !reservationId)) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
@@ -109,44 +101,29 @@ export async function POST(request: NextRequest) {
 
     const squarePaymentId = squareData.payment.id
 
-    if (folioId && laneSplit.length) {
-      // ONE ROW PER LANE, all carrying the same square_payment_id — so a refund or a reconciliation
-      // can still see it was a single charge, while each lane's balance settles on its own.
-      // Written in ONE insert so the split cannot land half-applied.
-      const { error: laneErr } = await supabase.from('folio_payments').insert(
-        laneSplit.map(l => ({
-          folio_id: folioId,
-          method: 'card',
-          amount: l.amount,
-          surcharge_amount: l.surchargeAmount,
-          status: 'completed',
-          note: note + ' · Manual entry',
-          square_payment_id: squarePaymentId,
-          lane: l.lane,
-        }))
-      )
-      if (laneErr) {
-        // The CARD HAS BEEN CHARGED. Never report failure — that invites a second charge. Surface
-        // the Square id so the payment can be entered by hand against the right lanes.
-        console.error('Card charged but the lane payment rows failed to write:', laneErr.message, squarePaymentId)
-        return NextResponse.json({
-          success: true, paymentId: squarePaymentId,
-          warning: `The card was charged, but recording it against the lanes failed. Add it manually on the folio — Square payment ${squarePaymentId}.`,
-        })
-      }
-    } else if (folioId) {
-      // Record the payment on the folio (check-in / walk-up flow)
-      await supabase.from('folio_payments').insert({
-        folio_id: folioId,
-        method: 'card',
-        amount: amount,
-        surcharge_amount: surchargeAmount,
-        status: 'completed',
+    if (folioId) {
+      // THE SHARED SINK — the same function the Square Terminal's completion records through, so
+      // the two card paths cannot drift. It writes one row per lane when a split is given, one
+      // plain row when it is not, and is idempotent on the Square payment id.
+      const rec = await recordCardPayment(supabase, {
+        folioId,
+        squarePaymentId,
+        split: laneSplit,
+        amount,
+        surchargeAmount,
         // See the staff folio: the fee is rendered from surcharge_amount now, so baking it
         // into the note printed it twice. Amounts unchanged; ' · Manual entry' kept.
         note: note + ' · Manual entry',
-        square_payment_id: squarePaymentId,
       })
+      if (rec.error) {
+        // The CARD HAS BEEN CHARGED. Never report failure — that invites a second charge. Surface
+        // the Square id so the payment can be entered by hand against the right lanes.
+        console.error('Card charged but the payment rows failed to write:', rec.error, squarePaymentId)
+        return NextResponse.json({
+          success: true, paymentId: squarePaymentId,
+          warning: `The card was charged, but recording it failed. Add it manually on the folio — Square payment ${squarePaymentId}.`,
+        })
+      }
     } else {
       // Booking deposit charged against a reservation — record on the reservation,
       // not as a folio_payment, so it is never double-counted at the folio.

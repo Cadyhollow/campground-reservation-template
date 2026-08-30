@@ -188,6 +188,7 @@ export default function SeasonalsPage() {
                 <th className="px-4 py-3">Waiver</th>
                 <th className="px-4 py-3 text-right">Balance</th>
                 <th className="px-4 py-3">Last note</th>
+                <th className="px-4 py-3 text-right">Payment</th>
               </tr>
             </thead>
             <tbody>
@@ -209,10 +210,20 @@ export default function SeasonalsPage() {
                     {r.balance_cents < 0 ? 'Credit ' + fmtMoney(-r.balance_cents) : fmtMoney(r.balance_cents)}
                   </td>
                   <td className="px-4 py-3 text-gray-500">{fmtDate(r.last_note_at)}</td>
+                  {/* Straight into this camper's Take-a-payment screen, with the SEASON carried
+                      through the same way the name link carries it (#64). */}
+                  <td className="px-4 py-3 text-right">
+                    <Link
+                      href={`/admin/checkout?guestId=${r.guest_id}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold border whitespace-nowrap"
+                      style={{ borderColor: '#bbf7d0', color: '#15803d', background: '#f0fdf4' }}>
+                      Pay
+                    </Link>
+                  </td>
                 </tr>
               ))}
               {!loading && visible.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">{unsignedOnly ? 'All contracts signed 🎉' : 'No seasonal campers.'}</td></tr>
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">{unsignedOnly ? 'All contracts signed 🎉' : 'No seasonal campers.'}</td></tr>
               )}
             </tbody>
           </table>
