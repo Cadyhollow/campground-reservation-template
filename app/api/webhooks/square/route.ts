@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
+import { normalizeLaneSplit, recordCardPayment } from '@/lib/lane-payments'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -75,17 +76,24 @@ export async function POST(request: NextRequest) {
           .update({ status: 'completed', payment_id: paymentId, completed_at: new Date().toISOString() })
           .eq('square_checkout_id', squareCheckoutId)
 
-        // Record payment on the folio
-        const surchargeAmount = terminalCheckout.surcharge_amount || 0
-        await supabase.from('folio_payments').insert({
-          folio_id: terminalCheckout.folio_id,
-          method: 'card',
+        // Record on the folio through THE SHARED SINK — the same function /api/admin-card-payment
+        // uses, so the two card paths cannot drift, and one row per lane is written when this
+        // checkout was paying specific lanes.
+        //
+        // ⚠ IDEMPOTENT ON THE SQUARE PAYMENT ID, which this path needs more than any other:
+        // Square RETRIES a webhook that did not 200, and the counter screen polls the same
+        // checkout while it waits. Without the guard a customer who tapped once could be recorded
+        // as having paid twice. With it, whichever gets here first wins and the rest are no-ops.
+        const rec = await recordCardPayment(supabase, {
+          folioId: terminalCheckout.folio_id,
+          squarePaymentId: paymentId,
+          split: normalizeLaneSplit(terminalCheckout.lanes),
           amount: terminalCheckout.amount,
-          surcharge_amount: surchargeAmount,
-          status: 'completed',
-          square_payment_id: paymentId,
+          surchargeAmount: terminalCheckout.surcharge_amount || 0,
           note: 'Square Terminal' + (terminalCheckout.note ? ' · ' + terminalCheckout.note : ''),
         })
+        if (rec.error) console.error('Terminal payment could not be recorded:', rec.error, paymentId)
+        else if (rec.alreadyRecorded) console.log('Terminal payment already recorded, skipping:', paymentId)
 
         // NOTE: We intentionally do NOT mirror Terminal payments into
         // reservations.amount_paid. Folio money lives ONLY in folio_payments.

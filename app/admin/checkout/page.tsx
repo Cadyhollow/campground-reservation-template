@@ -79,13 +79,19 @@ export default function LaneCheckoutPage() {
   const [emailing, setEmailing] = useState(false)
   const [emailed, setEmailed] = useState(false)
   const [cardReady, setCardReady] = useState(false)
+  // ── SEND TO TERMINAL ──────────────────────────────────────────────────────────────────────
+  // A terminal charge is asynchronous: we send it, the customer taps, and completion arrives
+  // later. `checkoutId` non-null IS the waiting state.
+  const [terminalDeviceId, setTerminalDeviceId] = useState('')
+  const [checkoutId, setCheckoutId] = useState<string | null>(null)
+  const [terminalMsg, setTerminalMsg] = useState('')
   const [squareErr, setSquareErr] = useState('')
   // `unknown` rather than a Square type: lib/square-card-client owns that shape and this screen
   // only ever calls .attach()/.tokenize() through it.
   const [cardRef, setCardRef] = useState<{ tokenize: () => Promise<{ status: string; token?: string }> } | null>(null)
 
   useEffect(() => {
-    supabase.from('settings').select('plan, billing_mode, card_surcharge_percent, custom_payment_methods, max_credit_amount').single()
+    supabase.from('settings').select('plan, billing_mode, card_surcharge_percent, custom_payment_methods, max_credit_amount, square_terminal_device_id').single()
       .then(({ data, error }) => {
         // Fail safe to combined: a park without the Phase 4 column must land on the flow it
         // already has, never on a lane screen it cannot use.
@@ -94,6 +100,7 @@ export default function LaneCheckoutPage() {
         setMode(normalizeBillingMode(data?.billing_mode))
         setSurchargePct(Number(data?.card_surcharge_percent) || 0)
         setMaxCreditAmount(Number(data?.max_credit_amount) || 0)
+        setTerminalDeviceId(String(data?.square_terminal_device_id || ''))
         setCustomMethods((data?.custom_payment_methods as string[]) || [])
       })
   }, [router])
@@ -271,6 +278,76 @@ export default function LaneCheckoutPage() {
     setSaving(false)
   }
 
+  /**
+   * Push the charge to the paired Square Terminal and wait for the tap.
+   *
+   * ⚠ NOTHING IS RECORDED HERE. This screen only asks the device to collect; the money reaches
+   * the folio from the server, on COMPLETED, through the one shared sink both card paths use —
+   * and idempotently, so this poll and Square's webhook can both drive it without the customer
+   * being recorded as having paid twice.
+   */
+  async function sendToTerminal() {
+    if (!data?.folioId || baseTotal <= 0) return
+    setSaving(true); setTerminalMsg('')
+    try {
+      const res = await fetch('/api/terminal/charge', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folioId: data.folioId, note, lanes: splits() }),
+      })
+      const d = await res.json()
+      if (!res.ok || !d.checkoutId) { toast.error(d.error || 'Could not reach the terminal.'); setSaving(false); return }
+      setCheckoutId(d.checkoutId)
+      setTerminalMsg('Waiting for the customer to tap on the terminal…')
+    } catch { toast.error('Could not reach the terminal.') }
+    setSaving(false)
+  }
+
+  // Poll until the money is ON THE FOLIO — `recorded`, not merely COMPLETED — so the screen
+  // never says "paid" before the books say so.
+  useEffect(() => {
+    if (!checkoutId) return
+    let stop = false
+    const tick = async () => {
+      try {
+        const res = await fetch(`/api/terminal/charge?checkoutId=${encodeURIComponent(checkoutId)}`)
+        const d = await res.json()
+        if (stop) return
+        if (d.recorded) {
+          setCheckoutId(null); setTerminalMsg('')
+          setPaidTotal(grandTotal + creditCents)
+          setSelected({}); setAmounts({}); setNote(''); setWaiveFee(false)
+          setCashTendered(''); setKeepAsCredit(false)
+          toast.success('Card approved on the terminal.')
+          await load(guestId)
+          return
+        }
+        if (d.state === 'canceled' || d.state === 'failed') {
+          setCheckoutId(null)
+          setTerminalMsg('')
+          // Nothing was recorded — say so plainly so staff know they can simply try again.
+          toast.error(d.state === 'canceled'
+            ? 'The customer cancelled on the terminal. Nothing was charged.'
+            : 'The terminal charge did not go through. Nothing was charged.')
+          return
+        }
+      } catch { /* keep waiting — a dropped poll is not a failed charge */ }
+    }
+    const id = setInterval(tick, 2000)
+    void tick()
+    return () => { stop = true; clearInterval(id) }
+  }, [checkoutId, grandTotal, creditCents, guestId, load])
+
+  async function cancelTerminal() {
+    if (!checkoutId) return
+    setTerminalMsg('Cancelling…')
+    try {
+      await fetch('/api/terminal/cancel', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkoutId }),
+      })
+    } catch { /* the poll below still resolves it */ }
+  }
+
   /** Email the receipt through the EXISTING receipt route. Reads folio data and sends; it
    *  writes no money and cannot alter the payment that was just recorded. */
   async function emailReceipt() {
@@ -437,9 +514,30 @@ export default function LaneCheckoutPage() {
                     Waive the {surchargePct}% card fee
                   </label>
                 )}
-                {!cardReady && (
+                {/* The terminal is offered ALONGSIDE key-entry, never instead of it: a device can
+                    be offline, unpaired or busy, and manual entry is the fallback that still
+                    takes the money. */}
+                {terminalDeviceId && !checkoutId && (
+                  <button onClick={sendToTerminal} disabled={saving || baseTotal <= 0}
+                    className="px-3 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-50 mr-2"
+                    style={{ background: '#15803d' }}>
+                    📟 Send to terminal · {money(grandTotal)}
+                  </button>
+                )}
+                {checkoutId && (
+                  <div className="rounded-lg px-3 py-3 mb-2" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                    <p className="text-sm font-bold text-green-800">{terminalMsg || 'Waiting for the customer to tap on the terminal…'}</p>
+                    <p className="text-xs text-gray-600 mt-0.5">{money(grandTotal)} sent to the terminal. Nothing is recorded until the card is approved.</p>
+                    <button onClick={cancelTerminal}
+                      className="mt-2 px-3 py-1.5 rounded-lg text-xs font-semibold border"
+                      style={{ borderColor: '#fecaca', color: '#b91c1c', background: '#fff' }}>
+                      Cancel on terminal
+                    </button>
+                  </div>
+                )}
+                {!cardReady && !checkoutId && (
                   <button onClick={mountCard} className="px-3 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: '#2E6B8A' }}>
-                    Enter card details
+                    {terminalDeviceId ? 'Or key the card in' : 'Enter card details'}
                   </button>
                 )}
                 <div id="lane-checkout-card" className="mt-2" />
@@ -564,7 +662,7 @@ export default function LaneCheckoutPage() {
               <p className="text-2xl font-bold text-gray-900">{money(grandTotal)}</p>
             </div>
             <button onClick={takePayment}
-              disabled={saving || baseTotal <= 0 || !data.folioId || (method === 'card' && !cardReady)}
+              disabled={saving || baseTotal <= 0 || !data.folioId || !!checkoutId || (method === 'card' && !cardReady)}
               className="w-full py-3 rounded-xl text-sm font-bold text-white disabled:opacity-50"
               style={{ background: '#15803d' }}>
               {saving ? 'Recording…' : `Take payment · ${money(grandTotal)}`}
