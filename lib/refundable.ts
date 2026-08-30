@@ -60,6 +60,38 @@ export function countsTowardRefundable(row: RefundLedgerRow | null | undefined):
   return !!row && REFUNDABLE_STATUSES.includes(row.status || '')
 }
 
+/**
+ * The most recent payment that actually brought money IN.
+ *
+ * Once a surface counts REFUNDABLE_STATUSES — which every balance in this app now does — its
+ * payment list no longer contains only payments. /api/refund records a refund as a NEGATIVE row,
+ * so "the newest row" can be money going the other way, and a screen that prints it verbatim says
+ * "Last payment −$95.00", which is not a payment at all.
+ *
+ * ⚠ THE TEST IS THE SIGN, NOT THE STATUS, and that distinction is the whole reason this is a
+ * named function rather than an inline filter. Refunding a payment flips the ORIGINAL row's
+ * status to 'refunded' / 'partially_refunded' while leaving its amount positive — it is still a
+ * real payment that really happened on that date. Selecting on status would therefore hide it: a
+ * camper who paid $500 and was handed $50 back would show NO last payment at all, because the
+ * row they paid with no longer reads 'completed'.
+ *
+ * Sorts newest-first itself rather than trusting the caller's ORDER BY. Refund rows are commonly
+ * written with the same timestamp as the payment they reverse, and a tied sort key leaves the
+ * database free to return either one first — so "whatever came back at index 0" is a coin flip,
+ * not an ordering. Among genuinely tied rows this preserves the caller's order (stable sort).
+ *
+ * DISPLAY ONLY. It selects which row to SHOW; it never changes a balance, which still nets every
+ * row including the refunds.
+ */
+export function lastIncomingPayment<T extends { amount?: number | null; paid_at?: string | null }>(
+  rows: T[] | null | undefined,
+): T | null {
+  const incoming = (rows || []).filter(r => (r?.amount || 0) > 0)
+  if (incoming.length === 0) return null
+  const ts = (r: T) => (r.paid_at ? new Date(r.paid_at).getTime() : 0)
+  return incoming.slice().sort((a, b) => ts(b) - ts(a))[0]
+}
+
 // Applied here rather than assumed of the caller. The three pages fetch this table with three
 // different filters — the reports drawer selects every status, voided included — so a function
 // that trusted its input would give that page a different cap from the other two.
