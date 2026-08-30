@@ -58,9 +58,9 @@ import {
 // Builds on R3's single occupancy definition rather than adding a fourth: lib/occupancy-report.ts
 // imports `occupiesNight` and does not restate it.
 import {
-  buildOccupancyReport, buildOccupants, siteTypeByNumber, typeLabel, isRentable,
-  UNRESOLVED_TYPE, type RentableSite, type TypeMetrics, type ContractRow, type SeasonRow,
-  type CamperRow,
+  buildOccupancyReport, buildOccupants, buildSeasonalProgram, siteTypeByNumber, typeLabel,
+  isRentable, isSeasonalSite, UNRESOLVED_TYPE, type RentableSite, type TypeMetrics,
+  type ContractRow, type SeasonRow, type CamperRow,
 } from '@/lib/occupancy-report'
 
 type Reservation = {
@@ -584,7 +584,11 @@ export default function ReportsPage() {
     // without three windowed queries that could disagree at a boundary.
     const [{ data: siteRows }, { data: occResRows }, { data: contractRows }, { data: seasonRows }, { data: camperRows }] =
       await Promise.all([
-        supabase.from('sites').select('id, site_number, site_type, is_available'),
+        // select('*'), not a named list: on a tenant that has not run the R4b migration a named
+        // `is_seasonal_site` would make PostgREST error and this read return NOTHING — taking the
+        // whole Occupancy tab down for want of one column. The same reasoning the Sites screen
+        // already uses for the pet and prep columns.
+        supabase.from('sites').select('*'),
         supabase.from('reservations').select('id, arrival_date, departure_date, status, site_id, total_price').neq('status','cancelled'),
         supabase.from('seasonal_contracts').select('guest_id, site_number, total_due_cents, season_opens, season_closes, season_id, season_year, status'),
         supabase.from('seasons').select('id, year, opens, closes'),
@@ -919,7 +923,41 @@ export default function ReportsPage() {
   const { occupants: occOccupants, undated: occUndated } =
     buildOccupants(occContracts, occSeasonsById, occCampers, occByNumber)
 
+  // ── R4b: ONE ENGINE, RUN TWICE ─────────────────────────────────────────────
+  //
+  // `occReport` is the COMBINED whole-park figure over every rentable site — R4's number,
+  // unchanged, and deliberately kept: the split adds detail beneath it rather than replacing it.
+  // An owner still needs one "how full is the park" answer at a glance.
+  //
+  // `occTransient` is the same engine restricted to transient sites, which is the only place a
+  // nightly occupancy average means anything. Nothing is restated; the difference is entirely in
+  // what is handed in.
   const occReport = buildOccupancyReport(occSites, occRes, occSiteTypeById, occOccupants, occWindow, occUndated)
+
+  /** Whether this tenant has the R4b column at all. Undefined on every row = un-migrated. */
+  const hasSeasonalSiteColumn = occSites.length > 0 && 'is_seasonal_site' in (occSites[0] as object)
+  const seasonalFlaggedNumbers = new Set(
+    occSites.filter(isSeasonalSite).map(s => (s.site_number || '').trim().toLowerCase()).filter(Boolean))
+  const seasonalFlaggedIds = new Set(occSites.filter(isSeasonalSite).map(s => s.id).filter(Boolean) as string[])
+
+  const occProgram = buildSeasonalProgram(occSites, occOccupants, occWindow)
+
+  const transientSites = occSites.filter(s => !isSeasonalSite(s))
+  const occTransient = buildOccupancyReport(
+    transientSites,
+    // A nightly booking sitting on a seasonal-flagged site is counted in the combined figure
+    // above but not here, because that site is not in this denominator. It is surfaced below
+    // rather than quietly inflating the transient average.
+    occRes.filter(r => !r.site_id || !seasonalFlaggedIds.has(r.site_id)),
+    occSiteTypeById,
+    occOccupants.filter(o => !o.siteNumber || !seasonalFlaggedNumbers.has(o.siteNumber)),
+    occWindow,
+    occUndated,
+  )
+  const nightlyOnSeasonalSites = occRes.filter(r =>
+    r.site_id && seasonalFlaggedIds.has(r.site_id) &&
+    r.arrival_date && r.departure_date &&
+    r.arrival_date <= occWindow.end && r.departure_date > occWindow.start).length
 
   /** Tonight on the SAME machinery — the figure the reconciliation panel ties to the dashboard. */
   const occTonight = todayYmd
@@ -1870,7 +1908,7 @@ export default function ReportsPage() {
 
         {/* ── OCCUPANCY TAB — per site type, over any window (R4) ── */}
         {activeTab==='occupancy'&&(() => {
-          const selected = occType ? (occType==='all' ? occReport.total : occReport.byType.find(t=>t.type===occType)) : null
+          const selected = occType ? (occType==='all' ? occReport.total : occTransient.byType.find(t=>t.type===occType)) : null
           const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
           const barRow = (label: string, value: number, emphasis = false) => (
             <div key={label} className="flex items-center gap-3">
@@ -1973,14 +2011,111 @@ export default function ReportsPage() {
             ) : (
               /* ─────────────── ALL TYPES ─────────────── */
               <>
+                {/* ─────────────── THE WHOLE PARK, ONE NUMBER ───────────────
+                    ⚠ KEPT DELIBERATELY. The seasonal/transient split adds detail BENEATH this;
+                    it does not replace it. An owner still needs one "how full is the park"
+                    figure, over every rentable site of every kind. */}
+                <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Whole park · {occRangeLabel}</p>
+                  <p className="text-4xl md:text-5xl font-bold text-gray-900 mt-1 tracking-tight">
+                    {pctText(occReport.total.occupancyPct)}
+                    <span className="text-base md:text-lg font-semibold text-gray-500 ml-3">
+                      average occupancy
+                    </span>
+                  </p>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {occReport.total.occupiedNights.toLocaleString()} of {occReport.total.availableNights.toLocaleString()} site-nights
+                    across all {occReport.total.units} rentable site{occReport.total.units!==1?'s':''}, seasonal and transient together
+                    {' · '}weekend {pctText(occReport.total.weekendPct)}
+                  </p>
+                  <button onClick={()=>setOccType('all')} className="text-xs font-semibold text-blue-600 hover:underline mt-2">
+                    Open the whole-park view →
+                  </button>
+                </div>
+
+                {/* ─────────────── THE SEASONAL PROGRAM ───────────────
+                    ⚠ NOT A NIGHT-BY-NIGHT NUMBER. A seasonal camper holds their site all season,
+                    so the question is how much of the program is SOLD — and the sites that are
+                    not are the actionable part. */}
+                {hasSeasonalSiteColumn ? (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+                    <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+                      <h2 className="text-lg font-semibold text-gray-900">Seasonal program</h2>
+                      <a href="/admin/sites" className="text-xs font-semibold text-blue-600 hover:underline">Designate sites →</a>
+                    </div>
+                    {occProgram.totalSites===0?(
+                      <p className="text-sm text-gray-500 py-4">
+                        No sites are marked seasonal yet. Mark them on the Sites screen and this fills in —
+                        the numbers come straight from the flags.
+                      </p>
+                    ):(<>
+                      <p className="text-3xl md:text-4xl font-bold text-gray-900 mt-2">
+                        {occProgram.filled} of {occProgram.totalSites} filled
+                        <span className="ml-3 text-emerald-700">{occProgram.fillPct}%</span>
+                      </p>
+                      <p className="text-sm mt-1">
+                        {occProgram.open===0
+                          ? <span className="text-emerald-700 font-semibold">Every seasonal site is sold.</span>
+                          : <span className="text-amber-700 font-semibold">{occProgram.open} site{occProgram.open!==1?'s':''} open</span>}
+                        {occProgram.open>0&&(
+                          <span className="text-gray-500"> — {occProgram.openSites.map(o=>o.siteNumber).join(', ')}</span>
+                        )}
+                      </p>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5">
+                        {[
+                          { label:'Season fees contracted', value: usd(occProgram.contractedCents), sub:'the roster’s value, whatever the window' },
+                          { label:'Effective nightly', value: occProgram.effectiveNightlyCents===null?'—':usd(occProgram.effectiveNightlyCents), sub:'fees ÷ season nights, blended across fee levels' },
+                          { label:'Share of this window', value: usd(occProgram.windowRevenueCents), sub:`the part of those fees falling in ${occRangeLabel.toLowerCase()}` },
+                        ].map(t=>(
+                          <div key={t.label} className="rounded-xl bg-gray-50 border border-gray-100 p-4">
+                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">{t.label}</p>
+                            <p className="text-xl font-bold text-gray-900">{t.value}</p>
+                            <p className="text-xs text-gray-400 mt-1">{t.sub}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {occProgram.byType.length>1&&(
+                        <div className="mt-4 space-y-1">
+                          {occProgram.byType.map(l=>(
+                            <p key={l.type} className="text-xs text-gray-500">
+                              <span className="font-semibold text-gray-700">{l.label}:</span> {l.filled} of {l.total} filled
+                              {l.open>0&&` · ${l.open} open`}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                      {occProgram.campersWithoutFee.length>0&&(
+                        <p className="text-xs text-gray-400 mt-3">
+                          {occProgram.campersWithoutFee.length} seasonal camper{occProgram.campersWithoutFee.length!==1?'s have':' has'} no fee
+                          on record, so {occProgram.campersWithoutFee.length!==1?'they are':'it is'} left out of the blend rather than counted as free.
+                        </p>
+                      )}
+                    </>)}
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-2xl border border-amber-200 p-5">
+                    <h2 className="text-lg font-semibold text-gray-900 mb-1">Seasonal program</h2>
+                    <p className="text-sm text-gray-600">
+                      This park&rsquo;s database doesn&rsquo;t have the seasonal-site designation yet, so every site is being
+                      treated as transient — exactly as it was before. Once the R4b migration is applied here, this
+                      fills in and the table below splits in two.
+                    </p>
+                  </div>
+                )}
+
                 <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
                   <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
-                    <h2 className="text-lg font-semibold text-gray-900">How full each kind of site runs</h2>
+                    <h2 className="text-lg font-semibold text-gray-900">
+                      {hasSeasonalSiteColumn?'Transient sites — how full each kind runs':'How full each kind of site runs'}
+                    </h2>
                     <span className="text-xs text-gray-400">Click a row to open that type on its own</span>
                   </div>
                   <p className="text-xs text-gray-400 mb-4">
-                    Every rentable site, of every type, over {occRangeLabel}. Types are read from your own sites —
-                    nothing to configure.
+                    {hasSeasonalSiteColumn
+                      ? <>Booked site-nights ÷ available site-nights over {occRangeLabel}, for the sites sold BY THE NIGHT. Seasonal sites are not in this table — a nightly average over a site nobody sells by the night is not a number.</>
+                      : <>Every rentable site, of every type, over {occRangeLabel}. Types are read from your own sites — nothing to configure.</>}
                   </p>
 
                   <div className="overflow-x-auto">
@@ -1993,7 +2128,7 @@ export default function ReportsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {occReport.byType.map(t=>(
+                        {occTransient.byType.map(t=>(
                           <tr key={t.type} onClick={()=>setOccType(t.type)}
                             className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer">
                             <td className="py-3 font-medium text-gray-900">
@@ -2011,13 +2146,13 @@ export default function ReportsPage() {
                             <td className="py-3 text-right text-gray-700 tabular-nums">{t.avgNightlyCents===null?'—':usd(t.avgNightlyCents)}</td>
                           </tr>
                         ))}
-                        <tr onClick={()=>setOccType('all')} className="border-t-2 border-gray-200 hover:bg-gray-50 cursor-pointer">
-                          <td className="py-3 font-bold text-gray-900">All sites</td>
-                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{occReport.total.units}</td>
-                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{pctText(occReport.total.occupancyPct)}</td>
-                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{pctText(occReport.total.weekendPct)}</td>
-                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{usd(occReport.total.revenueCents)}</td>
-                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{occReport.total.avgNightlyCents===null?'—':usd(occReport.total.avgNightlyCents)}</td>
+                        <tr className="border-t-2 border-gray-200">
+                          <td className="py-3 font-bold text-gray-900">{hasSeasonalSiteColumn?'All transient sites':'All sites'}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{occTransient.total.units}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{pctText(occTransient.total.occupancyPct)}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{pctText(occTransient.total.weekendPct)}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{usd(occTransient.total.revenueCents)}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{occTransient.total.avgNightlyCents===null?'—':usd(occTransient.total.avgNightlyCents)}</td>
                         </tr>
                       </tbody>
                     </table>
@@ -2050,12 +2185,29 @@ export default function ReportsPage() {
                   </div>
                 )}
 
-                {(occReport.unresolvedOccupants.length>0||occReport.undatedOccupants.length>0)&&(
+                {(occReport.unresolvedOccupants.length>0||occReport.undatedOccupants.length>0
+                  ||occProgram.onTransientSites.length>0||nightlyOnSeasonalSites>0)&&(
                   <div className="bg-white rounded-2xl border border-amber-200 p-5">
                     <h3 className="text-base font-semibold text-gray-900 mb-1">Campers this couldn&rsquo;t place</h3>
                     <p className="text-xs text-gray-500 mb-3">
                       Counted, never dropped — but worth tidying, because until they are they sit outside their real site type.
                     </p>
+                    {/* ⚠ R4b: a designation the park has not made yet, and the fix is one toggle.
+                        Reclassifying them silently would make the seasonal fill ratio a fiction. */}
+                    {occProgram.onTransientSites.length>0&&(
+                      <p className="text-sm text-gray-700 mb-1">
+                        <span className="font-semibold">{occProgram.onTransientSites.length} seasonal camper{occProgram.onTransientSites.length!==1?'s are':' is'} on a site marked transient:</span>{' '}
+                        {occProgram.onTransientSites.join(' · ')}
+                        {' — '}<a href="/admin/sites" className="text-blue-600 hover:underline">mark those sites seasonal</a> and they join the program.
+                      </p>
+                    )}
+                    {nightlyOnSeasonalSites>0&&(
+                      <p className="text-sm text-gray-700 mb-1">
+                        <span className="font-semibold">{nightlyOnSeasonalSites} nightly booking{nightlyOnSeasonalSites!==1?'s sit':' sits'} on a seasonal site.</span>{' '}
+                        Counted in the whole-park figure above, but left out of the transient table — that site is not
+                        sold by the night.
+                      </p>
+                    )}
                     {occReport.unresolvedOccupants.length>0&&(
                       <p className="text-sm text-gray-700">
                         <span className="font-semibold">{occReport.unresolvedOccupants.length} on a site number that doesn&rsquo;t exist:</span>{' '}

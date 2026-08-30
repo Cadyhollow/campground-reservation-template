@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   siteTypesFrom, typeLabel, isRentable, resolveSiteType, siteTypeByNumber,
   nightsBetween, isWeekendNight, isMidweekNight, seasonRange, buildOccupants,
-  buildOccupancyReport, UNRESOLVED_TYPE,
+  buildOccupancyReport, buildSeasonalProgram, isSeasonalSite, UNRESOLVED_TYPE,
   type RentableSite, type Occupant,
 } from './occupancy-report.ts'
 
@@ -273,4 +273,171 @@ test('an empty park does not crash or divide by zero', () => {
   assert.equal(rep.total.occupancyPct, 0)
   assert.equal(rep.total.avgNightlyCents, null)
   assert.deepEqual(rep.byType, [])
+})
+
+// ═══ R4b: SEASONAL vs TRANSIENT ══════════════════════════════════════════════════════════════
+//
+// The property that carries this section: SEASONAL FILL IS A ROSTER RATIO, NOT A CALENDAR ONE.
+// A seasonal site that is empty must stay visible as an OPEN SITE — it is a site to go and sell,
+// and it is exactly the number that would disappear if occupancy were inferred from campers.
+
+const R4B_SITES: RentableSite[] = [
+  { id: 's1', site_number: '1', site_type: 'rv_site', is_available: true, is_seasonal_site: true },
+  { id: 's2', site_number: '2', site_type: 'rv_site', is_available: true, is_seasonal_site: true },
+  { id: 's3', site_number: '3', site_type: 'rv_site', is_available: true, is_seasonal_site: true },
+  { id: 's4', site_number: '4', site_type: 'rv_site', is_available: true, is_seasonal_site: false },
+  { id: 'c1', site_number: 'C1', site_type: 'cabin', is_available: true, is_seasonal_site: false },
+]
+const SEASON = { from: '2026-05-01', to: '2026-10-01' }        // 153 nights
+const seasonalOcc = (key: string, siteNumber: string, type: string, totalCents: number): Occupant =>
+  ({ key, type, siteNumber, seasonal: true, ...SEASON, totalCents, revenueUnknown: !totalCents })
+
+test('AN UNFLAGGED PARK IS ENTIRELY TRANSIENT — the pre-migration behaviour, exactly', () => {
+  // A park whose database has not had the R4b migration returns rows with no such key at all.
+  // Every one of them must keep behaving as it did before the column existed.
+  assert.equal(isSeasonalSite({ site_number: '1' }), false, 'undefined means transient')
+  assert.equal(isSeasonalSite({ site_number: '1', is_seasonal_site: null }), false, 'and so does null')
+  const prog = buildSeasonalProgram([{ id: 'x', site_number: '1', site_type: 'rv_site' }], [], WINDOW)
+  assert.equal(prog.totalSites, 0, 'no seasonal program at all until sites are flagged')
+  assert.equal(prog.fillPct, 0)
+})
+
+test('SEASONAL FILL IS filled ÷ TOTAL SEASONAL SITES, and the empty one stays visible', () => {
+  const occupants = [
+    seasonalOcc('Thompson', '1', 'rv_site', 200000),
+    seasonalOcc('Nguyen', '2', 'rv_site', 220000),
+  ]
+  const prog = buildSeasonalProgram(R4B_SITES, occupants, WINDOW)
+  assert.equal(prog.totalSites, 3, 'three sites are FLAGGED seasonal')
+  assert.equal(prog.filled, 2)
+  assert.equal(prog.open, 1)
+  assert.equal(prog.fillPct, 67)
+  assert.deepEqual(prog.openSites.map(s => s.siteNumber), ['3'],
+    'the empty seasonal site is named — it is a site to go and sell, not an absence')
+})
+
+test('A CAMPER LEAVING OPENS A SITE, it does not shrink the park', () => {
+  // The exact regression an inferred designation would cause: the denominator would quietly drop
+  // from 3 to 2 and the park would read 100% sold with a site standing empty.
+  const before = buildSeasonalProgram(R4B_SITES, [
+    seasonalOcc('Thompson', '1', 'rv_site', 200000),
+    seasonalOcc('Nguyen', '2', 'rv_site', 220000),
+    seasonalOcc('Delgado', '3', 'rv_site', 180000),
+  ], WINDOW)
+  assert.equal(before.fillPct, 100)
+  assert.equal(before.open, 0)
+
+  const after = buildSeasonalProgram(R4B_SITES, [
+    seasonalOcc('Thompson', '1', 'rv_site', 200000),
+    seasonalOcc('Nguyen', '2', 'rv_site', 220000),
+  ], WINDOW)
+  assert.equal(after.totalSites, 3, 'THE PARK IS STILL THE SAME SIZE')
+  assert.equal(after.open, 1)
+  assert.equal(after.fillPct, 67)
+})
+
+test('FLIPPING A TRANSIENT SITE TO SEASONAL GROWS THE PROGRAM', () => {
+  const flipped = R4B_SITES.map(s => s.site_number === '4' ? { ...s, is_seasonal_site: true } : s)
+  const occupants = [seasonalOcc('Thompson', '1', 'rv_site', 200000)]
+  assert.equal(buildSeasonalProgram(R4B_SITES, occupants, WINDOW).totalSites, 3)
+  const after = buildSeasonalProgram(flipped, occupants, WINDOW)
+  assert.equal(after.totalSites, 4, 'the flag alone changed the total — nothing else to do')
+  assert.equal(after.open, 3)
+})
+
+test('the blended effective nightly averages the real fee levels', () => {
+  const prog = buildSeasonalProgram(R4B_SITES, [
+    seasonalOcc('A', '1', 'rv_site', 180000),
+    seasonalOcc('B', '2', 'rv_site', 220000),
+  ], WINDOW)
+  assert.equal(prog.contractedCents, 400000)
+  // 400000 / (2 x 153 nights)
+  assert.equal(prog.effectiveNightlyCents, Math.round(400000 / 306))
+  assert.ok(prog.effectiveNightlyCents! > Math.round(180000/153) && prog.effectiveNightlyCents! < Math.round(220000/153),
+    'strictly between the cheapest and the dearest')
+})
+
+test('A CAMPER WITH NO FEE ON RECORD IS EXCLUDED FROM THE BLEND, not counted as free', () => {
+  // Counting them at $0 would drag the effective nightly below what anybody actually pays.
+  const withFee = buildSeasonalProgram(R4B_SITES, [seasonalOcc('A', '1', 'rv_site', 200000)], WINDOW)
+  const plusFreeloader = buildSeasonalProgram(R4B_SITES, [
+    seasonalOcc('A', '1', 'rv_site', 200000),
+    seasonalOcc('B', '2', 'rv_site', 0),
+  ], WINDOW)
+  assert.equal(plusFreeloader.effectiveNightlyCents, withFee.effectiveNightlyCents, 'the blend is unmoved')
+  assert.deepEqual(plusFreeloader.campersWithoutFee, ['B'], 'and the gap is named')
+  assert.equal(plusFreeloader.filled, 2, 'but they still fill their site')
+})
+
+test('season fees prorate into the window', () => {
+  const prog = buildSeasonalProgram(R4B_SITES, [seasonalOcc('A', '1', 'rv_site', 153000)], // $10/night
+    { start: '2026-09-01', end: '2026-09-30' })
+  assert.equal(prog.windowRevenueCents, 1000 * 30, 'thirty of the season s nights')
+  assert.equal(prog.contractedCents, 153000, 'while the contracted total stays the whole fee')
+})
+
+test('MISMATCHES ARE SURFACED, NEVER RECLASSIFIED', () => {
+  const prog = buildSeasonalProgram(R4B_SITES, [
+    seasonalOcc('OnTransient', '4', 'rv_site', 200000),   // site 4 exists but is flagged transient
+    seasonalOcc('Nowhere', '99', UNRESOLVED_TYPE, 200000), // site 99 does not exist
+    seasonalOcc('Fine', '1', 'rv_site', 200000),
+  ], WINDOW)
+  assert.deepEqual(prog.onTransientSites, ['OnTransient'], 'one toggle on the Sites screen fixes this')
+  assert.deepEqual(prog.unresolved, ['Nowhere'])
+  assert.equal(prog.filled, 1, 'only the correctly-designated camper fills a seasonal site')
+  assert.equal(prog.open, 2)
+})
+
+test('a MONTHLY camper does not fill a seasonal site', () => {
+  const monthly: Occupant = { key: 'Reyes', type: 'rv_site', siteNumber: '1', seasonal: false,
+                              ...SEASON, totalCents: 0, revenueUnknown: true }
+  const prog = buildSeasonalProgram(R4B_SITES, [monthly], WINDOW)
+  assert.equal(prog.filled, 0, 'monthly is a different arrangement from seasonal')
+  assert.equal(prog.open, 3)
+})
+
+test('THE TRANSIENT TABLE NEVER SHOWS A SEASONAL SITE', () => {
+  // The split in practice: the caller hands the R4 engine only the transient sites.
+  const transient = R4B_SITES.filter(s => !isSeasonalSite(s))
+  const rep = buildOccupancyReport(transient, [], new Map(), [], WINDOW)
+  assert.equal(rep.total.units, 2, 'site 4 and cabin C1 — not the three seasonal ones')
+  assert.deepEqual(rep.byType.map(t => t.type).sort(), ['cabin', 'rv_site'])
+  assert.equal(rep.byType.find(t => t.type === 'rv_site')!.units, 1, 'only the transient RV site')
+})
+
+test('buildOccupants tags who is seasonal and which site they name', () => {
+  const { occupants } = buildOccupants(
+    [{ guest_id: 'g1', site_number: ' A1 ', total_due_cents: 100000, status: 'signed' }],
+    new Map(),
+    [{ id: 'g1', name: 'Trimmed', site_number: 'A1', is_seasonal: true, season_start: '2026-05-01', season_end: '2026-09-30' },
+     { id: 'g3', name: 'Reyes', site_number: '2', is_monthly: true, season_start: '2026-05-01', season_end: '2026-09-30' }],
+    byNumber)
+  const seasonal = occupants.find(o => o.key.startsWith('Trimmed'))!
+  assert.equal(seasonal.seasonal, true)
+  assert.equal(seasonal.siteNumber, 'a1', 'normalised, so " A1 " and "a1" are one site')
+  assert.equal(occupants.find(o => o.key === 'Reyes')!.seasonal, false, 'monthly is not seasonal')
+})
+
+test('an empty seasonal program does not divide by zero', () => {
+  const prog = buildSeasonalProgram([], [], WINDOW)
+  assert.equal(prog.totalSites, 0)
+  assert.equal(prog.fillPct, 0)
+  assert.equal(prog.effectiveNightlyCents, null)
+})
+
+test('THE COMBINED ALL-SITES TOTAL SURVIVES THE SPLIT', () => {
+  // The split adds detail BENEATH the whole-park number; it must not replace it. An owner still
+  // needs the one "how full is the park" figure, over every rentable site of every kind.
+  const nightly = [{ id: 'a', site_id: 'c1', arrival_date: '2026-09-04', departure_date: '2026-09-06',
+                     total_price: 24000, status: 'confirmed' }]
+  const occupants = [seasonalOcc('Thompson', '1', 'rv_site', 200000)]
+
+  const combined = buildOccupancyReport(R4B_SITES, nightly, new Map([['c1', 'cabin']]), occupants, WINDOW)
+  const transientOnly = buildOccupancyReport(
+    R4B_SITES.filter(s => !isSeasonalSite(s)), nightly, new Map([['c1', 'cabin']]), [], WINDOW)
+
+  assert.equal(combined.total.units, 5, 'every rentable site, seasonal and transient together')
+  assert.equal(transientOnly.total.units, 2, 'while the breakdown below covers only the transient ones')
+  assert.ok(combined.total.occupiedNights > transientOnly.total.occupiedNights,
+    'the combined figure includes the seasonal nights the transient table deliberately omits')
 })
