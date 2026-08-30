@@ -47,12 +47,21 @@ import {
 // different ways, and the heat calendar cannot disagree with the dashboard about how full
 // tonight is. Both now go through the same function.
 import {
-  occupiedOn, fillPercent, mondayOf, addDays, weekStartsFrom, sameWeekLastYear,
+  occupiedOn, fillPercent, mondayOf, addDays, weekStartsFrom, sameWeekLastYear, toYmd,
   type StayRow,
 } from '@/lib/occupancy'
 import {
   buildForwardLook, heatColor, HEAT_LEGEND, PACE_BASIS_LABEL, type WeekPace, type PaceBasis,
 } from '@/lib/forward-look'
+// ── REPORTS R4: OCCUPANCY BY SITE TYPE ───────────────────────────────────────────────────────
+//
+// Builds on R3's single occupancy definition rather than adding a fourth: lib/occupancy-report.ts
+// imports `occupiesNight` and does not restate it.
+import {
+  buildOccupancyReport, buildOccupants, siteTypeByNumber, typeLabel, isRentable,
+  UNRESOLVED_TYPE, type RentableSite, type TypeMetrics, type ContractRow, type SeasonRow,
+  type CamperRow,
+} from '@/lib/occupancy-report'
 
 type Reservation = {
   id: string
@@ -120,7 +129,7 @@ type GaPaymentRow = {
 type SeasonalGuestRow = { id: string; name: string; email: string; site_number: string }
 /** Named so the places that navigate BETWEEN tabs — the tab bar, the drill-downs R2 adds — can
  *  do it without an `as any` that would hide a typo in a tab name until someone clicked it. */
-type TabKey = 'dashboard'|'forward'|'reservations'|'seasonal'|'transactions'|'store'
+type TabKey = 'dashboard'|'forward'|'occupancy'|'reservations'|'seasonal'|'transactions'|'store'
 /** How many weeks the forward look covers. Eight is roughly the window a nudge can still fill. */
 const WEEKS_AHEAD = 8
 // ── R2 row shapes ────────────────────────────────────────────────────────────────────────────
@@ -204,6 +213,21 @@ export default function ReportsPage() {
   const [goalEditing, setGoalEditing] = useState(false)
   const [goalDraft, setGoalDraft] = useState('')
   const [goalSaving, setGoalSaving] = useState(false)
+
+  // ── R4 occupancy data ──────────────────────────────────────────────────────
+  const [occSites, setOccSites] = useState<RentableSite[]>([])
+  const [occRes, setOccRes] = useState<(StayRow & { id?: string|null; site_id?: string|null; total_price?: number|null })[]>([])
+  const [occContracts, setOccContracts] = useState<ContractRow[]>([])
+  const [occSeasons, setOccSeasons] = useState<(SeasonRow & { year?: number|null })[]>([])
+  const [occCampers, setOccCampers] = useState<CamperRow[]>([])
+  /** The Occupancy tab keeps its OWN window: occupancy is a seasonal-shape question, and the
+   *  page-wide picker cannot reach a season in a different year. */
+  const [occMode, setOccMode] = useState<'this_month'|'ytd'|'year'|'custom'>('this_month')
+  const [occYear, setOccYear] = useState<number>(new Date().getFullYear())
+  const [occStart, setOccStart] = useState('')
+  const [occEnd, setOccEnd] = useState('')
+  /** Null = the all-types table; a type = that type on its own. */
+  const [occType, setOccType] = useState<string|null>(null)
 
   /** Which source row is expanded for drill-down. */
   const [openSource, setOpenSource] = useState<RevenueSource|null>(null)
@@ -552,6 +576,27 @@ export default function ReportsPage() {
       total: collectedLanes.totalPayments,
     })
 
+    // ── R4: EVERYTHING THE OCCUPANCY TAB NEEDS ─────────────────────────────────────────────
+    //
+    // Fetched whole rather than per window. Sites, seasons, contracts and campers are small by
+    // nature, and reservations are narrow here (six columns, no joins) — so the tab can switch
+    // between this month, a year to date and a season two years out without a round trip, and
+    // without three windowed queries that could disagree at a boundary.
+    const [{ data: siteRows }, { data: occResRows }, { data: contractRows }, { data: seasonRows }, { data: camperRows }] =
+      await Promise.all([
+        supabase.from('sites').select('id, site_number, site_type, is_available'),
+        supabase.from('reservations').select('id, arrival_date, departure_date, status, site_id, total_price').neq('status','cancelled'),
+        supabase.from('seasonal_contracts').select('guest_id, site_number, total_due_cents, season_opens, season_closes, season_id, season_year, status'),
+        supabase.from('seasons').select('id, year, opens, closes'),
+        supabase.from('guests').select('id, name, site_number, is_seasonal, is_monthly, season_start, season_end')
+          .or('is_seasonal.eq.true,is_monthly.eq.true'),
+      ])
+    setOccSites((siteRows||[]) as RentableSite[])
+    setOccRes((occResRows||[]) as unknown as (StayRow & { id?: string|null; site_id?: string|null; total_price?: number|null })[])
+    setOccContracts((contractRows||[]) as ContractRow[])
+    setOccSeasons((seasonRows||[]) as (SeasonRow & { year?: number|null })[])
+    setOccCampers((camperRows||[]) as CamperRow[])
+
     // ── R3: THE NEXT EIGHT WEEKS, AND THE SAME EIGHT WEEKS A YEAR AGO ──────────────────────
     //
     // Two narrow queries rather than one clever one. The window starts at the MONDAY OF THE
@@ -846,6 +891,59 @@ export default function ReportsPage() {
       priorAsOfDate: todayYmd ? sameWeekLastYear(todayYmd) : null,
     },
   )
+
+  // ── R4: OCCUPANCY BY SITE TYPE ─────────────────────────────────────────────
+  //
+  // ⚠ THE DENOMINATOR IS THE `sites` TABLE, NOT settings.total_sites/total_cabins.
+  //
+  // Those two integers are hand-maintained and describe only two kinds of inventory, so a park
+  // that added yurts has to remember to edit a number — and a park that forgot leaves them at 0,
+  // which is exactly what the sandbox did. Counting the rentable rows instead is always accurate
+  // and categorises itself, which is what lets a park with treehouses see treehouses without
+  // configuring anything.
+  const occWindow = (() => {
+    const now = new Date()
+    if (occMode === 'this_month') {
+      return { start: toYmd(new Date(now.getFullYear(), now.getMonth(), 1)),
+               end: toYmd(new Date(now.getFullYear(), now.getMonth() + 1, 0)) }
+    }
+    if (occMode === 'ytd') return { start: `${now.getFullYear()}-01-01`, end: toYmd(now) }
+    if (occMode === 'year') return { start: `${occYear}-01-01`, end: `${occYear}-12-31` }
+    return { start: occStart || toYmd(now), end: occEnd || toYmd(now) }
+  })()
+
+  const occSiteTypeById = new Map<string, string>()
+  for (const s of occSites) if (s.id) occSiteTypeById.set(s.id, (s.site_type || '').trim().toLowerCase() || UNRESOLVED_TYPE)
+  const occByNumber = siteTypeByNumber(occSites)
+  const occSeasonsById = new Map<string, SeasonRow>(occSeasons.filter(x=>x.id).map(x=>[x.id as string, x]))
+  const { occupants: occOccupants, undated: occUndated } =
+    buildOccupants(occContracts, occSeasonsById, occCampers, occByNumber)
+
+  const occReport = buildOccupancyReport(occSites, occRes, occSiteTypeById, occOccupants, occWindow, occUndated)
+
+  /** Tonight on the SAME machinery — the figure the reconciliation panel ties to the dashboard. */
+  const occTonight = todayYmd
+    ? buildOccupancyReport(occSites, occRes, occSiteTypeById, occOccupants, { start: todayYmd, end: todayYmd })
+    : null
+
+  /** Years worth offering in the picker: whatever the park's own data actually spans. */
+  const occYears = (() => {
+    const ys = new Set<number>([new Date().getFullYear()])
+    for (const c of occContracts) if (c.season_year) ys.add(c.season_year)
+    for (const s of occSeasons) if (s.year) ys.add(s.year)
+    for (const r of occRes) if (r.arrival_date) ys.add(Number(r.arrival_date.slice(0, 4)))
+    return [...ys].filter(y => y > 1990 && y < 2200).sort((a, b) => b - a)
+  })()
+
+  const occRangeLabel =
+    occMode === 'this_month' ? new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    : occMode === 'ytd' ? `${new Date().getFullYear()} so far`
+    : occMode === 'year' ? String(occYear)
+    : `${occWindow.start} → ${occWindow.end}`
+
+  const pctText = (n: number) => `${n % 1 === 0 ? n.toFixed(0) : n.toFixed(1)}%`
+  /** A shared, muted ramp for an occupancy figure. Never red — an empty week is not an emergency. */
+  const occTone = (n: number) => n >= 75 ? 'text-emerald-700' : n >= 40 ? 'text-gray-900' : 'text-gray-500'
 
   /**
    * The ONE write in this PR, and it moves no money — it records a preference.
@@ -1198,6 +1296,7 @@ export default function ReportsPage() {
         {([
           {key:'dashboard',label:'📊 Dashboard'},
           {key:'forward',label:'📅 Weeks Ahead'},
+          {key:'occupancy',label:'🛏️ Occupancy'},
           {key:'reservations',label:'🏕️ Reservations'},
           ...(seasonalEnabled ? [{key:'seasonal',label:'⛺ Seasonal'}] : []),
           {key:'transactions',label:'💳 Transactions'},
@@ -1768,6 +1867,214 @@ export default function ReportsPage() {
             </div>
           </div>
         )}
+
+        {/* ── OCCUPANCY TAB — per site type, over any window (R4) ── */}
+        {activeTab==='occupancy'&&(() => {
+          const selected = occType ? (occType==='all' ? occReport.total : occReport.byType.find(t=>t.type===occType)) : null
+          const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+          const barRow = (label: string, value: number, emphasis = false) => (
+            <div key={label} className="flex items-center gap-3">
+              <span className={`text-xs w-10 shrink-0 ${emphasis?'font-bold text-gray-900':'text-gray-500'}`}>{label}</span>
+              <div className="h-4 bg-gray-100 rounded-full overflow-hidden flex-1">
+                <div className="h-full rounded-full" style={{
+                  width: Math.max(value>0?2:0, value)+'%',
+                  background: emphasis ? SOURCE_COLOR.nightly : '#94A3B8',
+                }}/>
+              </div>
+              <span className={`text-xs tabular-nums w-14 text-right shrink-0 ${emphasis?'font-bold text-gray-900':'text-gray-600'}`}>{pctText(value)}</span>
+            </div>
+          )
+          return (
+          <div className="space-y-6">
+
+            {/* ─────────────── WINDOW PICKER ───────────────
+                Its own, not the page-wide one: a season is the natural window for occupancy, and
+                the header picker cannot reach a season in another year at all. */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-sm font-semibold text-gray-700">Window</span>
+                <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                  {([['this_month','This month'],['ytd','Year to date'],['year','Full year'],['custom','Custom']] as const).map(([k,l])=>(
+                    <button key={k} onClick={()=>setOccMode(k)} className="px-3 py-1.5 text-xs font-medium transition-colors"
+                      style={occMode===k?{background:'#2E6B8A',color:'#fff'}:{background:'#fff',color:'#6b7280'}}>{l}</button>
+                  ))}
+                </div>
+                {occMode==='year'&&(
+                  <select value={occYear} onChange={e=>setOccYear(Number(e.target.value))}
+                    className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white">
+                    {occYears.map(y=><option key={y} value={y}>{y}</option>)}
+                  </select>
+                )}
+                {occMode==='custom'&&(<>
+                  <input type="date" value={occStart} onChange={e=>setOccStart(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm"/>
+                  <span className="text-gray-400">to</span>
+                  <input type="date" value={occEnd} onChange={e=>setOccEnd(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm"/>
+                </>)}
+                <span className="text-xs text-gray-400 ml-auto">Showing <span className="font-semibold text-gray-600">{occRangeLabel}</span></span>
+              </div>
+            </div>
+
+            {selected ? (
+              /* ─────────────── ONE TYPE, ON ITS OWN ─────────────── */
+              <>
+                <button onClick={()=>setOccType(null)} className="text-sm font-semibold text-blue-600 hover:underline">← All site types</button>
+
+                <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+                  <h2 className="text-lg font-semibold text-gray-900">{selected.label}</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {selected.units} rentable unit{selected.units!==1?'s':''} · {occRangeLabel}
+                  </p>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-4">
+                    {[
+                      { label:'Avg occupancy', value: selected.units===0?'—':pctText(selected.occupancyPct), sub:`${selected.occupiedNights} of ${selected.availableNights} site-nights` },
+                      { label:'Weekend (Fri/Sat)', value: selected.units===0?'—':pctText(selected.weekendPct), sub:'the nights that price highest' },
+                      { label:'Midweek (Mon–Thu)', value: selected.units===0?'—':pctText(selected.midweekPct), sub:'the nights to fill' },
+                      { label:'Revenue', value: usd(selected.revenueCents), sub:'per-night share of this window' },
+                      { label:'Avg nightly', value: selected.avgNightlyCents===null?'—':usd(selected.avgNightlyCents), sub:'revenue ÷ nights occupied' },
+                    ].map(t=>(
+                      <div key={t.label} className="bg-white rounded-2xl border border-gray-200 p-4">
+                        <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">{t.label}</p>
+                        <p className="text-2xl font-bold text-gray-900">{t.value}</p>
+                        <p className="text-xs text-gray-400 mt-1">{t.sub}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {selected.nightsWithoutRevenue>0&&(
+                    <p className="text-xs text-amber-700 bg-amber-50 ring-1 ring-amber-200 rounded-lg px-3 py-2 mt-4">
+                      {selected.nightsWithoutRevenue} of these nights have no amount recorded anywhere (a camper with no
+                      contract figure), so the average nightly above is a floor rather than the whole picture.
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* The literal "occupancy on Fridays and Saturdays alone" ask. */}
+                  <div className="bg-white rounded-2xl border border-gray-200 p-5">
+                    <h3 className="text-base font-semibold text-gray-900 mb-1">Occupancy by night of the week</h3>
+                    <p className="text-xs text-gray-400 mb-4">Friday and Saturday are highlighted — they are the ones that pay.</p>
+                    <div className="space-y-2">
+                      {selected.byDow.map((v,i)=>barRow(DOW[i], v, i===4||i===5))}
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-gray-200 p-5">
+                    <h3 className="text-base font-semibold text-gray-900 mb-1">Occupancy by month</h3>
+                    <p className="text-xs text-gray-400 mb-4">The shape of the season for {selected.label.toLowerCase()}.</p>
+                    {selected.byMonth.length===0?(
+                      <p className="text-sm text-gray-400 py-6 text-center">No months in this window.</p>
+                    ):(
+                      <div className="space-y-2">
+                        {selected.byMonth.map(m=>barRow(m.label, m.pct))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : (
+              /* ─────────────── ALL TYPES ─────────────── */
+              <>
+                <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+                  <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+                    <h2 className="text-lg font-semibold text-gray-900">How full each kind of site runs</h2>
+                    <span className="text-xs text-gray-400">Click a row to open that type on its own</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mb-4">
+                    Every rentable site, of every type, over {occRangeLabel}. Types are read from your own sites —
+                    nothing to configure.
+                  </p>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm" style={{minWidth:'640px'}}>
+                      <thead>
+                        <tr className="border-b border-gray-100">
+                          {['Site type','Units','Avg occupancy','Weekend (Fri/Sat)','Revenue','Avg nightly'].map((h,i)=>(
+                            <th key={h} className={`py-2 text-gray-500 font-semibold text-xs uppercase tracking-wide ${i===0?'text-left':'text-right'}`}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {occReport.byType.map(t=>(
+                          <tr key={t.type} onClick={()=>setOccType(t.type)}
+                            className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer">
+                            <td className="py-3 font-medium text-gray-900">
+                              {t.label}
+                              {t.type===UNRESOLVED_TYPE&&<span className="ml-2 text-xs text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">needs a site</span>}
+                            </td>
+                            <td className="py-3 text-right text-gray-600 tabular-nums">{t.units||'—'}</td>
+                            {/* ⚠ A percentage needs a denominator. The unassigned bucket has real
+                                occupied nights but NO sites — the park does not list the site
+                                these campers name — so a rate there would be a division by
+                                nothing dressed up as 0%. The nights and money still show. */}
+                            <td className={`py-3 text-right font-semibold tabular-nums ${occTone(t.occupancyPct)}`}>{t.units===0?'—':pctText(t.occupancyPct)}</td>
+                            <td className={`py-3 text-right font-bold tabular-nums ${occTone(t.weekendPct)}`}>{t.units===0?'—':pctText(t.weekendPct)}</td>
+                            <td className="py-3 text-right text-gray-700 tabular-nums">{usd(t.revenueCents)}</td>
+                            <td className="py-3 text-right text-gray-700 tabular-nums">{t.avgNightlyCents===null?'—':usd(t.avgNightlyCents)}</td>
+                          </tr>
+                        ))}
+                        <tr onClick={()=>setOccType('all')} className="border-t-2 border-gray-200 hover:bg-gray-50 cursor-pointer">
+                          <td className="py-3 font-bold text-gray-900">All sites</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{occReport.total.units}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{pctText(occReport.total.occupancyPct)}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{pctText(occReport.total.weekendPct)}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{usd(occReport.total.revenueCents)}</td>
+                          <td className="py-3 text-right font-bold text-gray-900 tabular-nums">{occReport.total.avgNightlyCents===null?'—':usd(occReport.total.avgNightlyCents)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* ⚠ THE LENS, STATED WHERE IT IS READ. This revenue is NOT the dashboard's. */}
+                  <p className="text-xs text-gray-400 mt-4">
+                    <span className="font-semibold text-gray-500">About this revenue:</span> it is a <em>per-night</em> view —
+                    every booking and every season fee is spread evenly across the nights it bought, and only this
+                    window&rsquo;s share is counted. A season fee paid in one cheque shows here as a nightly rate across the
+                    whole season. The dashboard&rsquo;s <em>Money received</em> answers a different question — cash, on the day it
+                    arrived — so the two will not match, and that is correct rather than an error.
+                  </p>
+                </div>
+
+                {/* ─────────────── RECONCILING WITH THE DASHBOARD ─────────────── */}
+                {occTonight&&(
+                  <div className="bg-white rounded-2xl border border-gray-200 p-5">
+                    <h3 className="text-base font-semibold text-gray-900 mb-1">Does this agree with the dashboard?</h3>
+                    <p className="text-sm text-gray-600">
+                      Tonight, <span className="font-semibold">{occTonight.total.occupiedNights} of {occTonight.total.units} rentable
+                      units</span> are occupied — {pctText(occTonight.total.occupancyPct)} across every type.
+                      The dashboard shows <span className="font-semibold">{tonightCount+seasonalCount} of {totalSites} sites</span> ({occupancyPct}%).
+                    </p>
+                    <ul className="text-xs text-gray-500 mt-2 space-y-1 list-disc pl-5">
+                      <li>Same nights, same rule — a guest who checks out this morning occupies neither figure.</li>
+                      <li>The dashboard counts <strong>sites only</strong> against the configured total and reports cabins beside it; this tab counts <strong>every rentable type</strong> against the actual site rows, which is why the two percentages differ.</li>
+                      <li>The dashboard counts every seasonal camper on every night; this tab counts them only on the nights inside their season, which is what makes a nightly rate possible.</li>
+                    </ul>
+                  </div>
+                )}
+
+                {(occReport.unresolvedOccupants.length>0||occReport.undatedOccupants.length>0)&&(
+                  <div className="bg-white rounded-2xl border border-amber-200 p-5">
+                    <h3 className="text-base font-semibold text-gray-900 mb-1">Campers this couldn&rsquo;t place</h3>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Counted, never dropped — but worth tidying, because until they are they sit outside their real site type.
+                    </p>
+                    {occReport.unresolvedOccupants.length>0&&(
+                      <p className="text-sm text-gray-700">
+                        <span className="font-semibold">{occReport.unresolvedOccupants.length} on a site number that doesn&rsquo;t exist:</span>{' '}
+                        {occReport.unresolvedOccupants.join(' · ')}
+                      </p>
+                    )}
+                    {occReport.undatedOccupants.length>0&&(
+                      <p className="text-sm text-gray-700 mt-1">
+                        <span className="font-semibold">{occReport.undatedOccupants.length} with no season dates</span> (so no
+                        particular nights can be attributed): {occReport.undatedOccupants.join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          )
+        })()}
 
         {/* ── RESERVATIONS TAB ── */}
         {activeTab==='reservations'&&(
