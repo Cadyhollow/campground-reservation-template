@@ -244,3 +244,102 @@ test('a VOIDED seasonal charge leaves no debt — what cancel relies on', () => 
   assert.equal(b.byLane.seasonal.charges, 0)
   assert.equal(b.byLane.seasonal.balance, 0)
 })
+
+// ── PR 3c: the folio, the lanes and the account must tell ONE story ──────────────────────────
+//
+// Two bugs found on real sandbox data motivated these, and they are worth naming because both
+// were invisible until the lanes and the folio were put side by side:
+//   1. a VOIDED charge was counted toward the folio's balance (but not the lanes'), so the two
+//      screens disagreed by the whole canceled amount;
+//   2. a kept overpayment credit carried NO lane, so it floated outside every lane and the lanes
+//      stopped summing to the account — a camper could be shown more owing on one lane than they
+//      owed in total.
+
+test('A VOIDED CHARGE COUNTS NOWHERE — not in its lane, not in the account', () => {
+  const withVoid = [
+    { id: 'seas-1', line_total: 250000, lane: 'seasonal', voided: true },  // canceled packet
+    { id: 'pos-1', line_total: 1800, product_id: 'p1' },
+  ]
+  const b = laneBalances(withVoid, [], ctx)
+  assert.equal(b.byLane.seasonal.charges, 0, 'the canceled fee is not owed')
+  assert.equal(b.totalCharges, 1800)
+  assert.equal(b.accountBalance, 1800)
+  // The bug this pins: the folio summed line items raw, so it read 251800 while the lane page
+  // read 1800 — the same camper, two screens, a $2,500 disagreement.
+  const rawSum = withVoid.reduce((s, i) => s + i.line_total, 0)
+  assert.notEqual(rawSum, b.totalCharges)
+})
+
+test('A CREDIT TAGGED TO ITS LANE OFFSETS THAT LANE, and the lanes still sum to the account', () => {
+  const items = [
+    { id: 'pos-1', line_total: 1800, product_id: 'p1' },
+    { id: 'seas-1', line_total: 250000, lane: 'seasonal' },
+  ]
+  // $20 tendered against an $18 store tab, the $2 kept as credit ON THE STORE LANE.
+  const payments = [
+    { amount: 1800, lane: 'store' },
+    { amount: 200, lane: 'store' },
+  ]
+  const b = laneBalances(items, payments, ctx)
+  assert.equal(b.byLane.store.balance, -200, 'the store lane carries the $2 credit')
+  assert.equal(b.untaggedPayments, 0, 'nothing floats outside the lanes')
+  assert.equal(
+    LANES.reduce((s, l) => s + b.byLane[l].balance, 0) - b.untaggedPayments,
+    b.accountBalance,
+    'lane balances less untagged reconcile exactly to the account')
+})
+
+test('AN UNTAGGED CREDIT IS THE CASE THAT BROKE — it must be visible, never absorbed', () => {
+  const items = [{ id: 'pos-1', line_total: 5000, product_id: 'p1' }]
+  const payments = [{ amount: 1200 }]   // a floating credit, as Ortiz's $12 was
+  const b = laneBalances(items, payments, ctx)
+  assert.equal(b.byLane.store.balance, 5000, 'the store lane still reads its full charge…')
+  assert.equal(b.untaggedPayments, 1200, '…and the $12 is reported separately, not hidden')
+  assert.equal(b.accountBalance, 3800, 'while the account is $38')
+  // The screens must therefore SHOW the remainder, which is what makes 5000 and 3800 reconcile.
+  assert.equal(b.byLane.store.balance - b.untaggedPayments, b.accountBalance)
+})
+
+test('MOVING A CREDIT BETWEEN LANES CHANGES NO TOTAL', () => {
+  // What the "Move to" control does: it sets `lane` and nothing else. The account balance is
+  // identical before and after, which is the guarantee that makes the control safe.
+  const items = [
+    { id: 'pos-1', line_total: 5000, product_id: 'p1' },
+    { id: 'e1', line_total: 4200, lane: 'electric' },
+  ]
+  const before = laneBalances(items, [{ amount: 1200, lane: 'store' }], ctx)
+  const after = laneBalances(items, [{ amount: 1200, lane: 'electric' }], ctx)
+
+  assert.equal(before.accountBalance, after.accountBalance, 'the account is untouched by the move')
+  assert.equal(before.totalPayments, after.totalPayments)
+  assert.equal(before.byLane.store.balance, 3800)
+  assert.equal(after.byLane.store.balance, 5000, 'the credit left the store lane')
+  assert.equal(after.byLane.electric.balance, 3000, 'and landed on electric')
+})
+
+test('THE FULL PICTURE RECONCILES: voided charge + lane credit + a floating remainder', () => {
+  // Ortiz, in miniature: a canceled seasonal fee, a store tab, a credit filed on a lane, and one
+  // historical payment still unassigned.
+  const items = [
+    { id: 'seas-void', line_total: 250000, lane: 'seasonal', voided: true },
+    { id: 'pos-1', line_total: 5000, product_id: 'p1' },
+    { id: 'e1', line_total: 4200, lane: 'electric' },
+  ]
+  const payments = [
+    { amount: 4200, lane: 'electric' },  // electric settled
+    { amount: 200, lane: 'store' },      // a credit filed on store
+    { amount: 1000 },                    // historical, still unassigned
+  ]
+  const b = laneBalances(items, payments, ctx)
+
+  assert.equal(b.byLane.seasonal.balance, 0, 'the canceled packet owes nothing')
+  assert.equal(b.byLane.electric.balance, 0, 'electric settled')
+  assert.equal(b.byLane.store.balance, 4800, '$50 tab less the $2 credit')
+  assert.equal(b.untaggedPayments, 1000)
+  assert.equal(b.accountBalance, 3800, '$92 charged (voided excluded) less $54 paid')
+
+  // THE INVARIANT, stated the way the screens must display it:
+  //   every lane balance, less whatever is still unassigned, equals the account.
+  const laneSum = LANES.reduce((s, l) => s + b.byLane[l].balance, 0)
+  assert.equal(laneSum - b.untaggedPayments, b.accountBalance)
+})

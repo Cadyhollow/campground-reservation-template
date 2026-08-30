@@ -7,6 +7,7 @@ import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/Pos
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
 import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
 import { classifyLineItem, normalizeBillingMode, type Lane } from '@/lib/ledger-lanes'
+import { notVoided } from '@/lib/ledger'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useRole } from '@/lib/use-role'
 import { atLeast } from '@/lib/roles'
@@ -45,6 +46,8 @@ type LineItem = {
   /** Phase 4. Explicit lane tag / store signal — both come through select('*'). */
   lane?: string | null
   product_id?: string | null
+  /** PR 3c. A canceled charge. Displayed, never summed. */
+  voided?: boolean | null
 }
 
 type Payment = {
@@ -218,9 +221,12 @@ export default function GuestAccountPage() {
    * Attribute an existing UNTAGGED payment to a lane — Phase 4 PR 3b, Part D.
    *
    * Pure tidy-up. It moves nothing between accounts and changes no amount: it sets `lane` on a
-   * payment that had none, so a payment taken before lanes existed (or through an older path)
-   * can be filed where it belongs. The account balance is untouched by construction — the row's
-   * amount is not read, let alone written.
+   * payment, so a payment taken before lanes existed (or through an older path) can be filed
+   * where it belongs. The account balance is untouched BY CONSTRUCTION — the row's amount is
+   * never read, let alone written; only which lane it offsets changes.
+   *
+   * PR 3c widened it from "file an unassigned payment" to "file OR MOVE one", so a credit
+   * defaulted onto the wrong lane can be corrected. Same gate (canMoveMoney), same guarantee.
    */
   async function assignPaymentLane(paymentId: string, lane: string) {
     if (!folio || !lane) return
@@ -393,7 +399,20 @@ export default function GuestAccountPage() {
     await loadFolioData(folio.id)
   }
 
-  const itemsTotal = lineItems.reduce((sum, i) => sum + i.line_total, 0)
+  // ⚠ PHASE 4 PR 3c — A VOIDED CHARGE MUST NEVER COUNT TOWARD A BALANCE. This filter was
+  // missing here and nowhere else: lib/ledger.ts exports `notVoided` and every other balance in
+  // the app applies it, but this page summed line items raw. A camper with a canceled seasonal
+  // packet showed the canceled fee as still owing, and a member of staff reading this page would
+  // have asked them for money they do not owe.
+  //
+  // APPLIED IN BOTH BILLING MODES, deliberately, and it is the one change in this PR that is not
+  // gated on `separated`: a canceled charge is wrong to count anywhere, and a combined park with
+  // a voided row has exactly the same bug. On a folio with no voided rows the filter removes
+  // nothing and the figure is identical to before.
+  //
+  // Filtered at the SUM, not at the query — the rows stay in the history below, struck through,
+  // so the audit trail still shows the charge was deliberately canceled rather than missing.
+  const itemsTotal = lineItems.filter(notVoided).reduce((sum, i) => sum + i.line_total, 0)
   const paymentsTotal = payments.reduce((sum, p) => sum + p.amount - (p.surcharge_amount || 0), 0)
   const totalDue = Math.max(0, itemsTotal - paymentsTotal)
   const overpaid = paymentsTotal > itemsTotal ? paymentsTotal - itemsTotal : 0
@@ -423,6 +442,9 @@ export default function GuestAccountPage() {
     // Negative on refund rows, hence the sign check at render.
     feeAmount?: number
     amount: number
+    /** PR 3c. A canceled charge: still DISPLAYED (struck through) as the audit trail, but
+     *  excluded from the running balance and from every total. */
+    voided?: boolean
     itemId?: string
     paymentId?: string
     // The row itself, and what it can still hand back. Same guard the main folio uses: the
@@ -434,7 +456,7 @@ export default function GuestAccountPage() {
   const ledgerEvents: LedgerEvent[] = []
   let _lOrder = 0
   lineItems.forEach((item) => {
-    ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, itemId: item.id, balanceAfter: 0 })
+    ledgerEvents.push({ key: `item-${item.id}`, kind: 'charge', ts: item.charged_at ? new Date(item.charged_at).getTime() : 0, order: _lOrder++, label: item.description + (item.quantity > 1 ? ` ×${item.quantity}` : ''), sub: fmtLedgerDate(item.charged_at), note: item.notes, taxAmount: item.tax_amount, amount: item.line_total, voided: !notVoided(item), itemId: item.id, balanceAfter: 0 })
   })
   payments.forEach((p) => {
     // A refund row is itself a payment event with a negative amount; folioPaymentRefundable
@@ -445,6 +467,8 @@ export default function GuestAccountPage() {
   ledgerEvents.sort((a, b) => a.ts - b.ts || a.order - b.order)
   let _lBal = 0
   ledgerEvents.forEach(ev => {
+    // A voided charge moves the balance by nothing — it is shown for the record only.
+    if (ev.voided) { ev.balanceAfter = _lBal; return }
     if (ev.kind === 'charge') _lBal += ev.amount
     else _lBal -= ev.amount
     ev.balanceAfter = _lBal
@@ -486,7 +510,10 @@ export default function GuestAccountPage() {
                 return (
                   <div key={ev.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid #f3f4f6', background: isPay ? '#f0fdf4' : '#fff', borderLeft: isPay ? '3px solid #15803d' : '3px solid transparent' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 500 }}>{ev.label}</div>
+                      <div style={{ fontSize: 14, fontWeight: 500, textDecoration: ev.voided ? 'line-through' : 'none', color: ev.voided ? '#9ca3af' : undefined }}>
+                        {ev.label}
+                        {ev.voided && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: '0.05em', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 4px', textDecoration: 'none', verticalAlign: 'middle' }}>VOIDED</span>}
+                      </div>
                       <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.sub}{isPay ? ' · payment' : ' · charge'}</div>
                       {ev.note && <div style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginTop: 1 }}>{ev.note}</div>}
                       {ev.taxAmount && ev.taxAmount > 0 ? <div style={{ fontSize: 11, color: '#9ca3af' }}>incl. ${(ev.taxAmount/100).toFixed(2)} tax</div> : null}
@@ -496,7 +523,7 @@ export default function GuestAccountPage() {
                           at right is the base. See the staff folio for the full reasoning. */}
                       {ev.feeAmount ? <div style={{ fontSize: 11, color: '#9ca3af' }}>{ev.feeAmount < 0 ? `$${(Math.abs(ev.feeAmount)/100).toFixed(2)} transaction fee refunded` : `plus $${(ev.feeAmount/100).toFixed(2)} transaction fee charged`}</div> : null}
                     </div>
-                    <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 600, color: isPay ? '#15803d' : '#111827' }}>
+                    <div style={{ width: 80, textAlign: 'right', fontSize: 14, fontWeight: 600, color: ev.voided ? '#9ca3af' : isPay ? '#15803d' : '#111827', textDecoration: ev.voided ? 'line-through' : 'none' }}>
                       {/* A refund is a payment event with a NEGATIVE amount, so the literal
                           '−' was prepended to an already-negative number: "−$-36.00". This
                           could not render before — the query filtered refund rows out — so
@@ -532,11 +559,13 @@ export default function GuestAccountPage() {
     { key: 'store', label: 'Store', blurb: 'Camp store purchases' },
     { key: 'seasonal', label: 'Seasonal', blurb: 'Site fee for the season' },
     { key: 'other', label: 'Other charges', blurb: 'Anything not in a lane above' },
-    { key: 'unassigned', label: 'Not assigned to a lane', blurb: 'Payments taken before lanes, or on the whole account' },
+    { key: 'unassigned', label: 'Not assigned to a lane', blurb: 'Credits and payments that belong to the account rather than one lane — file them in a tap' },
   ]
   const laneGroups = LANE_SECTIONS.map(sec => {
     const events = ledgerEvents.filter(ev => laneOf(ev) === sec.key)
-    const charges = events.filter(e => e.kind === 'charge').reduce((s, e) => s + e.amount, 0)
+    // Voided charges are shown in the group but excluded from its subtotal, exactly as they are
+    // excluded from itemsTotal — otherwise a lane would disagree with the account it rolls up to.
+    const charges = events.filter(e => e.kind === 'charge' && !e.voided).reduce((s, e) => s + e.amount, 0)
     const paid = events.filter(e => e.kind === 'payment').reduce((s, e) => s + e.amount, 0)
     return { ...sec, events, charges, paid, subtotal: charges - paid }
   }).filter(g => g.events.length > 0)
@@ -653,20 +682,25 @@ export default function GuestAccountPage() {
                   {group.events.map(ev => (
                     <div key={ev.key}>
                       {ledgerRow(ev)}
-                      {/* PART D — file a stray untagged payment. Sets `lane` and nothing else:
-                          no amount moves, so the account balance cannot change. */}
-                      {group.key === 'unassigned' && ev.paymentId && ev.payment?.status === 'completed' && canMoveMoney && (
+                      {/* FILE OR MOVE a payment's lane (Part D, widened in PR 3c). Sets `lane`
+                          and nothing else: no amount moves, so the account balance cannot change
+                          — only which lane the money offsets. Offered on every payment row now,
+                          not just unassigned ones, so a credit filed onto the wrong lane can be
+                          corrected in a tap. */}
+                      {ev.paymentId && ev.payment?.status === 'completed' && canMoveMoney && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px 10px', background: '#f9fafb', borderBottom: '1px solid #f3f4f6' }}>
-                          <span style={{ fontSize: 11, color: '#6b7280' }}>File this payment under</span>
+                          <span style={{ fontSize: 11, color: '#6b7280' }}>
+                            {group.key === 'unassigned' ? 'File this payment under' : 'Move to'}
+                          </span>
                           <select
-                            defaultValue=""
+                            value=""
                             disabled={assigningLane === ev.paymentId}
                             onChange={e => e.target.value && assignPaymentLane(ev.paymentId!, e.target.value)}
                             style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}>
-                            <option value="">Choose a lane…</option>
-                            <option value="electric">Electric</option>
-                            <option value="store">Store</option>
-                            <option value="seasonal">Seasonal</option>
+                            <option value="">{group.key === 'unassigned' ? 'Choose a lane…' : 'Another lane…'}</option>
+                            {(['electric', 'store', 'seasonal'] as const)
+                              .filter(l => l !== group.key)
+                              .map(l => <option key={l} value={l}>{l.charAt(0).toUpperCase() + l.slice(1)}</option>)}
                           </select>
                           {assigningLane === ev.paymentId && <span style={{ fontSize: 11, color: '#9ca3af' }}>Filing…</span>}
                         </div>
