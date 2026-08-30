@@ -41,6 +41,18 @@ import {
   pickComparison, computeDelta, headlineRead, isRecordPeriod, monthKey,
   type MonthTotal, type Window,
 } from '@/lib/report-periods'
+// ── REPORTS R3: THE FORWARD LOOK ─────────────────────────────────────────────────────────────
+//
+// lib/occupancy.ts is an EXTRACTION, not a new idea: this page already counted occupancy two
+// different ways, and the heat calendar cannot disagree with the dashboard about how full
+// tonight is. Both now go through the same function.
+import {
+  occupiedOn, fillPercent, mondayOf, addDays, weekStartsFrom, sameWeekLastYear,
+  type StayRow,
+} from '@/lib/occupancy'
+import {
+  buildForwardLook, heatColor, HEAT_LEGEND, PACE_BASIS_LABEL, type WeekPace, type PaceBasis,
+} from '@/lib/forward-look'
 
 type Reservation = {
   id: string
@@ -108,7 +120,9 @@ type GaPaymentRow = {
 type SeasonalGuestRow = { id: string; name: string; email: string; site_number: string }
 /** Named so the places that navigate BETWEEN tabs — the tab bar, the drill-downs R2 adds — can
  *  do it without an `as any` that would hide a typo in a tab name until someone clicked it. */
-type TabKey = 'dashboard'|'reservations'|'seasonal'|'transactions'|'store'
+type TabKey = 'dashboard'|'forward'|'reservations'|'seasonal'|'transactions'|'store'
+/** How many weeks the forward look covers. Eight is roughly the window a nudge can still fill. */
+const WEEKS_AHEAD = 8
 // ── R2 row shapes ────────────────────────────────────────────────────────────────────────────
 // Carried ALL-TIME rather than per-window, because the money view has to answer three questions
 // at once — this period, the comparison period, and "is this a record?" — and a park's payment
@@ -173,6 +187,24 @@ export default function ReportsPage() {
   const [firstRevenueISO, setFirstRevenueISO] = useState<string|null>(null)
   /** The selected window, kept in state so the comparison maths can reach it outside fetchAll. */
   const [win, setWin] = useState<Window>({ startISO: '', endISO: '' })
+  // ── R3 forward-look data ───────────────────────────────────────────────────
+  /** Stays covering the next 8 weeks, and the equivalent 8 weeks a year earlier. */
+  const [fwdRows, setFwdRows] = useState<StayRow[]>([])
+  const [fwdPriorRows, setFwdPriorRows] = useState<StayRow[]>([])
+  const [todayYmd, setTodayYmd] = useState('')
+  /**
+   * The owner's fill target. ⚠ NULL IS THE DEFAULT AND MEANS NO GOAL LINE AND NO GOAL JUDGMENT.
+   * Some owners find a target motivating and others find it a stick, so it is theirs to opt into.
+   */
+  const [goalPct, setGoalPct] = useState<number|null>(null)
+  /** False on a tenant that has not run the R3 migration — the control then explains itself
+   *  rather than offering a save that would fail. Same guarded-select pattern as billing_mode. */
+  const [hasGoalColumn, setHasGoalColumn] = useState(false)
+  const [settingsId, setSettingsId] = useState<string|null>(null)
+  const [goalEditing, setGoalEditing] = useState(false)
+  const [goalDraft, setGoalDraft] = useState('')
+  const [goalSaving, setGoalSaving] = useState(false)
+
   /** Which source row is expanded for drill-down. */
   const [openSource, setOpenSource] = useState<RevenueSource|null>(null)
   const [showBilledDetail, setShowBilledDetail] = useState(false)
@@ -268,12 +300,25 @@ export default function ReportsPage() {
     const { count: seasonalCount } = await supabase.from('guests').select('id', { count: 'exact', head: true }).eq('is_seasonal', true)
     setSeasonalCount(seasonalCount || 0)
 
-    // Tonight occupancy — split cabins vs sites
-    const { data: tonightRes } = await supabase.from('reservations').select('id, sites(site_type)').neq('status','cancelled').lte('arrival_date', today).gte('departure_date', today)
-    const tonightCabinCount = (tonightRes||[]).filter((r:any)=>r.sites?.site_type==='cabin').length
-    const tonightSiteCount = (tonightRes||[]).filter((r:any)=>r.sites?.site_type!=='cabin').length
-    setTonightCount(tonightSiteCount)
-    setTonightCabins(tonightCabinCount)
+    // Tonight occupancy — split cabins vs sites.
+    //
+    // ⚠ `gt('departure_date')`, NOT `gte`, AND THE COUNT NOW GOES THROUGH occupiedOn().
+    //
+    // This query used to match `departure_date >= today`, which counts a guest who checked out
+    // this morning as still occupying a site tonight. That site is empty and sellable. It also
+    // disagreed with this page's OWN monthly occupancy trend, which has always walked
+    // `arrival <= night < departure`.
+    //
+    // R3 draws a calendar of nights, and its cell for today has to equal the figure the dashboard
+    // prints — so there is now exactly one definition of "occupied on this night", in
+    // lib/occupancy.ts, and both callers use it. The dashboard's number can move by the number of
+    // guests departing today; that is the correction, not a regression.
+    const { data: tonightRes } = await supabase.from('reservations')
+      .select('id, arrival_date, departure_date, status, sites(site_type)')
+      .neq('status','cancelled').lte('arrival_date', today).gt('departure_date', today)
+    const tonight = occupiedOn((tonightRes||[]) as unknown as StayRow[], today)
+    setTonightCount(tonight.sites)
+    setTonightCabins(tonight.cabins)
 
     // Future bookings
     const { count: futureRes } = await supabase.from('reservations').select('id', { count: 'exact', head: true }).neq('status','cancelled').gt('arrival_date', today)
@@ -507,6 +552,46 @@ export default function ReportsPage() {
       total: collectedLanes.totalPayments,
     })
 
+    // ── R3: THE NEXT EIGHT WEEKS, AND THE SAME EIGHT WEEKS A YEAR AGO ──────────────────────
+    //
+    // Two narrow queries rather than one clever one. The window starts at the MONDAY OF THE
+    // CURRENT WEEK, not next Monday: it puts today on the calendar, which is what lets an owner
+    // (and a reviewer) check the view against the dashboard's occupancy at a glance.
+    setTodayYmd(today)
+    const fwdFirst = mondayOf(today)
+    const fwdLast = addDays(fwdFirst, WEEKS_AHEAD * 7 - 1)
+    // `gt('departure_date', fwdFirst)` is the night rule expressed in SQL — a stay that departs on
+    // the first night of the window occupies none of it. occupiedOn() re-applies it per night, so
+    // this is only a cheap server-side narrowing, never the definition.
+    const [{ data: fwdData }, { data: fwdPriorData }] = await Promise.all([
+      supabase.from('reservations').select('arrival_date, departure_date, status, created_at, sites(site_type)')
+        .neq('status','cancelled').lte('arrival_date', fwdLast).gt('departure_date', fwdFirst),
+      supabase.from('reservations').select('arrival_date, departure_date, status, created_at, sites(site_type)')
+        .neq('status','cancelled')
+        .lte('arrival_date', sameWeekLastYear(fwdLast)).gt('departure_date', sameWeekLastYear(fwdFirst)),
+    ])
+    setFwdRows((fwdData||[]) as unknown as StayRow[])
+    setFwdPriorRows((fwdPriorData||[]) as unknown as StayRow[])
+
+    // The goal, in its OWN guarded select. A tenant that has not run the R3 migration has no
+    // `occupancy_goal_percent` column, and widening the settings select above would make that
+    // whole query fail — taking every figure on this page down with it. Same shape as the
+    // billing_mode reads in app/admin/folio/guest/[id] and /api/electric-bill-email.
+    try {
+      const { data: goalRow, error: goalErr } = await supabase.from('settings')
+        .select('id, occupancy_goal_percent').limit(1).single()
+      if (!goalErr && goalRow) {
+        setHasGoalColumn(true)
+        setSettingsId(goalRow.id)
+        const raw = Number(goalRow.occupancy_goal_percent)
+        // 0 and NULL both read as "no goal": off by default has to mean off, and a stray 0 must
+        // not become a target every week clears.
+        setGoalPct(Number.isFinite(raw) && raw > 0 ? Math.min(100, Math.round(raw)) : null)
+      } else {
+        setHasGoalColumn(false)
+      }
+    } catch { setHasGoalColumn(false) }
+
     // ── R2: EVERYTHING THE MONEY VIEW NEEDS, ALL TIME ──────────────────────────────────────
     //
     // Deliberately NOT scoped to the selected window. The dashboard answers three questions at
@@ -737,6 +822,66 @@ export default function ReportsPage() {
       .map(b => ({ id: 'b-'+b.id, who: b.guest_name || 'Booking', when: b.created_at || '',
                    cents: (b.amount_paid||0)+(b.surcharge_amount||0), method: 'booking' })))
     .sort((a,b) => b.when.localeCompare(a.when))
+
+  // ── R3: THE FORWARD LOOK ───────────────────────────────────────────────────
+  //
+  // The comparison honours the owner's priority order, and lib/forward-look.ts decides it once
+  // for the whole board: a GOAL wins because they chose it; failing that, the same weeks LAST
+  // YEAR at the same lead time; failing that, NO JUDGMENT AT ALL. A park in its first season is
+  // shown its fill levels and left alone.
+  //
+  // `priorAsOfDate` is today minus 364. A week L days out is compared against last year's
+  // equivalent week as it stood L days before ITS start — and because both the week and the
+  // observation slide back by the same 364 days, that date is the same for every week on the
+  // board. Comparing an in-progress week against last year's FINISHED week would mark almost
+  // everything behind, which is the fastest way to make this view ignorable.
+  const forwardLook = buildForwardLook(
+    todayYmd ? weekStartsFrom(todayYmd, WEEKS_AHEAD) : [],
+    fwdRows, fwdPriorRows,
+    {
+      seasonalSites: seasonalCount,
+      totalSites,
+      today: todayYmd,
+      goalPct,
+      priorAsOfDate: todayYmd ? sameWeekLastYear(todayYmd) : null,
+    },
+  )
+
+  /**
+   * The ONE write in this PR, and it moves no money — it records a preference.
+   *
+   * Client-side against `settings`, guarded by RLS, exactly like the Settings page's own save.
+   * Clearing the field removes the goal entirely rather than storing 0, so "off" stays off.
+   */
+  async function saveGoal(next: number|null) {
+    if (!settingsId) return
+    setGoalSaving(true)
+    const { error } = await supabase.from('settings').update({ occupancy_goal_percent: next }).eq('id', settingsId)
+    if (!error) { setGoalPct(next); setGoalEditing(false) }
+    setGoalSaving(false)
+  }
+
+  /**
+   * ⚠ NEVER RED. Same rule as R2: a soft week is amber and matter-of-fact, because an owner
+   * trained to see alarm red for ordinary seasonality stops seeing red at all. Red on this page
+   * belongs to overdue money and nothing else.
+   *
+   * `unknown` — a first-season park with no goal — still CELEBRATES a full week and stays neutral
+   * on an open one, rather than painting the whole board the same flat grey. Being unable to
+   * judge pace is not a reason to be joyless about a week that is nearly sold out.
+   */
+  function paceColor(w: WeekPace): string {
+    if (w.verdict === 'ahead') return '#059669'
+    if (w.verdict === 'behind') return '#D97706'
+    if (w.verdict === 'level') return '#9CA3AF'
+    return w.fill >= 70 ? '#059669' : '#94A3B8'
+  }
+
+  /** 'Sep 7' — how a week is named everywhere in this view. */
+  const weekLabel = (ymdStr: string) => {
+    const [y,m,d] = ymdStr.split('-').map(Number)
+    return new Date(y, m-1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  }
 
   // Today's revenue — from the UNIFIED list (folio + online booking payments) so online
   // reservations count, bucketed by LOCAL day (not the UTC calendar day). Gross of the card
@@ -1052,6 +1197,7 @@ export default function ReportsPage() {
       <div className="flex gap-1 mb-6 border-b border-gray-200 overflow-x-auto">
         {([
           {key:'dashboard',label:'📊 Dashboard'},
+          {key:'forward',label:'📅 Weeks Ahead'},
           {key:'reservations',label:'🏕️ Reservations'},
           ...(seasonalEnabled ? [{key:'seasonal',label:'⛺ Seasonal'}] : []),
           {key:'transactions',label:'💳 Transactions'},
@@ -1190,9 +1336,14 @@ export default function ReportsPage() {
             <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
               <div className="flex items-baseline justify-between gap-3 flex-wrap">
                 <h2 className="text-lg font-semibold text-gray-900">How full you are</h2>
-                <button onClick={()=>setShowOccupancyDetail(true)} className="text-xs font-semibold text-blue-600 hover:underline">
-                  Month by month →
-                </button>
+                <div className="flex items-center gap-4">
+                  <button onClick={()=>setActiveTab('forward')} className="text-xs font-semibold text-blue-600 hover:underline">
+                    Weeks ahead →
+                  </button>
+                  <button onClick={()=>setShowOccupancyDetail(true)} className="text-xs font-semibold text-blue-600 hover:underline">
+                    Month by month →
+                  </button>
+                </div>
               </div>
               <p className="text-3xl md:text-4xl font-bold text-gray-900 mt-2">
                 {occupancyPct}%
@@ -1209,6 +1360,25 @@ export default function ReportsPage() {
                   ? `Seasonal campers hold ${Math.round((seasonalCount/(tonightCount+seasonalCount))*100)}% of the sites you have filled — steady income that does not turn over.`
                   : 'Every occupied site tonight is a nightly booking.'}
               </p>
+
+              {/* R3's headline, carried onto the dashboard so the forward look is one click away
+                  rather than buried behind a tab nobody thinks to open. */}
+              {forwardLook.weeks.length>0 && (
+                <button onClick={()=>setActiveTab('forward')}
+                  className="mt-4 w-full text-left rounded-xl px-4 py-3 ring-1 hover:brightness-[0.98] transition"
+                  style={ forwardLook.behind.length>0
+                    ? {background:'#FFFBEB',boxShadow:'inset 0 0 0 1px #FDE68A'}
+                    : {background:'#ECFDF5',boxShadow:'inset 0 0 0 1px #A7F3D0'} }>
+                  <span className={`text-sm font-semibold ${forwardLook.behind.length>0?'text-amber-800':'text-emerald-800'}`}>
+                    {forwardLook.behind.length>0
+                      ? `👀 ${forwardLook.behind.length} of the next ${WEEKS_AHEAD} weeks ${forwardLook.behind.length!==1?'are':'is'} pacing behind`
+                      : forwardLook.best && forwardLook.best.fill>0
+                        ? `🎉 Your fullest week ahead is ${weekLabel(forwardLook.best.weekStart)} at ${forwardLook.best.fill}%`
+                        : `📅 The next ${WEEKS_AHEAD} weeks, night by night`}
+                  </span>
+                  <span className="block text-xs text-gray-500 mt-0.5">Open Weeks Ahead to see which nights are open →</span>
+                </button>
+              )}
 
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-6 mb-2">Occupancy trend</h3>
               <div style={{width:'100%',overflowX:'auto'}}>
@@ -1373,6 +1543,228 @@ export default function ReportsPage() {
               </h3>
               <p className="text-xs text-gray-400 mb-3">{reportBy==='payment_date'?'When payments were received':'Attributed to arrival month'}</p>
               <BarChart data={monthlyData}/>
+            </div>
+          </div>
+        )}
+
+        {/* ── WEEKS AHEAD TAB — the forward look (R3) ── */}
+        {activeTab==='forward'&&(
+          <div className="space-y-6">
+
+            {/* ─────────────── THE SIGNAL STRIP ───────────────
+                Wins first, deliberately. This view exists to direct attention, and an owner who
+                only ever sees what is wrong stops opening it. */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div className="min-w-0">
+                  <h2 className="text-lg font-semibold text-gray-900">The next {WEEKS_AHEAD} weeks</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {forwardLook.basis==='none'
+                      ? 'Showing how full each week is. No comparison yet.'
+                      : <>Pace measured against <span className="font-semibold text-gray-500">{forwardLook.basisLabel}</span>.</>}
+                  </p>
+                </div>
+
+                {/* ── ADD A GOAL — opt-in, and off by default ── */}
+                <div className="shrink-0">
+                  {!hasGoalColumn ? (
+                    <span className="text-xs text-gray-400">Goals need the R3 database update.</span>
+                  ) : goalEditing ? (
+                    <div className="flex items-center gap-2">
+                      <input type="number" min={1} max={100} autoFocus value={goalDraft}
+                        onChange={e=>setGoalDraft(e.target.value)}
+                        placeholder="70"
+                        className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm"/>
+                      <span className="text-sm text-gray-500">% full</span>
+                      <button disabled={goalSaving}
+                        onClick={()=>{const n=Math.round(Number(goalDraft)); saveGoal(Number.isFinite(n)&&n>0?Math.min(100,n):null)}}
+                        className="px-3 py-1.5 rounded-lg text-white text-xs font-bold" style={{background:'#059669'}}>
+                        {goalSaving?'Saving…':'Save'}
+                      </button>
+                      {goalPct!==null&&(
+                        <button disabled={goalSaving} onClick={()=>saveGoal(null)}
+                          className="text-xs text-gray-500 hover:underline">Remove</button>
+                      )}
+                      <button onClick={()=>setGoalEditing(false)} className="text-xs text-gray-400 hover:underline">Cancel</button>
+                    </div>
+                  ) : goalPct===null ? (
+                    <button onClick={()=>{setGoalDraft('');setGoalEditing(true)}}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
+                      + Add a goal
+                    </button>
+                  ) : (
+                    <button onClick={()=>{setGoalDraft(String(goalPct));setGoalEditing(true)}}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100">
+                      Goal: {goalPct}% full · Edit
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                {forwardLook.best && forwardLook.best.fill > 0 && (
+                  <p className="text-sm md:text-base rounded-xl bg-emerald-50 ring-1 ring-emerald-200 text-emerald-800 px-4 py-2.5">
+                    🎉 <span className="font-semibold">The week of {weekLabel(forwardLook.best.weekStart)} is {forwardLook.best.fill}% full</span>
+                    {forwardLook.best.verdict==='ahead'?' — nicely ahead.'
+                      : forwardLook.best.fill>=70?' — your strongest week on the board.'
+                      : ' — your fullest week ahead.'}
+                  </p>
+                )}
+                {forwardLook.ahead.length>0 && (
+                  <p className="text-sm rounded-xl bg-emerald-50 ring-1 ring-emerald-200 text-emerald-800 px-4 py-2.5">
+                    ✅ <span className="font-semibold">{forwardLook.ahead.length} week{forwardLook.ahead.length!==1?'s are':' is'} ahead of {forwardLook.basisLabel}</span> — whatever you did there, do it again.
+                  </p>
+                )}
+                {/* ⚠ AMBER, AND WORDED AS AN OPPORTUNITY. These are the weeks a nudge can still
+                    fill, which is the whole point of looking eight weeks out. */}
+                {forwardLook.behind.length>0 && (
+                  <p className="text-sm rounded-xl bg-amber-50 ring-1 ring-amber-200 text-amber-800 px-4 py-2.5">
+                    👀 <span className="font-semibold">{forwardLook.behind.length} week{forwardLook.behind.length!==1?'s are':' is'} pacing behind</span> — a nudge now fills {forwardLook.behind.length!==1?'them':'it'}:{' '}
+                    {forwardLook.behind.map(w=>weekLabel(w.weekStart)).join(' · ')}
+                  </p>
+                )}
+                {/* The first-season state: useful, and pointedly not nagging. */}
+                {forwardLook.basis==='none' && (
+                  <p className="text-sm rounded-xl bg-gray-50 ring-1 ring-gray-200 text-gray-600 px-4 py-2.5">
+                    We&rsquo;ll compare to last year once you have one — or add a goal anytime.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* ─────────────── PACE BARS ─────────────── */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-1">How each week is pacing</h2>
+              <p className="text-xs text-gray-400 mb-4">
+                How full each week is. {forwardLook.basis==='goal'
+                  ? 'The dashed line is your goal.'
+                  : forwardLook.basis==='none'
+                    ? 'No comparison line yet — this is simply where each week stands.'
+                    : 'The grey tick on each bar is where ' + forwardLook.basisLabel + ' stood.'}
+              </p>
+              <div style={{width:'100%',overflowX:'auto'}}>
+                {(() => {
+                  const W = forwardLook.weeks, chartH = 170, barW = 44, gap = 22, left = 34
+                  const totalW = left + W.length*(barW+gap) + 16
+                  const y = (pct: number) => 10 + (1 - pct/100)*chartH
+                  return (
+                    <svg width={Math.max(totalW, 320)} height={chartH+58} style={{display:'block'}}>
+                      {[0,50,100].map(pct=>(
+                        <g key={pct}>
+                          <line x1={left-6} y1={y(pct)} x2={totalW-8} y2={y(pct)} stroke="#e5e7eb" strokeWidth={1}/>
+                          <text x={left-9} y={y(pct)+4} textAnchor="end" fontSize={10} fill="#9CA3AF">{pct}%</text>
+                        </g>
+                      ))}
+                      {/* The goal line — drawn ONLY when the owner opted in. */}
+                      {forwardLook.basis==='goal' && goalPct!==null && (
+                        <g>
+                          <line x1={left-6} y1={y(goalPct)} x2={totalW-8} y2={y(goalPct)}
+                            stroke="#059669" strokeWidth={2} strokeDasharray="6 4"/>
+                          <text x={totalW-10} y={y(goalPct)-5} textAnchor="end" fontSize={10} fill="#059669" fontWeight="bold">
+                            goal {goalPct}%
+                          </text>
+                        </g>
+                      )}
+                      {W.map((w,i)=>{
+                        const x = left + i*(barW+gap)
+                        const h = Math.max(2, (w.fill/100)*chartH)
+                        const c = paceColor(w)
+                        return (
+                          <g key={w.weekStart}>
+                            <rect x={x} y={10+chartH-h} width={barW} height={h} fill={c} rx={5}/>
+                            <text x={x+barW/2} y={10+chartH-h-6} textAnchor="middle" fontSize={11} fill="#374151" fontWeight="bold">{w.fill}%</text>
+                            {/* Last year's mark, where there is one. A tick rather than a second
+                                bar: it is a reference point, not a competing quantity. */}
+                            {forwardLook.basis!=='goal' && w.priorFill!==null && (
+                              <g>
+                                <line x1={x-3} y1={y(w.priorFill)} x2={x+barW+3} y2={y(w.priorFill)}
+                                  stroke="#6B7280" strokeWidth={2}/>
+                                <title>{forwardLook.basisLabel}: {w.priorFill}%</title>
+                              </g>
+                            )}
+                            <text x={x+barW/2} y={chartH+30} textAnchor="middle" fontSize={10} fill="#6B7280">{weekLabel(w.weekStart)}</text>
+                            {w.days.some(d=>d.isToday)&&(
+                              <text x={x+barW/2} y={chartH+44} textAnchor="middle" fontSize={9} fill="#9CA3AF">this week</text>
+                            )}
+                          </g>
+                        )
+                      })}
+                    </svg>
+                  )
+                })()}
+              </div>
+              {/* Colour is never the only signal — the verdict is spelled out. */}
+              <div className="flex flex-wrap items-center gap-4 mt-3">
+                {[
+                  { c:'#059669', t: forwardLook.basis==='none' ? 'Filling nicely' : 'Ahead' },
+                  ...(forwardLook.basis==='none' ? [] : [{ c:'#9CA3AF', t:'About level' }]),
+                  ...(forwardLook.basis==='none' ? [{ c:'#94A3B8', t:'Room to fill' }] : [{ c:'#D97706', t:'Worth a nudge' }]),
+                ].map(l=>(
+                  <span key={l.t} className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-sm" style={{background:l.c}} aria-hidden="true"/>
+                    <span className="text-xs text-gray-500">{l.t}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* ─────────────── HEAT CALENDAR ───────────────
+                ⚠ ALWAYS VISIBLE, never behind a click. The bars say WHICH week needs attention;
+                only the calendar says WHICH NIGHTS are open, and that is the thing an owner acts
+                on when they write the post or send the email. */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 md:p-6">
+              <div className="flex items-baseline justify-between gap-3 flex-wrap mb-1">
+                <h2 className="text-lg font-semibold text-gray-900">Which nights are open</h2>
+                <button onClick={()=>setActiveTab('reservations')} className="text-xs font-semibold text-blue-600 hover:underline">
+                  See the bookings →
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mb-4">
+                Every night of the next {WEEKS_AHEAD} weeks. Darker means fuller. Seasonal campers are included, the same way
+                tonight&rsquo;s occupancy counts them.
+              </p>
+
+              <div style={{width:'100%',overflowX:'auto'}}>
+                <div style={{minWidth:'520px'}}>
+                  <div className="grid gap-1 mb-1" style={{gridTemplateColumns:'72px repeat(7, minmax(0,1fr))'}}>
+                    <div/>
+                    {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d=>(
+                      <div key={d} className="text-center text-xs font-semibold text-gray-400 uppercase tracking-wide">{d}</div>
+                    ))}
+                  </div>
+                  {forwardLook.weeks.map(w=>(
+                    <div key={w.weekStart} className="grid gap-1 mb-1 items-stretch" style={{gridTemplateColumns:'72px repeat(7, minmax(0,1fr))'}}>
+                      <div className="flex flex-col justify-center pr-2">
+                        <span className="text-xs font-semibold text-gray-700">{weekLabel(w.weekStart)}</span>
+                        <span className="text-xs" style={{color:paceColor(w)}}>{w.fill}%</span>
+                      </div>
+                      {w.days.map(d=>{
+                        const { bg, fg } = heatColor(d.fill)
+                        return (
+                          <div key={d.date}
+                            title={`${d.date} · ${d.fill}% full · ${d.sites} site${d.sites!==1?'s':''}${d.cabins?` · ${d.cabins} cabin${d.cabins!==1?'s':''}`:''}`}
+                            className={`rounded-md py-2 text-center ${d.isToday?'ring-2 ring-offset-1 ring-blue-500':''}`}
+                            style={{background:bg}}>
+                            <div className="text-[10px] leading-none opacity-80" style={{color:fg}}>{Number(d.date.slice(8,10))}</div>
+                            {/* The percentage is PRINTED in every cell: the shade is the pattern,
+                                the number is the answer. */}
+                            <div className="text-xs font-bold leading-tight mt-0.5" style={{color:fg}}>{d.fill}%</div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 mt-4 flex-wrap">
+                <span className="text-xs text-gray-500">Empty</span>
+                {HEAT_LEGEND.map(l=>(
+                  <span key={l.bg} className="w-7 h-4 rounded-sm border border-gray-100" style={{background:l.bg}} aria-hidden="true"/>
+                ))}
+                <span className="text-xs text-gray-500">Full</span>
+                <span className="text-xs text-gray-400 ml-2">· today is outlined in blue</span>
+              </div>
             </div>
           </div>
         )}
