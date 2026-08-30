@@ -23,6 +23,8 @@ import {
   allocateRefund,
   prorateSurcharge,
   countsTowardRefundable,
+  lastIncomingPayment,
+  REFUNDABLE_STATUSES,
   type RefundLedgerRow,
 } from './refundable.ts'
 import { BOOKING_REFUND_REF, folioRefundRef } from './refundable.ts'
@@ -452,4 +454,120 @@ test('allocate: deterministic — same inputs, same split', () => {
   const a = allocateRefund(5000, r.legs)
   const b = allocateRefund(5000, r.legs)
   assert.deepEqual(a.map(x => [x.leg.paymentId, x.amountCents]), b.map(x => [x.leg.paymentId, x.amountCents]))
+})
+
+
+// ── ONE PAYMENT-COUNTING RULE, AND ONE "LAST PAYMENT" ────────────────────────────────────────
+//
+// The folio, the receipt, the Reports page and the seasonal camper page all show a balance for
+// the same folio. They must reach it the same way or one of them is lying to somebody. These
+// tests pin the two halves of that: which rows count toward a balance, and which single row may
+// be shown as "Last payment".
+
+// The formula every one of those surfaces uses, written once here so the tests below compare
+// against the shared rule rather than against a copy of one screen's code.
+const balanceOf = (rows: RefundLedgerRow[]) =>
+  rows.filter(countsTowardRefundable).reduce((s, p) => s + (p.amount || 0) - (p.surcharge_amount || 0), 0)
+// What the camper page used to do, and the only surface still doing it before this change.
+const completedOnly = (rows: RefundLedgerRow[]) =>
+  rows.filter(r => r.status === 'completed').reduce((s, p) => s + (p.amount || 0) - (p.surcharge_amount || 0), 0)
+
+test('A PARTIAL REFUND IS WHERE COUNTING ONLY completed GOES WRONG', () => {
+  // $500 taken, $50 handed back. /api/refund flips the ORIGINAL to 'partially_refunded' and
+  // inserts a −$50 row, so matching status='completed' drops BOTH and counts nothing at all —
+  // the camper reads as having paid $0 of their $500.
+  const rows: RefundLedgerRow[] = [
+    { id: 'p1', amount: 50000, status: 'partially_refunded' },
+    { id: 'r1', amount: -5000, status: 'refunded', reference_number: 'refund-of:p1' },
+  ]
+  assert.equal(balanceOf(rows), 45000, 'the shared rule keeps what the business kept')
+  assert.equal(completedOnly(rows), 0, 'the old rule lost the entire payment')
+  assert.notEqual(balanceOf(rows), completedOnly(rows), 'this is the disagreement being closed')
+})
+
+test('a FULL refund nets to zero either way — which is why one test case cannot prove this fix', () => {
+  // Worth pinning explicitly: on a fully-refunded payment the two rows cancel, so the old rule
+  // and the shared rule agree by coincidence. A sandbox camper with a full refund therefore
+  // demonstrates nothing about the balance; the partial case above is the one that bites.
+  const rows: RefundLedgerRow[] = [
+    { id: 'p1', amount: 9500, status: 'refunded' },
+    { id: 'r1', amount: -9500, status: 'refunded', reference_number: 'refund-of:p1' },
+  ]
+  assert.equal(balanceOf(rows), 0)
+  assert.equal(completedOnly(rows), 0)
+})
+
+test('a camper with no refunds is completely unaffected', () => {
+  const rows: RefundLedgerRow[] = [
+    { id: 'p1', amount: 210000, status: 'completed' },
+    { id: 'p2', amount: 9500, surcharge_amount: 300, status: 'completed' },
+  ]
+  assert.equal(balanceOf(rows), completedOnly(rows), 'no refund rows, so nothing changes')
+  assert.equal(balanceOf(rows), 219200, 'and the surcharge is still netted out')
+})
+
+test('a voided payment stays out of the balance', () => {
+  const rows: RefundLedgerRow[] = [
+    { id: 'p1', amount: 10000, status: 'completed' },
+    { id: 'p2', amount: 99999, status: 'voided' },
+  ]
+  assert.equal(balanceOf(rows), 10000, 'a voided payment never happened')
+  assert.ok(!REFUNDABLE_STATUSES.includes('voided'))
+})
+
+// ── lastIncomingPayment ──────────────────────────────────────────────────────────────────────
+
+test('LAST PAYMENT IS NEVER A REFUND ROW', () => {
+  // The bug this guards: once refund rows are counted, the newest row can be the negative one,
+  // and the camper page would print "Last payment −$95.00".
+  const rows = [
+    { id: 'r1', amount: -9500, status: 'refunded', paid_at: '2026-08-30T12:00:00Z' },
+    { id: 'p1', amount: 9500, status: 'refunded', paid_at: '2026-08-29T12:00:00Z' },
+  ]
+  assert.equal(lastIncomingPayment(rows)?.id, 'p1', 'the refund is money going the other way')
+})
+
+test('a PARTIALLY REFUNDED payment is still the last payment', () => {
+  // Selecting on status instead of sign would hide this and show "—" to a camper who paid $500.
+  const rows = [
+    { id: 'p1', amount: 50000, status: 'partially_refunded', paid_at: '2026-08-20T12:00:00Z' },
+    { id: 'r1', amount: -5000, status: 'refunded', paid_at: '2026-08-21T12:00:00Z' },
+  ]
+  assert.equal(lastIncomingPayment(rows)?.id, 'p1')
+})
+
+test('a FULLY refunded payment is still shown — it really happened', () => {
+  const rows = [{ id: 'p1', amount: 9500, status: 'refunded', paid_at: '2026-08-20T12:00:00Z' }]
+  assert.equal(lastIncomingPayment(rows)?.id, 'p1')
+})
+
+test('IT SORTS ITSELF — a tied timestamp must not decide this by luck', () => {
+  // Okafor Family on the sandbox: the payment and its refund share one timestamp, so the
+  // database is free to return either first. Order must not change the answer.
+  const paid = { id: 'p1', amount: 9500, status: 'refunded', paid_at: '2026-08-30T17:45:59Z' }
+  const refund = { id: 'r1', amount: -9500, status: 'refunded', paid_at: '2026-08-30T17:45:59Z' }
+  assert.equal(lastIncomingPayment([refund, paid])?.id, 'p1')
+  assert.equal(lastIncomingPayment([paid, refund])?.id, 'p1')
+
+  // And a caller that hands rows over oldest-first still gets the NEWEST payment back.
+  const older = { id: 'old', amount: 100, status: 'completed', paid_at: '2026-01-01T00:00:00Z' }
+  const newer = { id: 'new', amount: 200, status: 'completed', paid_at: '2026-06-01T00:00:00Z' }
+  assert.equal(lastIncomingPayment([older, newer])?.id, 'new')
+  assert.equal(lastIncomingPayment([newer, older])?.id, 'new')
+})
+
+test('no incoming payment at all reads as none, not as a refund', () => {
+  assert.equal(lastIncomingPayment([]), null)
+  assert.equal(lastIncomingPayment(null), null)
+  assert.equal(lastIncomingPayment(undefined), null)
+  assert.equal(lastIncomingPayment([{ id: 'r1', amount: -5000, paid_at: '2026-08-30T12:00:00Z' }]), null)
+  assert.equal(lastIncomingPayment([{ id: 'z', amount: 0, paid_at: '2026-08-30T12:00:00Z' }]), null,
+    'a zero-amount row is not money coming in')
+})
+
+test('a missing paid_at does not crash or win', () => {
+  const undated = { id: 'undated', amount: 500 }
+  const dated = { id: 'dated', amount: 500, paid_at: '2026-05-01T00:00:00Z' }
+  assert.equal(lastIncomingPayment([undated, dated])?.id, 'dated')
+  assert.equal(lastIncomingPayment([undated])?.id, 'undated', 'still shown when it is all there is')
 })
