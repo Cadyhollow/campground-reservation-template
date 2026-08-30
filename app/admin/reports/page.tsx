@@ -11,7 +11,21 @@ const supabase = createBrowserSupabase()
 import { useRouter } from 'next/navigation'
 import { fetchUnifiedTransactions, ymd, dayStartUTC, dayEndUTC, allPaymentMethods, methodLabel, methodColor, type UnifiedPayment } from '@/lib/transactions'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
-import { folioPaymentRefundable } from '@/lib/refundable'
+import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
+// ── REPORTS R1: THE NUMBERS HAVE TO RECONCILE ────────────────────────────────────────────────
+//
+// Everything below is IMPORTED, never reimplemented here. `notVoided` is the app's one
+// void-filter idiom; lib/ledger-lanes.ts is the classifier the folio, the receipt and the
+// electric bill already use. A report that decides for itself what a charge is FOR, or which
+// charges count, is a report that disagrees with the folio it was built from — which is the
+// fastest way to lose an owner. lib/ledger.ts, booking-quote.ts and pricing.ts are untouched.
+import { notVoided } from '@/lib/ledger'
+import { laneBalances, LANES, type Lane, type LaneBalances } from '@/lib/ledger-lanes'
+import { LANE_LABEL, LANE_COLOR, SEASONAL_CAMPER_LANES } from '@/lib/lane-display'
+import {
+  bucketGuestAccountCharges, rollUpLanes, segmentOf,
+  type Segment, type GuestAccountBuckets,
+} from '@/lib/report-buckets'
 
 type Reservation = {
   id: string
@@ -48,6 +62,8 @@ type LineItemRow = {
   tax_amount: number
   charged_at: string
   voided?: boolean
+  product_id?: string | null
+  lane?: string | null
 }
 type SeasonalCamper = {
   id: string
@@ -55,8 +71,26 @@ type SeasonalCamper = {
   email: string
   site_number: string
   folioId: string
+  /** The WHOLE-ACCOUNT balance — identical to what this camper's folio prints. Negative = credit. */
   balance: number
+  /** The same money grouped by lane. Groups `balance`; never replaces or restates it. */
+  lanes: LaneBalances
 }
+/** One lane's money collected inside the selected period, across seasonal campers. */
+type LaneCollected = { byLane: Record<Lane, number>; untagged: number; total: number }
+// The rows the R1 queries read. Named rather than `any` because the lane classifier's answer
+// depends on exactly these columns being present — a select that quietly drops `voided`,
+// `product_id` or `lane` is the shape of every bug this PR is fixing, and a type catches it.
+type GaFolioRow = { id: string; guest_id: string | null }
+type GaItemRow = {
+  id: string; folio_id: string; line_total: number
+  voided?: boolean | null; product_id?: string | null; lane?: string | null
+}
+type GaPaymentRow = {
+  folio_id: string; amount: number; surcharge_amount?: number | null
+  lane?: string | null; paid_at?: string | null
+}
+type SeasonalGuestRow = { id: string; name: string; email: string; site_number: string }
 
 const COLORS = ['#2E6B8A','#12c9e5','#C4873C','#2D6A4F','#9B59B6','#E74C3C']
 
@@ -95,9 +129,19 @@ export default function ReportsPage() {
   // Disjoint from folio_payments, so safe to add to payment-date revenue.
   const [bookingPaymentsTotal, setBookingPaymentsTotal] = useState(0)
   const [bookingSurchargeTotal, setBookingSurchargeTotal] = useState(0)
-  const [guestAccountLineItems, setGuestAccountLineItems] = useState<LineItemRow[]>([])
   const [seasonalCampers, setSeasonalCampers] = useState<SeasonalCamper[]>([])
-  const [monthlyRevenue, setMonthlyRevenue] = useState(0)
+  // Every guest-account charge in the period, partitioned into disjoint buckets — seasonal
+  // (split by lane), long-term/monthly, and everything else. Replaces the old `monthlyRevenue`
+  // number, which overlapped the seasonal figure and was in no total. See lib/report-buckets.ts.
+  const [gaBuckets, setGaBuckets] = useState<GuestAccountBuckets>({
+    bySegment: { seasonal: 0, long_term: 0, other: 0 },
+    seasonalByLane: { electric: 0, store: 0, seasonal: 0, other: 0 },
+    total: 0, unattributed: 0,
+  })
+  // Payments taken from seasonal campers INSIDE the period, by the lane they were filed against.
+  const [laneCollected, setLaneCollected] = useState<LaneCollected>({
+    byLane: { electric: 0, store: 0, seasonal: 0, other: 0 }, untagged: 0, total: 0,
+  })
   const [totalSites, setTotalSites] = useState(84)
   const [totalCabins, setTotalCabins] = useState(3)
   const [tonightCount, setTonightCount] = useState(0)
@@ -241,9 +285,11 @@ export default function ReportsPage() {
       .lte('arrival_date', stayEnd)
       .order('arrival_date')
 
-    // Exclude guest_account folios
-    const { data: allGaFolios } = await supabase.from('folios').select('id').eq('folio_type','guest_account')
-    const allGaFolioIds = (allGaFolios||[]).map((f:any)=>f.id)
+    // Every guest_account folio in the park. `guest_id` comes along now because the reporting
+    // buckets below need to know WHOSE account each folio is — see lib/report-buckets.ts.
+    const { data: allGaFolios } = await supabase.from('folios').select('id, guest_id').eq('folio_type','guest_account')
+    const allGaFolioRows = (allGaFolios||[]) as GaFolioRow[]
+    const allGaFolioIds = allGaFolioRows.map(f=>f.id)
 
     // Fetch ALL payments (including guest_account) for complete picture
     const { data: allPmtData } = await supabase
@@ -285,11 +331,19 @@ export default function ReportsPage() {
     const guestAccountFolioIdSet = new Set(allGaFolioIds)
     const { data: allLiData } = await supabase
       .from('folio_line_items')
-      .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at')
+      // ⚠ `voided` IS NOW SELECTED. It was absent from this column list, so every row read as
+      // un-voided no matter what the database said, and a canceled sale still counted in Sales by
+      // Category and Top Products. `product_id` and `lane` come along so this ONE query can also
+      // feed the guest-account buckets below — the lane classifier needs both, and splitting the
+      // work into a second `.in(…every folio id…)` query would only risk an over-long URL.
+      .select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at, voided, product_id, lane')
       .gte('charged_at', startISO)
       .lte('charged_at', endISO)
-    // Exclude electric billing and seasonal account charges — keep all real store/POS items
-    const storeItems = (allLiData || []).filter((li: any) => {
+    const allPeriodItems = (allLiData||[]) as (GaItemRow & LineItemRow)[]
+    // Exclude electric billing and seasonal account charges — keep all real store/POS items.
+    // `notVoided` is applied at the SUM step everywhere else in this app; here the rows exist
+    // only to be summed, so it is applied as they arrive.
+    const storeItems = allPeriodItems.filter(notVoided).filter(li => {
       if (guestAccountFolioIdSet.has(li.folio_id)) return false
       // Exclude electric billing line items
       if (li.description && li.description.toLowerCase().includes('electric')) return false
@@ -297,53 +351,122 @@ export default function ReportsPage() {
     })
     setLineItems(storeItems as any)
 
-    // Seasonal campers
-    const { data: seasonalGuests } = await supabase.from('guests').select('id, name, email, site_number').eq('is_seasonal', true)
-    const seasonalGuestIds = (seasonalGuests||[]).map((g:any)=>g.id)
-    let gaFolioIds: string[] = []
+    // ── SEASONAL CAMPERS: balances that reconcile to the folio, split into lanes ────────────
+    //
+    // Rewritten from a pair of queries PER CAMPER into three batched reads. Speed is a side
+    // effect; the reason is that the lane classifier needs `id`, `product_id`, `lane` AND the
+    // electric_readings link, and the old `select('line_total')` could not give it any of them.
+    const { data: seasonalGuestsRaw } = await supabase.from('guests').select('id, name, email, site_number').eq('is_seasonal', true)
+    const seasonalGuests = (seasonalGuestsRaw||[]) as SeasonalGuestRow[]
+    const seasonalGuestIds = seasonalGuests.map(g=>g.id)
+    // Hoisted: the same electric signal classifies the camper balances below AND the period
+    // charges further down, so both must be resolved against one set of readings.
+    let laneCtx = { electricLineItemIds: new Set<string>() as ReadonlySet<string> }
+    // Seasonal campers' payments, ALL TIME. The period figure is a filter over these rather than
+    // a second round trip for rows already in hand.
+    let seasonalPmtRows: GaPaymentRow[] = []
+
     if (seasonalGuestIds.length > 0) {
-      const { data: gaFolios } = await supabase.from('folios').select('id, guest_id').eq('folio_type','guest_account').in('guest_id', seasonalGuestIds)
-      gaFolioIds = (gaFolios||[]).map((f:any)=>f.id)
+      const { data: gaFoliosRaw } = await supabase.from('folios').select('id, guest_id').eq('folio_type','guest_account').in('guest_id', seasonalGuestIds)
+      const gaFolios = (gaFoliosRaw||[]) as GaFolioRow[]
+      const gaFolioIds = gaFolios.map(f=>f.id)
 
-      // Build seasonal camper balance list
-      const camperList: SeasonalCamper[] = []
-      for (const guest of (seasonalGuests||[])) {
-        const guestFolios = (gaFolios||[]).filter((f:any)=>f.guest_id===guest.id)
-        if (guestFolios.length === 0) { camperList.push({ id: guest.id, name: guest.name, email: guest.email, site_number: guest.site_number, folioId: '', balance: 0 }); continue }
-        const folioId = guestFolios[0].id
-        const [{ data: items }, { data: pmts }] = await Promise.all([
-          supabase.from('folio_line_items').select('line_total').eq('folio_id', folioId),
-          supabase.from('folio_payments').select('amount, surcharge_amount').eq('folio_id', folioId).eq('status','completed'),
-        ])
-        const itemsTotal = (items||[]).reduce((s:number,i:any)=>s+i.line_total,0)
-        const paymentsTotal = (pmts||[]).reduce((s:number,p:any)=>s+p.amount-(p.surcharge_amount||0),0)
-        const balance = Math.max(0, itemsTotal - paymentsTotal)
-        camperList.push({ id: guest.id, name: guest.name, email: guest.email, site_number: guest.site_number, folioId, balance })
-      }
+      // ALL-TIME, deliberately not date-ranged: a balance is what a camper owes TODAY — the same
+      // figure their folio prints. The period-scoped figures are computed separately, below.
+      const [{ data: allItems }, { data: allPmts }] = gaFolioIds.length ? await Promise.all([
+        supabase.from('folio_line_items').select('id, folio_id, line_total, voided, product_id, lane').in('folio_id', gaFolioIds),
+        // REFUNDABLE_STATUSES, not 'completed' — the same widening app/admin/folio/guest/[id]
+        // and this page's own main payment query already made, and the reason this list can
+        // finally match the folio. Filtering to 'completed' dropped BOTH halves of a refund: the
+        // negative row AND the original, whose status flips to 'refunded'/'partially_refunded'.
+        // A refunded camper therefore read as having paid less than they had, and owing more.
+        // The arithmetic is signed, so including these rows SUBTRACTS them.
+        supabase.from('folio_payments').select('folio_id, amount, surcharge_amount, lane, paid_at, status').in('folio_id', gaFolioIds).in('status', REFUNDABLE_STATUSES),
+      ]) : [{ data: [] }, { data: [] }]
+      const allItemRows = (allItems||[]) as GaItemRow[]
+      seasonalPmtRows = (allPmts||[]) as GaPaymentRow[]
+
+      // The electric signal, exactly as the folio, the receipt and the electric bill resolve it:
+      // the readings that point at these charges. NOT the category — a store item filed under
+      // "Fees" is indistinguishable from an electric charge by category. See lib/ledger-lanes.ts.
+      //
+      // ⚠ KEYED ON guest_id, NOT on the line-item ids. The single-camper callers ask
+      // `.in('folio_line_item_id', …)` because they hold a handful of ids; asking that here would
+      // put EVERY seasonal charge the park has ever written into one URL, which is how a
+      // park-wide report turns into a 414. A reading names its camper, so the same set comes back
+      // keyed on the campers instead. Ids for charges outside this set are simply never looked
+      // up — membership is only ever tested for items we are already classifying.
+      const { data: readings } = await supabase.from('electric_readings')
+        .select('folio_line_item_id').in('guest_id', seasonalGuestIds)
+      laneCtx = { electricLineItemIds: new Set(((readings||[]) as { folio_line_item_id: string | null }[])
+        .map(r=>r.folio_line_item_id).filter(Boolean) as string[]) }
+
+      const itemsByFolio = new Map<string, GaItemRow[]>()
+      for (const i of allItemRows) { const a = itemsByFolio.get(i.folio_id); if (a) a.push(i); else itemsByFolio.set(i.folio_id, [i]) }
+      const pmtsByFolio = new Map<string, GaPaymentRow[]>()
+      for (const pm of seasonalPmtRows) { const a = pmtsByFolio.get(pm.folio_id); if (a) a.push(pm); else pmtsByFolio.set(pm.folio_id, [pm]) }
+
+      const camperList: SeasonalCamper[] = seasonalGuests.map(guest => {
+        const folioId = gaFolios.find(f=>f.guest_id===guest.id)?.id || ''
+        // laneBalances() applies `notVoided` itself, at the sum step — the same idiom the folio
+        // uses. That single call is the whole Part A fix for this list: a camper with a canceled
+        // packet used to read too high here and disagree with their own account.
+        const lanes = laneBalances(itemsByFolio.get(folioId) || [], pmtsByFolio.get(folioId) || [], laneCtx)
+        return {
+          id: guest.id, name: guest.name, email: guest.email, site_number: guest.site_number, folioId,
+          // ⚠ NO Math.max(0, …). The old clamp floored every balance at zero, so a camper holding
+          // a credit read as "✓ Current" and this page's own Credit figures were dead code that
+          // could never fire. A credit is real money the park is holding, and the folio shows it.
+          balance: lanes.accountBalance,
+          lanes,
+        }
+      })
       setSeasonalCampers(camperList)
+    } else {
+      // Previously omitted, so a park that unflagged its last seasonal kept the stale list.
+      setSeasonalCampers([])
     }
 
-    let gaPmtData: any[] = []
-    if (gaFolioIds.length > 0) {
-      const { data: gaPmts } = await supabase.from('folio_payments').select('id, paid_at, method, amount, surcharge_amount, status, folio_id').eq('status','completed').gte('paid_at', startISO).lte('paid_at', endISO).in('folio_id', gaFolioIds)
-      gaPmtData = gaPmts || []
-      const { data: gaLiData } = await supabase.from('folio_line_items').select('id, folio_id, category, line_total, description, quantity, unit_price, tax_amount, charged_at').in('folio_id', gaFolioIds).gte('charged_at', startISO).lte('charged_at', endISO)
-      setGuestAccountLineItems(gaLiData as any || [])
-    } else { setGuestAccountLineItems([]) }
+    // ── EVERY GUEST-ACCOUNT DOLLAR IN THE PERIOD, PARTITIONED ──────────────────────────────
+    //
+    // EXACTLY ONE bucket per folio, replacing the two overlapping questions this page used to ask
+    // ("what did seasonal campers spend?" and "what did monthly campers spend?"). Those two
+    // dropped or mis-bucketed real money three different ways; lib/report-buckets.ts documents
+    // each one. The buckets are summed independently of the total they must equal, which is what
+    // proves nothing is lost or counted twice.
+    //
+    // The tie-break — a guest flagged BOTH counts once, as seasonal — is `segmentOf`, so the
+    // rule this page reports by is the one lib/report-buckets.test.ts pins.
+    const { data: monthlyGuestsRaw } = await supabase.from('guests').select('id').eq('is_monthly', true)
+    const monthlyGuestIds = new Set(((monthlyGuestsRaw||[]) as { id: string }[]).map(g=>g.id))
+    const seasonalGuestIdSet = new Set(seasonalGuestIds)
+    const segmentByFolio = new Map<string, Segment>()
+    for (const f of allGaFolioRows) segmentByFolio.set(f.id, segmentOf({
+      is_seasonal: !!f.guest_id && seasonalGuestIdSet.has(f.guest_id),
+      is_monthly: !!f.guest_id && monthlyGuestIds.has(f.guest_id),
+    }))
 
-    // Monthly campers' guest-account charges (for the Monthly Revenue card)
-    const { data: monthlyGuests } = await supabase.from('guests').select('id').eq('is_monthly', true)
-    const monthlyGuestIds = (monthlyGuests||[]).map((g:any)=>g.id)
-    let monthlyCharges = 0
-    if (monthlyGuestIds.length > 0) {
-      const { data: mFolios } = await supabase.from('folios').select('id').eq('folio_type','guest_account').in('guest_id', monthlyGuestIds)
-      const mFolioIds = (mFolios||[]).map((f:any)=>f.id)
-      if (mFolioIds.length > 0) {
-        const { data: mItems } = await supabase.from('folio_line_items').select('line_total').in('folio_id', mFolioIds).gte('charged_at', startISO).lte('charged_at', endISO)
-        monthlyCharges = (mItems||[]).reduce((s:number,i:any)=>s+(i.line_total||0),0)
-      }
-    }
-    setMonthlyRevenue(monthlyCharges)
+    // The guest-account half of the period's charges — the same rows `storeItems` above dropped,
+    // picked out of the one query rather than fetched again. Together the two are an exact
+    // partition of every line item charged in the window.
+    const gaItemRows = allPeriodItems.filter(li => guestAccountFolioIdSet.has(li.folio_id))
+    // bucketGuestAccountCharges applies `notVoided` — a canceled packet counts in no bucket.
+    setGaBuckets(bucketGuestAccountCharges(gaItemRows, segmentByFolio, laneCtx))
+
+    // Payments taken from seasonal campers inside the period, by the lane they were filed
+    // against. Untagged payments are reported as their own figure and never spread across the
+    // lanes — every payment predating Phase 4 is untagged, and inventing a lane for them would
+    // rewrite a park's financial history. Same rule as lib/ledger-lanes.ts.
+    const periodPmts = seasonalPmtRows.filter(pm => !!pm.paid_at && pm.paid_at >= startISO && pm.paid_at <= endISO)
+    // laneBalances() with NO items — it IS the module's own payment-by-lane arithmetic, so
+    // "collected per lane" here is netted of the card surcharge and normalises a lane tag by
+    // exactly the same rule the folio applies. Reusing it beats a second loop that could drift.
+    const collectedLanes = laneBalances([], periodPmts, laneCtx)
+    setLaneCollected({
+      byLane: Object.fromEntries(LANES.map(l=>[l, collectedLanes.byLane[l].payments])) as Record<Lane, number>,
+      untagged: collectedLanes.untaggedPayments,
+      total: collectedLanes.totalPayments,
+    })
 
     if (resData) setReservations(resData as any)
     setCancelledCount(cancelledData?.length || 0)
@@ -364,7 +487,10 @@ export default function ReportsPage() {
     setTxFolioLoading(true)
     setRefundTarget(null)
     const [{ data: items }, { data: pmts }] = await Promise.all([
-      supabase.from('folio_line_items').select('id, folio_id, description, quantity, unit_price, tax_amount, line_total, category, charged_at').eq('folio_id', tx.folio_id).order('charged_at'),
+      // `voided` added. The drawer below already reads `i.voided` to decide what to show — but
+      // the column was never in this select, so it was always `undefined` and the filter passed
+      // every row. The drill-down LOOKED like it excluded voided charges and did not.
+      supabase.from('folio_line_items').select('id, folio_id, description, quantity, unit_price, tax_amount, line_total, category, charged_at, voided').eq('folio_id', tx.folio_id).order('charged_at'),
       supabase.from('folio_payments').select('*').eq('folio_id', tx.folio_id).order('paid_at'),
     ])
     setTxFolioItems(items as any || [])
@@ -411,14 +537,30 @@ export default function ReportsPage() {
   // Revenue sums every row so refunds reduce it, but a refund is not a SALE: counting the
   // negative row would inflate the transaction count and drag the average ticket down.
   const posSales = posPayments.filter(p=>(p.amount||0)>0)
-  // Seasonal = guest_account folios
-  const electricLineItems = guestAccountLineItems.filter(li=>li.description.toLowerCase().includes('electric'))
-  const otherGuestLineItems = guestAccountLineItems.filter(li=>!li.description.toLowerCase().includes('electric'))
-  const electricRevenue = electricLineItems.reduce((s,li)=>s+(li.line_total||0),0)/100
-  const otherGuestRevenue = otherGuestLineItems.reduce((s,li)=>s+(li.line_total||0),0)/100
+  // ── GUEST-ACCOUNT MONEY, IN DISJOINT BUCKETS ───────────────────────────────
+  //
+  // Charges in the selected period, each landing in exactly one bucket. The seasonal slice is
+  // split by LANE using the same classifier the folio uses, so "Electric Revenue" here and the
+  // Electric section of a camper's folio are the same number. Previously these two figures were
+  // split on `description.includes('electric')` — a substring match on free text, which
+  // lib/ledger-lanes.ts documents as the wrong signal: an electric charge is written with
+  // category 'Fees' and no keyword guarantee, while a store item can be described anything.
+  // Charges land in exactly one bucket; the per-lane slice of the seasonal bucket is what the
+  // Seasonal tab reports against, and it comes from the classifier rather than from a keyword.
+  const seasonalRevenue = gaBuckets.bySegment.seasonal/100
+  const longTermRevenue = gaBuckets.bySegment.long_term/100
+  const otherAccountRevenue = gaBuckets.bySegment.other/100
   const seasonalPaymentsRevenue = guestAccountPayments.reduce((s,p)=>s+(p.amount||0),0)/100
-  // Total = res + pos + seasonal (no double counting)
-  const totalCombined = resRevenue + (posEnabled?posRevenue:0) + electricRevenue + otherGuestRevenue
+  // Total = reservations + store + EVERY guest-account bucket.
+  //
+  // ⚠ THE LONG-TERM AND HOUSE-TAB BUCKETS ARE NEW TO THIS SUM. A monthly camper's charges used
+  // to appear only on a "Monthly Revenue" card that was never added to anything, and a plain
+  // guest's house tab appeared nowhere at all — guest_account folios are excluded from store
+  // revenue, and neither the seasonal nor the monthly query matched them. Both were real money
+  // on a real folio that no total on this page contained. By construction this now equals
+  //     resRevenue + posRevenue + gaBuckets.total/100
+  // with no charge counted twice, which is the property lib/report-buckets.test.ts pins.
+  const totalCombined = resRevenue + (posEnabled?posRevenue:0) + seasonalRevenue + longTermRevenue + otherAccountRevenue
   // All payments for method breakdown
   const allPayments = [...transactions]
   const methods = allPaymentMethods(customMethods)
@@ -432,10 +574,28 @@ export default function ReportsPage() {
   // surcharge_amount negative, so a refunded surcharge cancels its original here rather than
   // still reading as collected.
   const totalSurcharge = (allPayments.reduce((s,t)=>s+(t.surcharge_amount||0),0) + bookingSurchargeTotal)/100
+  // What campers OWE and what they hold in CREDIT, kept apart so neither hides the other. Both
+  // now actually fire: the per-camper balance used to be clamped at zero, which made every
+  // credit figure on this page unreachable.
   const outstandingBalance = seasonalCampers.reduce((s,c)=>s+Math.max(0,c.balance),0)/100
   const creditBalance = seasonalCampers.reduce((s,c)=>s+Math.abs(Math.min(0,c.balance)),0)/100
   const overdueCampers = seasonalCampers.filter(c=>c.balance>0)
   const creditCampers = seasonalCampers.filter(c=>c.balance<0)
+
+  // ── THE LANE ROLL-UP — Part B ──────────────────────────────────────────────
+  //
+  // Every camper's own lane split, added up. It GROUPS the balances above; it never restates
+  // them. The invariant lib/report-buckets.test.ts pins is what makes the view safe to publish:
+  //     sum of lane balances − payments applied to the whole account = netBalance
+  // and `netBalance` is, by construction, the sum of the campers' folio balances. So the split
+  // can never imply more or less money than the folios it came from.
+  const laneRollup = rollUpLanes(seasonalCampers.map(c=>c.lanes))
+  const netSeasonalBalance = laneRollup.netBalance/100
+  // The three lanes a seasonal camper is billed for, plus `other` ONLY when it has money in it.
+  // `other` is the classifier's catch-all — a heading over an empty catch-all reads as a lane a
+  // park is supposed to manage, and a hidden non-empty one loses money from the reconciliation.
+  const laneRollupHasOther = laneRollup.byLane.other.charges!==0||laneRollup.byLane.other.payments!==0
+  const shownLanes: Lane[] = [...SEASONAL_CAMPER_LANES, ...(laneRollupHasOther?['other' as Lane]:[])]
 
   // Today's revenue — from the UNIFIED list (folio + online booking payments) so online
   // reservations count, bucketed by LOCAL day (not the UTC calendar day). Gross of the card
@@ -512,9 +672,14 @@ export default function ReportsPage() {
   const productMap: { [key: string]: { name: string; revenue: number; qty: number } } = {}
   lineItems.forEach(li => { const name=li.description||'Unknown'; if (!productMap[name]) productMap[name]={name,revenue:0,qty:0}; productMap[name].revenue+=(li.line_total||0)/100; productMap[name].qty+=li.quantity||0 })
   const topProducts = Object.values(productMap).sort((a,b)=>b.revenue-a.revenue).slice(0,8)
-  const guestCategoryMap: { [key: string]: number } = {}
-  guestAccountLineItems.forEach(li => { const cat=li.description.toLowerCase().includes('electric')?'Electric':(li.category||'Other'); guestCategoryMap[cat]=(guestCategoryMap[cat]||0)+(li.line_total||0)/100 })
-  const guestCategoryData = Object.entries(guestCategoryMap).map(([name,value])=>({name,value})).sort((a,b)=>b.value-a.value)
+  // Seasonal campers' CHARGES in the period, by lane — the same classification their folio uses,
+  // in place of the old `description.includes('electric')` guess. Every lane is drawn in the
+  // shared lane colour and labelled, so the same three words and three colours mean the same
+  // three things on every screen. `other` appears only when it has money in it: it is the
+  // classifier's catch-all, not a lane a park manages.
+  const seasonalLaneChargeData = LANES
+    .map(l => ({ name: LANE_LABEL[l], value: gaBuckets.seasonalByLane[l]/100, color: LANE_COLOR[l] }))
+    .filter(d => d.value !== 0)
 
   // ── Chart Components ───────────────────────────────────────────────────────
   function BarChart({ data }: { data: { label: string; value: number }[] }) {
@@ -541,7 +706,10 @@ export default function ReportsPage() {
     )
   }
 
-  function DonutChart({ data }: { data: { name: string; value: number }[] }) {
+  // `color` is optional: a slice that knows what it represents (a money lane) brings the shared
+  // lane colour with it, so the same lane is the same colour on every screen. Anything else
+  // falls back to the house palette exactly as before.
+  function DonutChart({ data }: { data: { name: string; value: number; color?: string }[] }) {
     if (data.length===0) return <p className="text-gray-400 text-center py-8">No data</p>
     const total=data.reduce((s,d)=>s+d.value,0)
     const cx=80,cy=80,r=65,inner=38
@@ -554,7 +722,7 @@ export default function ReportsPage() {
       const ix1=cx+inner*Math.cos(angle-sweep),iy1=cy+inner*Math.sin(angle-sweep)
       const ix2=cx+inner*Math.cos(angle),iy2=cy+inner*Math.sin(angle)
       const large=sweep>Math.PI?1:0
-      return { path:`M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} L ${ix2} ${iy2} A ${inner} ${inner} 0 ${large} 0 ${ix1} ${iy1} Z`, color:COLORS[i%COLORS.length], ...d }
+      return { path:`M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} L ${ix2} ${iy2} A ${inner} ${inner} 0 ${large} 0 ${ix1} ${iy1} Z`, ...d, color:d.color||COLORS[i%COLORS.length] }
     })
     return (
       <div className="flex flex-col sm:flex-row items-center gap-6">
@@ -588,6 +756,26 @@ export default function ReportsPage() {
       </div>
     )
   }
+
+  // ── LANE PRESENTATION — Part B ─────────────────────────────────────────────
+  //
+  // ⚠ COLOUR IS NEVER THE ONLY SIGNAL. Every swatch is drawn beside LANE_LABEL, so the split
+  // reads correctly with no colour perception at all; the colours are the Okabe–Ito
+  // colourblind-safe set and live in lib/lane-display.ts so the R2 dashboard reuses them and the
+  // language a park learns here holds on every other screen.
+  const LaneSwatch = ({ lane }: { lane: Lane }) => (
+    <span className="inline-flex items-center gap-2 min-w-0">
+      <span className="w-3 h-3 rounded-sm shrink-0" style={{backgroundColor:LANE_COLOR[lane]}} aria-hidden="true"/>
+      <span className="truncate">{LANE_LABEL[lane]}</span>
+    </span>
+  )
+  // ONE rendering of an amount, so a lane line and the account line it rolls up to cannot
+  // disagree about what a credit looks like. Mirrors `money()` on the camper page. `money` keeps
+  // the sign — a refund row can make a "charged" or "paid" column negative, and a figure that
+  // silently dropped its minus would make the column stop adding up.
+  const money = (cents: number) => (cents<0?'−':'')+'$'+(Math.abs(cents)/100).toFixed(2)
+  const balanceText = (cents: number) => cents<0 ? 'Credit '+money(cents) : money(cents)
+  const balanceClass = (cents: number) => cents>0 ? 'text-red-600' : cents<0 ? 'text-blue-600' : 'text-emerald-600'
 
   const dateControls = (
     <div className="flex flex-wrap gap-2 items-center">
@@ -684,8 +872,17 @@ export default function ReportsPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Reservation Revenue" value={'$'+resRevenue.toFixed(2)} sub={reservations.length+' bookings'}/>
               {posEnabled&&<KPICard label="Store Revenue" value={'$'+posRevenue.toFixed(2)} sub={posSales.length+' transactions'} onClick={()=>setActiveTab('store')}/>}
-              <KPICard label="Seasonal Revenue" value={'$'+(electricRevenue+otherGuestRevenue).toFixed(2)} sub="electric + other charges"/>
-              <KPICard label="Monthly Revenue" value={'$'+(monthlyRevenue/100).toFixed(2)} sub="monthly camper charges"/>
+              <KPICard label="Seasonal Revenue" value={'$'+seasonalRevenue.toFixed(2)} sub="seasonal campers' charges" onClick={()=>setActiveTab('seasonal')}/>
+              {/* Renamed from "Monthly Revenue" and, more importantly, now COUNTED. Weekly and
+                  monthly stays are neither a nightly booking nor a seasonal fee; their charges
+                  used to sit on a card of their own that no total included. A camper flagged
+                  both seasonal and monthly is counted once, as seasonal — see
+                  lib/report-buckets.ts. */}
+              <KPICard label="Long-Term / Monthly" value={'$'+longTermRevenue.toFixed(2)} sub="weekly & monthly stays"/>
+              {/* Shown only when a park actually has one: a guest account belonging to someone
+                  who is neither seasonal nor long-term — an ordinary house tab. It was in no
+                  figure on this page before. */}
+              {otherAccountRevenue!==0&&<KPICard label="Other Guest Accounts" value={'$'+otherAccountRevenue.toFixed(2)} sub="house tabs"/>}
               <KPICard label="Outstanding Balances" value={'$'+outstandingBalance.toFixed(2)} sub={overdueCampers.length+' camper'+(overdueCampers.length!==1?'s':'')+' with balance'} color={outstandingBalance>0?'text-red-600':'text-emerald-600'} highlight={outstandingBalance>0} onClick={()=>setActiveTab('seasonal')}/>
               {/* Revenue above is gross, so this is a BREAKOUT of money already counted in it —
                   not an extra amount to add on. Worded that way so the figure can be reconciled
@@ -902,15 +1099,129 @@ export default function ReportsPage() {
           <div className="space-y-6">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <KPICard label="Active Seasonals" value={seasonalCampers.length.toString()} sub="registered this season"/>
-              <KPICard label="Outstanding Balances" value={'$'+outstandingBalance.toFixed(2)} sub={overdueCampers.length+' with balance due'} color={outstandingBalance>0?'text-red-600':'text-emerald-600'} highlight={outstandingBalance>0}/>
-              <KPICard label="Electric Revenue" value={'$'+electricRevenue.toFixed(2)} sub="this period"/>
-              <KPICard label="Other Charges" value={'$'+otherGuestRevenue.toFixed(2)} sub="store + misc"/>
+              <KPICard label="Campers Owe" value={'$'+outstandingBalance.toFixed(2)} sub={overdueCampers.length+' with a balance'} color={outstandingBalance>0?'text-red-600':'text-emerald-600'} highlight={outstandingBalance>0}/>
+              {/* Newly reachable. The per-camper balance used to be clamped at zero, so a camper
+                  holding a credit read as "current" and this figure was permanently $0.00. */}
+              <KPICard label="Credit on Account" value={'$'+creditBalance.toFixed(2)} sub={creditCampers.length+' paid ahead'} color={creditBalance>0?'text-blue-600':undefined}/>
+              <KPICard label="Charges This Period" value={'$'+seasonalRevenue.toFixed(2)} sub="all lanes"/>
             </div>
 
-            {guestCategoryData.length>0&&(
+            {/* ── WHERE THE MONEY SITS — the lane view, answer first ──────────────────────── */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5">
+              <h2 className="text-lg font-semibold text-gray-900">Where seasonal campers&rsquo; money sits</h2>
+              <p className="text-2xl md:text-3xl font-bold mt-2 text-gray-900">
+                {outstandingBalance>0
+                  ? <>Campers owe <span className="text-red-600">${outstandingBalance.toFixed(2)}</span>.</>
+                  : <span className="text-emerald-600">Every seasonal camper is paid up.</span>}
+              </p>
+              <p className="text-sm text-gray-500 mt-1">
+                {overdueCampers.length} of {seasonalCampers.length} account{seasonalCampers.length!==1?'s':''} {overdueCampers.length===1?'has':'have'} a balance
+                {creditBalance>0&&<> · {creditCampers.length} {creditCampers.length===1?'is':'are'} paid ahead by <span className="text-blue-600 font-semibold">${creditBalance.toFixed(2)}</span></>}
+              </p>
+
+              {seasonalCampers.length===0?(
+                <p className="text-gray-400 text-sm py-6">No seasonal campers found</p>
+              ):(<>
+                <p className="text-sm text-gray-500 mt-5 mb-2">Broken down by what the money is <span className="font-semibold text-gray-700">for</span> — the same three lanes a camper sees on their own account:</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm" style={{minWidth:'480px'}}>
+                    <thead>
+                      <tr className="border-b border-gray-100">
+                        <th className="py-2 text-left text-gray-500 font-semibold text-xs uppercase tracking-wide">Lane</th>
+                        <th className="py-2 text-right text-gray-500 font-semibold text-xs uppercase tracking-wide">Charged</th>
+                        <th className="py-2 text-right text-gray-500 font-semibold text-xs uppercase tracking-wide">Paid to this lane</th>
+                        <th className="py-2 text-right text-gray-500 font-semibold text-xs uppercase tracking-wide">Still owed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {shownLanes.map(lane=>{
+                        const t = laneRollup.byLane[lane]
+                        return (
+                          <tr key={lane} className="border-b border-gray-50">
+                            <td className="py-2.5 font-medium text-gray-900"><LaneSwatch lane={lane}/></td>
+                            <td className="py-2.5 text-right text-gray-700">{money(t.charges)}</td>
+                            <td className="py-2.5 text-right text-gray-700">{money(t.payments)}</td>
+                            <td className={`py-2.5 text-right font-semibold ${balanceClass(t.balance)}`}>{balanceText(t.balance)}</td>
+                          </tr>
+                        )
+                      })}
+                      {/* ⚠ THE HONEST LINE, AND THE REASON THE TABLE ADDS UP. A payment taken
+                          before lanes existed names no lane, and this app never guesses one for
+                          it — doing so would rewrite a park's financial history. It pays down
+                          the ACCOUNT, so it is subtracted once, here, rather than spread across
+                          lanes that did not receive it. */}
+                      {laneRollup.untaggedPayments!==0&&(
+                        <tr className="border-b border-gray-50">
+                          <td className="py-2.5 text-gray-500">
+                            <span className="inline-flex items-center gap-2">
+                              <span className="w-3 h-3 rounded-sm shrink-0 border border-gray-300" aria-hidden="true"/>
+                              Paid against the account, not one lane
+                            </span>
+                          </td>
+                          <td className="py-2.5 text-right text-gray-400">—</td>
+                          <td className="py-2.5 text-right text-gray-700">{money(laneRollup.untaggedPayments)}</td>
+                          <td className={`py-2.5 text-right font-semibold ${balanceClass(-laneRollup.untaggedPayments)}`}>{balanceText(-laneRollup.untaggedPayments)}</td>
+                        </tr>
+                      )}
+                      <tr className="border-t-2 border-gray-200">
+                        <td className="py-2.5 font-bold text-gray-900">Net across all seasonal accounts</td>
+                        <td className="py-2.5 text-right font-bold text-gray-900">{money(laneRollup.totalCharges)}</td>
+                        <td className="py-2.5 text-right font-bold text-gray-900">{money(laneRollup.totalPayments)}</td>
+                        <td className={`py-2.5 text-right font-bold ${balanceClass(laneRollup.netBalance)}`}>{balanceText(laneRollup.netBalance)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-xs text-gray-400 mt-3">
+                  The net figure is the sum of every seasonal camper&rsquo;s folio balance, to the cent — canceled charges
+                  excluded, exactly as their folio excludes them. It is <span className="font-semibold text-gray-500">${netSeasonalBalance.toFixed(2)}</span>, which is
+                  what is owed (${outstandingBalance.toFixed(2)}) less what is held in credit (${creditBalance.toFixed(2)}).
+                </p>
+              </>)}
+            </div>
+
+            {/* ── COLLECTED IN THE PERIOD, BY LANE ────────────────────────────────────────── */}
+            {laneCollected.total!==0&&(
               <div className="bg-white rounded-2xl border border-gray-200 p-5">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">Guest Account Revenue Breakdown</h2>
-                <DonutChart data={guestCategoryData}/>
+                <h2 className="text-lg font-semibold text-gray-900">Collected from seasonal campers this period</h2>
+                <p className="text-2xl md:text-3xl font-bold mt-2 text-emerald-600">${(laneCollected.total/100).toFixed(2)}</p>
+                <p className="text-sm text-gray-500 mt-1">Net of the card surcharge, the same way a folio counts a payment.</p>
+                <div className="space-y-3 mt-4">
+                  {LANES.filter(l=>laneCollected.byLane[l]!==0).map(l=>{
+                    const pct = laneCollected.total>0?Math.round((laneCollected.byLane[l]/laneCollected.total)*100):0
+                    return (
+                      <div key={l}>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="font-medium text-gray-700"><LaneSwatch lane={l}/></span>
+                          <span className="font-semibold text-gray-900">{money(laneCollected.byLane[l])} <span className="text-gray-400 font-normal">({pct}%)</span></span>
+                        </div>
+                        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                          <div className="h-full rounded-full" style={{width:pct+'%',backgroundColor:LANE_COLOR[l]}}/>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {laneCollected.untagged!==0&&(
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="font-medium text-gray-500">Not filed against a lane</span>
+                        <span className="font-semibold text-gray-900">{money(laneCollected.untagged)} <span className="text-gray-400 font-normal">({laneCollected.total>0?Math.round((laneCollected.untagged/laneCollected.total)*100):0}%)</span></span>
+                      </div>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full bg-gray-300" style={{width:(laneCollected.total>0?Math.round((laneCollected.untagged/laneCollected.total)*100):0)+'%'}}/>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1">These paid down the whole account. A payment can be filed to a lane from the camper&rsquo;s folio.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {seasonalLaneChargeData.length>0&&(
+              <div className="bg-white rounded-2xl border border-gray-200 p-5">
+                <h2 className="text-lg font-semibold text-gray-900 mb-1">Charges this period, by lane</h2>
+                <p className="text-xs text-gray-400 mb-4">What was billed to seasonal campers between {getDateBounds(dateRange,customStart,customEnd).start} and {getDateBounds(dateRange,customStart,customEnd).end}</p>
+                <DonutChart data={seasonalLaneChargeData}/>
               </div>
             )}
 
@@ -932,12 +1243,32 @@ export default function ReportsPage() {
                   {[...seasonalCampers].sort((a,b)=>b.balance-a.balance).map(c=>(
                     <div key={c.id} onClick={()=>c.folioId&&router.push(`/admin/folio/${c.folioId}`)}
                       className={`grid grid-cols-12 gap-2 px-5 py-3 border-b border-gray-50 hover:bg-gray-50 cursor-pointer items-center ${c.balance>0?'bg-red-50/30':''}`}>
-                      <div className="col-span-5 font-medium text-gray-900 text-sm">{c.name}</div>
+                      <div className="col-span-5 min-w-0">
+                        <div className="font-medium text-gray-900 text-sm truncate">{c.name}</div>
+                        {/* This camper's own three-lane split. Same classifier, same colours and
+                            same words as the roll-up above and as their folio — so an owner can
+                            read one row and open the folio without re-learning anything. Lanes
+                            with no activity are left out rather than printed as $0.00. */}
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
+                          {SEASONAL_CAMPER_LANES.filter(l=>c.lanes.byLane[l].charges!==0||c.lanes.byLane[l].payments!==0).map(l=>(
+                            <span key={l} className="inline-flex items-center gap-1.5 text-xs text-gray-500">
+                              <span className="w-2 h-2 rounded-sm shrink-0" style={{backgroundColor:LANE_COLOR[l]}} aria-hidden="true"/>
+                              {LANE_LABEL[l]} <span className={`font-semibold ${balanceClass(c.lanes.byLane[l].balance)}`}>{balanceText(c.lanes.byLane[l].balance)}</span>
+                            </span>
+                          ))}
+                          {c.lanes.untaggedPayments!==0&&(
+                            <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
+                              <span className="w-2 h-2 rounded-sm shrink-0 border border-gray-300" aria-hidden="true"/>
+                              On account <span className={`font-semibold ${balanceClass(-c.lanes.untaggedPayments)}`}>{balanceText(-c.lanes.untaggedPayments)}</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
                       <div className="col-span-2 text-gray-600 text-sm">{c.site_number}</div>
                       <div className="col-span-3 text-gray-400 text-xs truncate">{c.email}</div>
                       <div className="col-span-2 text-right">
-                        <span className={`text-sm font-bold ${c.balance>0?'text-red-600':c.balance<0?'text-blue-600':'text-emerald-600'}`}>
-                          {c.balance>0?'$'+(c.balance/100).toFixed(2):c.balance<0?'Credit: $'+(Math.abs(c.balance)/100).toFixed(2):'✓ Current'}
+                        <span className={`text-sm font-bold ${balanceClass(c.balance)}`}>
+                          {c.balance===0?'✓ Current':balanceText(c.balance)}
                         </span>
                       </div>
                     </div>
@@ -1241,11 +1572,11 @@ export default function ReportsPage() {
                   <div>
                     <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">Charges</h3>
                     <div className="bg-gray-50 rounded-xl overflow-hidden border border-gray-100">
-                      {txFolioItems.filter(i=>!i.voided).length===0?(
+                      {txFolioItems.filter(notVoided).length===0?(
                         <p className="text-gray-400 text-sm p-4">No line items</p>
                       ):(
                         <>
-                          {txFolioItems.filter(i=>!i.voided).map((item,i,arr)=>(
+                          {txFolioItems.filter(notVoided).map((item,i,arr)=>(
                             <div key={item.id} className={`flex items-center justify-between px-4 py-3 ${i<arr.length-1?'border-b border-gray-100':''}`}>
                               <div>
                                 <p className="text-sm font-medium text-gray-900">{item.description}{item.quantity>1?` ×${item.quantity}`:''}</p>
@@ -1257,7 +1588,7 @@ export default function ReportsPage() {
                           ))}
                           <div className="flex justify-between px-4 py-3 border-t border-gray-200 bg-white">
                             <span className="text-sm font-bold text-gray-900">Subtotal</span>
-                            <span className="text-sm font-bold text-gray-900">${(txFolioItems.filter(i=>!i.voided).reduce((s,i)=>s+i.line_total,0)/100).toFixed(2)}</span>
+                            <span className="text-sm font-bold text-gray-900">${(txFolioItems.filter(notVoided).reduce((s,i)=>s+i.line_total,0)/100).toFixed(2)}</span>
                           </div>
                         </>
                       )}
@@ -1306,8 +1637,14 @@ export default function ReportsPage() {
 
                   {/* Balance summary */}
                   {(() => {
-                    const chargesTotal = txFolioItems.reduce((s,i)=>s+i.line_total,0)
-                    const paymentsTotal = txFolioPayments.filter((p:any)=>p.status==='completed').reduce((s,p)=>s+p.amount-(p.surcharge_amount||0),0)
+                    // `notVoided`, matching the charge list and subtotal directly above it and
+                    // the folio this drawer is a window onto. Without it the drawer showed a
+                    // list of charges and, underneath, a balance that included a charge the list
+                    // had just excluded.
+                    const chargesTotal = txFolioItems.filter(notVoided).reduce((s,i)=>s+i.line_total,0)
+                    // REFUNDABLE_STATUSES, matching the folio: 'completed' alone dropped both
+                    // halves of a refund and overstated what was still due.
+                    const paymentsTotal = txFolioPayments.filter((p:any)=>REFUNDABLE_STATUSES.includes(p.status)).reduce((s,p)=>s+p.amount-(p.surcharge_amount||0),0)
                     const balance = chargesTotal - paymentsTotal
                     return (
                       <div className={`rounded-xl p-4 flex items-center justify-between ${balance>0?'bg-red-50 border border-red-200':'bg-emerald-50 border border-emerald-200'}`}>
