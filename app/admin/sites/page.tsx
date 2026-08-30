@@ -27,6 +27,9 @@ type Site = {
   /** Optional: tenants that predate the pet migration have no such column. */
   pet_friendly?: boolean
   needs_prep?: boolean
+  /** R4b. Optional for the same reason: a tenant that has not run the migration has no column,
+   *  and undefined must keep meaning transient — how every site behaved before it existed. */
+  is_seasonal_site?: boolean
 }
 
 type Category = {
@@ -48,6 +51,7 @@ const emptySite = {
   photo_url_2: null as string | null,
   pet_friendly: false,
   needs_prep: false,
+  is_seasonal_site: false,
 }
 
 export default function SitesPage() {
@@ -74,6 +78,14 @@ export default function SitesPage() {
   // same reasoning as hasPetColumn directly above: the phase-2 migration is deliberately not
   // applied to live tenants, and writing a column that does not exist fails the WHOLE site save.
   const [hasPrepColumn, setHasPrepColumn] = useState(false)
+  // Whether this tenant's `sites` table has is_seasonal_site — the R4b designation. Detected the
+  // same way as the two above, and for the same reason: writing a column that does not exist
+  // fails the WHOLE site save, which would stop an owner editing a rate. It self-activates the
+  // moment a tenant is migrated. See db/migrations/2026-08-30-seasonal-site-flag.sql.
+  const [hasSeasonalSiteColumn, setHasSeasonalSiteColumn] = useState(false)
+  /** Sites ticked for the bulk designation. Empty = the bulk bar is hidden. */
+  const [picked, setPicked] = useState<string[]>([])
+  const [bulkSaving, setBulkSaving] = useState(false)
   // The park's master switch, read only so this page can tell whether the pet controls are worth
   // showing and whether the "no pet-friendly sites" warning is relevant.
   const [petsEnabled, setPetsEnabled] = useState(false)
@@ -88,6 +100,7 @@ export default function SitesPage() {
     setSites(data || [])
     if (data && data.length > 0) setHasPetColumn('pet_friendly' in data[0])
     if (data && data.length > 0) setHasPrepColumn('needs_prep' in data[0])
+    if (data && data.length > 0) setHasSeasonalSiteColumn('is_seasonal_site' in data[0])
     setLoading(false)
 
     // select('*'), not a named column list: on a tenant without the pet columns a named
@@ -146,6 +159,7 @@ export default function SitesPage() {
       photo_url_2: site.photo_url_2 || null,
       pet_friendly: site.pet_friendly || false,
       needs_prep: site.needs_prep || false,
+      is_seasonal_site: site.is_seasonal_site || false,
     })
     setSelectedCategories(siteCategories[site.id] || [])
     setPhoto1File(null)
@@ -185,6 +199,8 @@ export default function SitesPage() {
       ...(hasPetColumn ? { pet_friendly: form.pet_friendly } : {}),
       // Guarded the same way — see hasPrepColumn.
       ...(hasPrepColumn ? { needs_prep: form.needs_prep } : {}),
+      // Guarded the same way — see hasSeasonalSiteColumn.
+      ...(hasSeasonalSiteColumn ? { is_seasonal_site: form.is_seasonal_site } : {}),
     }
 
     let siteId = editingSite?.id
@@ -257,6 +273,34 @@ export default function SitesPage() {
   async function toggleAvailability(site: Site) {
     await supabase.from('sites').update({ is_available: !site.is_available }).eq('id', site.id)
     toast.success(`Site ${site.site_number} ${!site.is_available ? 'activated' : 'deactivated'}`); fetchSites()
+  }
+
+  /**
+   * Flip one site between seasonal and transient — R4b.
+   *
+   * ⚠ CONFIGURATION, NOT MONEY. It records how a park sells a site; it moves nothing and bills
+   * nobody. The Occupancy tab recomputes entirely from these flags, so this single toggle is all
+   * it takes to move a site between the seasonal program and the nightly inventory.
+   */
+  async function toggleSeasonalSite(site: Site) {
+    if (!hasSeasonalSiteColumn) return
+    const next = !site.is_seasonal_site
+    const { error } = await supabase.from('sites').update({ is_seasonal_site: next }).eq('id', site.id)
+    if (error) { toast.error('Could not change that site.'); return }
+    toast.success(`Site ${site.site_number} is now ${next ? 'seasonal' : 'transient'}`)
+    fetchSites()
+  }
+
+  /** The same change across every ticked site — a park designates many at once, not one by one. */
+  async function bulkDesignate(next: boolean) {
+    if (!hasSeasonalSiteColumn || picked.length === 0) return
+    setBulkSaving(true)
+    const { error } = await supabase.from('sites').update({ is_seasonal_site: next }).in('id', picked)
+    setBulkSaving(false)
+    if (error) { toast.error('Could not update those sites.'); return }
+    toast.success(`${picked.length} site${picked.length !== 1 ? 's' : ''} marked ${next ? 'seasonal' : 'transient'}`)
+    setPicked([])
+    fetchSites()
   }
 
   async function handleDelete(site: Site) {
@@ -417,6 +461,17 @@ export default function SitesPage() {
                 be able to mark its cabins before turning the feature on, because the alternative
                 is switching it on, getting nothing, and having no way to see why. The banner at
                 the top of this page covers the other order. */}
+            {/* R4b: how this site is SOLD — by the season or by the night. It drives the whole
+                Occupancy split, and a seasonal site is one an owner sells once a year rather than
+                a hundred times. */}
+            {hasSeasonalSiteColumn && (
+              <div className="flex items-center gap-3">
+                <button type="button" role="switch" aria-checked={!!form.is_seasonal_site} aria-label="Sold for the season" onClick={() => setForm({ ...form, is_seasonal_site: !form.is_seasonal_site })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.is_seasonal_site ? '#0072B2' : '#d1d5db', position: 'relative', flexShrink: 0 }}><span style={{ position: 'absolute', top: '3px', left: form.is_seasonal_site ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} /></button>
+                <label className="text-sm font-medium text-gray-700">
+                  Seasonal site <span className="text-gray-400 font-normal">— sold for the season, not by the night</span>
+                </label>
+              </div>
+            )}
             {hasPrepColumn && (
               <div className="flex items-center gap-3">
                 <button type="button" role="switch" aria-checked={!!form.needs_prep} aria-label="Needs prep before check-in" onClick={() => setForm({ ...form, needs_prep: !form.needs_prep })} style={{ width: '40px', height: '22px', borderRadius: '11px', border: 'none', cursor: 'pointer', backgroundColor: form.needs_prep ? '#15803d' : '#d1d5db', position: 'relative', flexShrink: 0 }}><span style={{ position: 'absolute', top: '3px', left: form.needs_prep ? '21px' : '3px', width: '16px', height: '16px', borderRadius: '50%', backgroundColor: 'white', transition: 'left 0.2s' }} /></button>
@@ -484,6 +539,28 @@ export default function SitesPage() {
         </div>
       )}
 
+      {/* ── R4b BULK DESIGNATION ──────────────────────────────────────────────────
+          A park with 48 seasonal sites is not going to click 48 toggles, and a feature that
+          costs an afternoon to switch on is one that never gets switched on. Appears only when
+          something is ticked, so it is invisible to anyone not doing this. */}
+      {hasSeasonalSiteColumn && picked.length > 0 && (
+        <div className="mb-4 rounded-xl border px-4 py-3 flex flex-wrap items-center gap-3" style={{ background: '#F2F8FC', borderColor: '#B6D6EA' }}>
+          <span className="text-sm font-semibold" style={{ color: '#0072B2' }}>
+            {picked.length} site{picked.length !== 1 ? 's' : ''} selected
+          </span>
+          <button disabled={bulkSaving} onClick={() => bulkDesignate(true)}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg text-white disabled:opacity-50" style={{ background: '#0072B2' }}>
+            {bulkSaving ? 'Saving…' : 'Mark Seasonal'}
+          </button>
+          <button disabled={bulkSaving} onClick={() => bulkDesignate(false)}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-600 disabled:opacity-50">
+            Mark Transient
+          </button>
+          <button onClick={() => setPicked(sites.map(s => s.id))} className="text-xs text-gray-500 hover:underline">Select all</button>
+          <button onClick={() => setPicked([])} className="text-xs text-gray-500 hover:underline ml-auto">Clear</button>
+        </div>
+      )}
+
       {loading ? (
         <div className="text-center py-12 text-gray-400">Loading sites...</div>
       ) : sites.length === 0 ? (
@@ -498,9 +575,21 @@ export default function SitesPage() {
                 {site.photo_url && (
                   <img src={site.photo_url} alt={`Site ${site.site_number}`} className="w-16 h-16 object-cover rounded-lg border border-gray-100 shrink-0" />
                 )}
+                {hasSeasonalSiteColumn && (
+                  <input type="checkbox" aria-label={`Select site ${site.site_number}`}
+                    checked={picked.includes(site.id)}
+                    onChange={e => setPicked(p => e.target.checked ? [...p, site.id] : p.filter(x => x !== site.id))}
+                    className="mt-1 shrink-0 w-4 h-4 accent-blue-600 cursor-pointer" />
+                )}
                 <div className={`w-3 h-3 rounded-full mt-1 shrink-0 ${site.is_available ? 'bg-green-500' : 'bg-gray-300'}`} />
                 <div className="min-w-0">
-                  <p className="font-semibold text-gray-900">{siteTypeLabel(site.site_type)} {site.site_number}</p>
+                  <p className="font-semibold text-gray-900">
+                    {siteTypeLabel(site.site_type)} {site.site_number}
+                    {/* Never colour alone — the word is what says which it is. */}
+                    {hasSeasonalSiteColumn && site.is_seasonal_site && (
+                      <span className="ml-2 align-middle text-xs font-semibold rounded-full px-2 py-0.5" style={{ background: '#E6F0F7', color: '#0072B2' }}>Seasonal</span>
+                    )}
+                  </p>
                   <p className="text-sm text-gray-500">
                     {ampLabel(site.amp_service)} · {hookupLabel(site.hookups)}{site.max_rv_length ? ` · Max ${site.max_rv_length}ft` : ''}
                   </p>
@@ -524,6 +613,15 @@ export default function SitesPage() {
                 <button onClick={() => toggleAvailability(site)} className={`text-xs px-3 py-1 rounded-full font-medium ${site.is_available ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200' : 'bg-green-100 text-green-700 hover:bg-green-200'}`}>
                   {site.is_available ? 'Mark Unavailable' : 'Mark Available'}
                 </button>
+                {hasSeasonalSiteColumn && (
+                  <button onClick={() => toggleSeasonalSite(site)}
+                    className="text-xs px-3 py-1 rounded-full font-medium border"
+                    style={site.is_seasonal_site
+                      ? { background: '#E6F0F7', color: '#0072B2', borderColor: '#B6D6EA' }
+                      : { background: '#fff', color: '#6b7280', borderColor: '#e5e7eb' }}>
+                    {site.is_seasonal_site ? 'Make Transient' : 'Make Seasonal'}
+                  </button>
+                )}
                 <button onClick={() => openEditForm(site)} className="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 font-medium">Edit</button>
                 <button onClick={() => handleDelete(site)} className="text-xs px-3 py-1 rounded-full bg-red-50 text-red-600 hover:bg-red-100 font-medium">Delete</button>
               </div>

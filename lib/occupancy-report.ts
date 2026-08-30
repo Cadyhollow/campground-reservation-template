@@ -26,7 +26,18 @@ export type RentableSite = {
   site_type?: string | null
   /** The flag the booking screens already use to decide a site can be sold. */
   is_available?: boolean | null
+  /**
+   * R4b: sold BY THE SEASON rather than by the night.
+   *
+   * ⚠ OPTIONAL, AND UNDEFINED MEANS TRANSIENT. A park whose database has not had the R4b
+   * migration applied returns rows without this key at all, and every one of them must keep
+   * behaving exactly as it did before the column existed — which is transient.
+   */
+  is_seasonal_site?: boolean | null
 }
+
+/** Strictly `true`. Undefined (un-migrated park) and null both mean transient. */
+export const isSeasonalSite = (s: RentableSite): boolean => s?.is_seasonal_site === true
 
 const norm = (t: unknown): string => (typeof t === 'string' ? t.trim().toLowerCase() : '')
 
@@ -71,6 +82,10 @@ export function typeLabel(type: string): string {
 export type Occupant = {
   key: string
   type: string
+  /** The site number they name, normalised. Empty when they name none. */
+  siteNumber?: string
+  /** True for a SEASONAL camper; false for a monthly or other long-stay one. */
+  seasonal?: boolean
   /** First night held. */
   from: string
   /** ⚠ EXCLUSIVE, exactly like departure_date — the night they leave is not a night they held. */
@@ -189,10 +204,13 @@ export function buildOccupants(
     if (c.guest_id) withContract.add(c.guest_id)
     const range = seasonRange(c, (c.season_id && seasonsById.get(c.season_id)) || null, camper)
     if (!range) { undated.push(who); continue }
+    const sn = norm(c.site_number || camper?.site_number)
     occupants.push({
       key: who,
       // The contract's own site number wins — it is what was agreed for that season.
-      type: resolveSiteType(c.site_number || camper?.site_number, byNumber),
+      type: resolveSiteType(sn, byNumber),
+      siteNumber: sn,
+      seasonal: true,
       from: range.from, to: range.to,
       totalCents: c.total_due_cents || 0,
       revenueUnknown: !c.total_due_cents,
@@ -209,6 +227,8 @@ export function buildOccupants(
     occupants.push({
       key: who,
       type: resolveSiteType(camper.site_number, byNumber),
+      siteNumber: norm(camper.site_number),
+      seasonal: !!camper.is_seasonal,
       from: range.from, to: range.to,
       // ⚠ NO CONTRACT MEANS NO AMOUNT TO ATTRIBUTE, and the schema has nowhere else to look. The
       // nights still count toward occupancy; the missing money is surfaced as
@@ -254,6 +274,123 @@ export const isWeekendNight = (ymd: string): boolean => {
 export const isMidweekNight = (ymd: string): boolean => {
   const d = dowOf(ymd)
   return d >= 1 && d <= 4
+}
+
+// ── THE SEASONAL PROGRAM (R4b) ───────────────────────────────────────────────────────────────
+//
+// ⚠ SEASONAL OCCUPANCY IS NOT A NIGHT-BY-NIGHT NUMBER, and that is the whole point of splitting
+// it out. A seasonal camper holds their site for the entire season, so "how many of tonight's
+// seasonal site-nights were occupied?" is always either 100% or meaningless. The number an owner
+// runs the seasonal business on is a PROGRAM FILL RATIO — 46 of 48 sold — and the two sites that
+// are open are the actionable part of it.
+//
+// Blending that into a nightly average, which is what R4 did, hides both halves: it drags the
+// nightly occupancy up with sites that were never for sale by the night, and it buries the
+// vacancy count entirely.
+
+export type SeasonalTypeLine = { type: string; label: string; total: number; filled: number; open: number }
+
+export type SeasonalProgram = {
+  totalSites: number
+  filled: number
+  open: number
+  /** filled ÷ total, as a whole percent. */
+  fillPct: number
+  /** The site numbers standing empty — the actionable list. */
+  openSites: { siteNumber: string; type: string; label: string }[]
+  byType: SeasonalTypeLine[]
+  /** Every seasonal fee under contract, whatever the window. The roster's value. */
+  contractedCents: number
+  /** Those fees ÷ the nights they buy — blended across however many fee levels a park has. */
+  effectiveNightlyCents: number | null
+  /** The share of those fees falling inside the selected window, prorated per night. */
+  windowRevenueCents: number
+  /** Seasonal campers with no fee on record; excluded from the blend rather than dragging it down. */
+  campersWithoutFee: string[]
+  /** ⚠ Seasonal campers sitting on a site flagged TRANSIENT — a designation to fix, not a number to bury. */
+  onTransientSites: string[]
+  /** Seasonal campers whose site number matches no site at all. */
+  unresolved: string[]
+}
+
+/**
+ * The seasonal program: how much of it is sold, what it is worth, and what is still open.
+ *
+ * ── WHAT "FILLED" MEANS, AND WHY IT IS NOT A DATE QUESTION ───────────────────────────────────
+ *
+ * A seasonal site is FILLED when a seasonal camper is assigned to it, and OPEN when it is not.
+ * That is a roster question, not a calendar one — the park has either sold that site for the
+ * season or it has not, and an owner asking "how many are left?" in February means exactly this.
+ * Restricting it to campers whose season happens to cover today would report a park as entirely
+ * unsold every winter, which is when the question matters most.
+ */
+export function buildSeasonalProgram(
+  sites: RentableSite[] | null | undefined,
+  occupants: Occupant[] | null | undefined,
+  window: { start: string; end: string },
+): SeasonalProgram {
+  const seasonalSites = (sites || []).filter(s => isRentable(s) && isSeasonalSite(s))
+  const flaggedSeasonal = new Set(seasonalSites.map(s => norm(s.site_number)).filter(Boolean))
+  const allSiteNumbers = new Set((sites || []).map(s => norm(s.site_number)).filter(Boolean))
+
+  const seasonalCampers = (occupants || []).filter(o => o.seasonal)
+  const heldNumbers = new Set(seasonalCampers.map(o => o.siteNumber || '').filter(Boolean))
+
+  const openSites = seasonalSites
+    .filter(s => !heldNumbers.has(norm(s.site_number)))
+    .map(s => {
+      const t = norm(s.site_type) || UNRESOLVED_TYPE
+      return { siteNumber: s.site_number || '', type: t, label: typeLabel(t) }
+    })
+
+  const byTypeMap = new Map<string, SeasonalTypeLine>()
+  for (const s of seasonalSites) {
+    const t = norm(s.site_type) || UNRESOLVED_TYPE
+    const line = byTypeMap.get(t) || { type: t, label: typeLabel(t), total: 0, filled: 0, open: 0 }
+    line.total++
+    if (heldNumbers.has(norm(s.site_number))) line.filled++
+    else line.open++
+    byTypeMap.set(t, line)
+  }
+
+  // Money. The blend is of the fees actually on record — a camper with no contract figure is
+  // excluded from BOTH sides of the division rather than counted as free, which would quietly
+  // drag the effective nightly below what any camper is really paying.
+  let contractedCents = 0, feeNights = 0, windowRevenueCents = 0
+  const campersWithoutFee: string[] = []
+  for (const o of seasonalCampers) {
+    let nights = 0
+    for (let d = o.from; d < o.to; d = addDays(d, 1)) { nights++; if (nights > 4000) break }
+    if (!nights) continue
+    if (o.revenueUnknown || !o.totalCents) { campersWithoutFee.push(o.key) }
+    else { contractedCents += o.totalCents; feeNights += nights }
+    const perNight = Math.round((o.totalCents || 0) / nights)
+    for (let d = o.from; d < o.to; d = addDays(d, 1)) {
+      if (d >= window.start && d <= window.end) windowRevenueCents += perNight
+    }
+  }
+
+  return {
+    totalSites: seasonalSites.length,
+    filled: seasonalSites.length - openSites.length,
+    open: openSites.length,
+    fillPct: seasonalSites.length > 0
+      ? Math.round(((seasonalSites.length - openSites.length) / seasonalSites.length) * 100) : 0,
+    openSites,
+    byType: [...byTypeMap.values()].sort((a, b) => b.total - a.total || a.label.localeCompare(b.label)),
+    contractedCents,
+    effectiveNightlyCents: feeNights > 0 ? Math.round(contractedCents / feeNights) : null,
+    windowRevenueCents,
+    campersWithoutFee,
+    // ⚠ Surfaced, never silently reclassified. A seasonal camper on a transient-flagged site is a
+    // designation the park has not made yet, and the fix is one toggle on the Sites screen.
+    onTransientSites: seasonalCampers
+      .filter(o => o.siteNumber && allSiteNumbers.has(o.siteNumber) && !flaggedSeasonal.has(o.siteNumber))
+      .map(o => o.key),
+    unresolved: seasonalCampers
+      .filter(o => !o.siteNumber || !allSiteNumbers.has(o.siteNumber))
+      .map(o => o.key),
+  }
 }
 
 // ── THE REPORT ───────────────────────────────────────────────────────────────────────────────
