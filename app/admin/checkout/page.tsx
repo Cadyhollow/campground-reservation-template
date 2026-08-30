@@ -28,6 +28,7 @@ import { normalizeBillingMode, type Lane } from '@/lib/ledger-lanes'
 import { methodLabel as methodLabelOf } from '@/lib/transactions'
 import type { SeasonalGuestData } from '@/lib/seasonal-types'
 import toast, { Toaster } from 'react-hot-toast'
+import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 
 const supabase = createBrowserSupabase()
 
@@ -84,7 +85,10 @@ export default function LaneCheckoutPage() {
   // later. `checkoutId` non-null IS the waiting state.
   const [terminalDeviceId, setTerminalDeviceId] = useState('')
   const [checkoutId, setCheckoutId] = useState<string | null>(null)
-  const [terminalMsg, setTerminalMsg] = useState('')
+  // Which way a card is being taken. Mirrors the folio's Collect Payment modal: one option is
+  // shown at a time, never both stacked — showing both is what made this screen look cluttered
+  // and duplicated.
+  const [cardEntryMode, setCardEntryMode] = useState<'terminal' | 'manual'>('terminal')
   const [squareErr, setSquareErr] = useState('')
   // `unknown` rather than a Square type: lib/square-card-client owns that shape and this screen
   // only ever calls .attach()/.tokenize() through it.
@@ -175,19 +179,51 @@ export default function LaneCheckoutPage() {
   const selectedLanes = PAYABLE.filter(p => lineFor(p.lane) > 0)
   const creditLaneLabel = selectedLanes.length === 1 ? selectedLanes[0].label : ''
 
-  async function mountCard() {
+  // ⚠ THE CARD FORM RENDERED TWICE, AND THIS IS WHY.
+  //
+  // Square's card.attach() APPENDS an iframe into the container; it does not replace what is
+  // there. React does not own that iframe, so it survives any re-render of the container div.
+  // Mounting was triggered by a button, so a second press — or leaving Card and coming back,
+  // which cleared `cardReady` and put the button back — attached a SECOND form into a container
+  // that still held the first. Two "Card number / MM/YY / CVV" rows, exactly as observed.
+  //
+  // Fixed by making the mount an EFFECT with a real teardown: exactly one form exists while
+  // manual entry is on screen, and it is destroyed the moment it leaves. The ref guard also
+  // makes a double-invoked effect (React StrictMode in development) harmless.
+  useEffect(() => {
+    if (method !== 'card' || cardEntryMode !== 'manual') return
+    let cancelled = false
+    let mounted: { destroy?: () => Promise<void> | void } | null = null
     setSquareErr('')
-    try {
-      const loaded = await loadSquarePayments()
-      if (!loaded.ok) { setSquareErr(loaded.error); return }
-      const card = await loaded.payments.card()
-      await card.attach('#lane-checkout-card')
-      setCardRef(card as never)
-      setCardReady(true)
-    } catch {
-      setSquareErr('The card form could not be loaded. Refresh, or take this payment another way.')
+    ;(async () => {
+      try {
+        const loaded = await loadSquarePayments()
+        if (cancelled) return
+        if (!loaded.ok) { setSquareErr(loaded.error); return }
+        const card = await loaded.payments.card()
+        if (cancelled) { await (card as { destroy?: () => void }).destroy?.(); return }
+        // Belt and braces: if anything was left behind by an earlier mount, clear it before
+        // attaching so a stale iframe can never sit above the live one.
+        const host = document.getElementById('lane-checkout-card')
+        if (host) host.innerHTML = ''
+        await card.attach('#lane-checkout-card')
+        if (cancelled) { await (card as { destroy?: () => void }).destroy?.(); return }
+        mounted = card as { destroy?: () => void }
+        setCardRef(card as never)
+        setCardReady(true)
+      } catch {
+        if (!cancelled) setSquareErr('The card form could not be loaded. Refresh, or take this payment another way.')
+      }
+    })()
+    return () => {
+      cancelled = true
+      void mounted?.destroy?.()
+      const host = document.getElementById('lane-checkout-card')
+      if (host) host.innerHTML = ''
+      setCardRef(null)
+      setCardReady(false)
     }
-  }
+  }, [method, cardEntryMode])
 
   /** The lanes actually being paid, with each one's own surcharge computed from its own amount —
    *  so no proportional allocation and no rounding drift between the charge and the ledger. */
@@ -288,7 +324,7 @@ export default function LaneCheckoutPage() {
    */
   async function sendToTerminal() {
     if (!data?.folioId || baseTotal <= 0) return
-    setSaving(true); setTerminalMsg('')
+    setSaving(true)
     try {
       const res = await fetch('/api/terminal/charge', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -297,55 +333,8 @@ export default function LaneCheckoutPage() {
       const d = await res.json()
       if (!res.ok || !d.checkoutId) { toast.error(d.error || 'Could not reach the terminal.'); setSaving(false); return }
       setCheckoutId(d.checkoutId)
-      setTerminalMsg('Waiting for the customer to tap on the terminal…')
     } catch { toast.error('Could not reach the terminal.') }
     setSaving(false)
-  }
-
-  // Poll until the money is ON THE FOLIO — `recorded`, not merely COMPLETED — so the screen
-  // never says "paid" before the books say so.
-  useEffect(() => {
-    if (!checkoutId) return
-    let stop = false
-    const tick = async () => {
-      try {
-        const res = await fetch(`/api/terminal/charge?checkoutId=${encodeURIComponent(checkoutId)}`)
-        const d = await res.json()
-        if (stop) return
-        if (d.recorded) {
-          setCheckoutId(null); setTerminalMsg('')
-          setPaidTotal(grandTotal + creditCents)
-          setSelected({}); setAmounts({}); setNote(''); setWaiveFee(false)
-          setCashTendered(''); setKeepAsCredit(false)
-          toast.success('Card approved on the terminal.')
-          await load(guestId)
-          return
-        }
-        if (d.state === 'canceled' || d.state === 'failed') {
-          setCheckoutId(null)
-          setTerminalMsg('')
-          // Nothing was recorded — say so plainly so staff know they can simply try again.
-          toast.error(d.state === 'canceled'
-            ? 'The customer cancelled on the terminal. Nothing was charged.'
-            : 'The terminal charge did not go through. Nothing was charged.')
-          return
-        }
-      } catch { /* keep waiting — a dropped poll is not a failed charge */ }
-    }
-    const id = setInterval(tick, 2000)
-    void tick()
-    return () => { stop = true; clearInterval(id) }
-  }, [checkoutId, grandTotal, creditCents, guestId, load])
-
-  async function cancelTerminal() {
-    if (!checkoutId) return
-    setTerminalMsg('Cancelling…')
-    try {
-      await fetch('/api/terminal/cancel', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ checkoutId }),
-      })
-    } catch { /* the poll below still resolves it */ }
   }
 
   /** Email the receipt through the EXISTING receipt route. Reads folio data and sends; it
@@ -508,39 +497,73 @@ export default function LaneCheckoutPage() {
 
             {method === 'card' && (
               <div className="mt-3">
+                {/* THE SAME STRUCTURE THE FOLIO'S COLLECT PAYMENT MODAL USES: pick a way to take
+                    the card, then see ONE of them. Showing the terminal panel and a key-entry
+                    form stacked together is what made this screen look cluttered and duplicated. */}
+                {terminalDeviceId && !checkoutId && (
+                  <div className="grid grid-cols-2 gap-2 mb-3">
+                    {([['terminal', 'Use Terminal'], ['manual', 'Enter Card Manually']] as const).map(([mode, label]) => (
+                      <button key={mode} type="button" onClick={() => setCardEntryMode(mode)}
+                        className="rounded-lg text-sm font-semibold border-2"
+                        style={{ padding: '11px', borderColor: cardEntryMode === mode ? '#2E6B8A' : '#e5e7eb', background: cardEntryMode === mode ? '#e8f2f7' : '#fff', color: cardEntryMode === mode ? '#2E6B8A' : '#374151' }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 {surchargePct > 0 && (
                   <label className="flex items-center gap-2 text-xs text-gray-600 mb-2">
                     <input type="checkbox" checked={waiveFee} onChange={e => setWaiveFee(e.target.checked)} />
                     Waive the {surchargePct}% card fee
                   </label>
                 )}
-                {/* The terminal is offered ALONGSIDE key-entry, never instead of it: a device can
-                    be offline, unpaired or busy, and manual entry is the fallback that still
-                    takes the money. */}
-                {terminalDeviceId && !checkoutId && (
-                  <button onClick={sendToTerminal} disabled={saving || baseTotal <= 0}
-                    className="px-3 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-50 mr-2"
-                    style={{ background: '#15803d' }}>
-                    📟 Send to terminal · {money(grandTotal)}
-                  </button>
-                )}
-                {checkoutId && (
-                  <div className="rounded-lg px-3 py-3 mb-2" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
-                    <p className="text-sm font-bold text-green-800">{terminalMsg || 'Waiting for the customer to tap on the terminal…'}</p>
-                    <p className="text-xs text-gray-600 mt-0.5">{money(grandTotal)} sent to the terminal. Nothing is recorded until the card is approved.</p>
-                    <button onClick={cancelTerminal}
-                      className="mt-2 px-3 py-1.5 rounded-lg text-xs font-semibold border"
-                      style={{ borderColor: '#fecaca', color: '#b91c1c', background: '#fff' }}>
-                      Cancel on terminal
+
+                {/* IN FLIGHT — the SHARED component the folio modal already uses, so both screens
+                    show the same "Customer is paying on the terminal…" with the same Cancel charge
+                    and Retry on terminal. Not a second, divergent terminal UI. */}
+                {checkoutId ? (
+                  <TerminalChargeControls
+                    checkoutId={checkoutId}
+                    onRetry={async () => { setCheckoutId(null); await sendToTerminal() }}
+                    onCanceled={() => {
+                      setCheckoutId(null)
+                      toast('Charge cancelled — nothing was taken.', { icon: '↩️' })
+                    }}
+                    onCompleted={async () => {
+                      // The money is recorded server-side by the same poll this component runs
+                      // (idempotently), so by now it is on the folio. Move to the receipt step.
+                      setCheckoutId(null)
+                      setPaidTotal(grandTotal + creditCents)
+                      setSelected({}); setAmounts({}); setNote(''); setWaiveFee(false)
+                      setCashTendered(''); setKeepAsCredit(false)
+                      toast.success('Card approved on the terminal.')
+                      await load(guestId)
+                    }}
+                  />
+                ) : cardEntryMode === 'terminal' && terminalDeviceId ? (
+                  <div className="rounded-xl text-center" style={{ background: '#f0f9ff', border: '1px solid #bae6fd', padding: '1.25rem' }}>
+                    <div style={{ fontSize: 28, marginBottom: 6 }}>💳</div>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: '#0369a1', marginBottom: 2 }}>Send to Square Terminal</div>
+                    <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
+                      Amount: <strong>{money(baseTotal)}</strong>
+                      {surcharge > 0 && <> + {surchargePct}% fee = <strong>{money(grandTotal)}</strong></>}
+                    </div>
+                    <button onClick={sendToTerminal} disabled={saving || baseTotal <= 0}
+                      className="w-full rounded-xl font-bold text-white disabled:opacity-50"
+                      style={{ background: '#2E6B8A', padding: '14px', fontSize: 16 }}>
+                      Send to Terminal →
                     </button>
                   </div>
+                ) : (
+                  <>
+                    {/* ONE container, mounted once by the effect above and torn down when this
+                        leaves the screen. */}
+                    <div id="lane-checkout-card" />
+                    {!cardReady && !squareErr && <p className="text-sm text-gray-500 mt-2">Loading the card form…</p>}
+                  </>
                 )}
-                {!cardReady && !checkoutId && (
-                  <button onClick={mountCard} className="px-3 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: '#2E6B8A' }}>
-                    {terminalDeviceId ? 'Or key the card in' : 'Enter card details'}
-                  </button>
-                )}
-                <div id="lane-checkout-card" className="mt-2" />
+
                 {squareErr && <p className="text-sm text-amber-700 mt-2">{squareErr}</p>}
               </div>
             )}
@@ -662,7 +685,7 @@ export default function LaneCheckoutPage() {
               <p className="text-2xl font-bold text-gray-900">{money(grandTotal)}</p>
             </div>
             <button onClick={takePayment}
-              disabled={saving || baseTotal <= 0 || !data.folioId || !!checkoutId || (method === 'card' && !cardReady)}
+              disabled={saving || baseTotal <= 0 || !data.folioId || !!checkoutId || (method === 'card' && (cardEntryMode === 'terminal' || !cardReady))}
               className="w-full py-3 rounded-xl text-sm font-bold text-white disabled:opacity-50"
               style={{ background: '#15803d' }}>
               {saving ? 'Recording…' : `Take payment · ${money(grandTotal)}`}
