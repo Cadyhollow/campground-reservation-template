@@ -343,3 +343,64 @@ test('THE FULL PICTURE RECONCILES: voided charge + lane credit + a floating rema
   const laneSum = LANES.reduce((s, l) => s + b.byLane[l].balance, 0)
   assert.equal(laneSum - b.untaggedPayments, b.accountBalance)
 })
+
+// ── Changing a POSTED seasonal price must leave the folio reconciled ─────────────────────────
+//
+// Found in the wild on the sandbox: a contract had been edited to $1,695 while the charge already
+// posted to the camper's folio still read $2,500. The agreement and the books disagreed, and
+// nothing on either screen said so. syncSeasonalCharge() adjusts the EXISTING row — these pin
+// what "adjusted" has to mean for the account to stay correct.
+
+test('adjusting a posted seasonal price keeps ONE charge and re-reconciles', () => {
+  const store = { id: 'pos-1', line_total: 5000, product_id: 'p1' }
+  const before = laneBalances([store, { id: 'seas-1', line_total: 250000, lane: 'seasonal' }], [], ctx)
+  const after = laneBalances([store, { id: 'seas-1', line_total: 189500, lane: 'seasonal' }], [], ctx)
+
+  assert.equal(before.byLane.seasonal.charges, 250000)
+  assert.equal(after.byLane.seasonal.charges, 189500, 'the lane follows the new price')
+  assert.equal(after.accountBalance, before.accountBalance - 60500, 'and so does the account, exactly')
+  assert.equal(after.byLane.store.charges, 5000, 'no other lane moved')
+})
+
+test('A PRICE CHANGE MUST ADJUST, NEVER STACK — two live seasonal charges would double-bill', () => {
+  // The failure this guards: posting a second charge instead of updating the first. The lanes
+  // would still "reconcile" — both rows are real — while the camper is billed twice.
+  const stacked = [
+    { id: 'seas-1', line_total: 250000, lane: 'seasonal' },
+    { id: 'seas-2', line_total: 189500, lane: 'seasonal' },
+  ]
+  const adjusted = [{ id: 'seas-1', line_total: 189500, lane: 'seasonal' }]
+  assert.equal(laneBalances(stacked, [], ctx).byLane.seasonal.charges, 439500)
+  assert.equal(laneBalances(adjusted, [], ctx).byLane.seasonal.charges, 189500)
+  assert.notEqual(
+    laneBalances(stacked, [], ctx).accountBalance,
+    laneBalances(adjusted, [], ctx).accountBalance,
+    'stacking and adjusting are NOT the same account — which is why the sync updates in place')
+})
+
+test('clearing the price VOIDS the charge rather than leaving a $0 line', () => {
+  // Zero owed and "no fee agreed" are the same thing on a folio, and a voided row keeps the
+  // audit trail that a fee was once posted.
+  const voided = laneBalances([{ id: 'seas-1', line_total: 250000, lane: 'seasonal', voided: true }], [], ctx)
+  assert.equal(voided.byLane.seasonal.charges, 0)
+  assert.equal(voided.accountBalance, 0)
+})
+
+test('a price change with payments already made re-reconciles, credit included', () => {
+  // The real sandbox shape: money already paid against the old, higher price. Lowering it turns
+  // the difference into a credit — and the lanes must still sum to the account.
+  const items = [
+    { id: 'seas-1', line_total: 189500, lane: 'seasonal' },
+    { id: 'pos-1', line_total: 5000, product_id: 'p1' },
+  ]
+  const payments = [
+    { amount: 250000, lane: 'seasonal' },   // paid against the OLD $2,500 price
+    { amount: 1700, lane: 'store' },
+    { amount: 1000 },                        // historical, unassigned
+  ]
+  const b = laneBalances(items, payments, ctx)
+  assert.equal(b.byLane.seasonal.balance, -60500, 'overpaid seasonal is now a credit in that lane')
+  assert.equal(b.accountBalance, 194500 - 252700)
+  const laneSum = LANES.reduce((s, l) => s + b.byLane[l].balance, 0)
+  assert.equal(laneSum - b.untaggedPayments, b.accountBalance, 'still reconciles exactly')
+})

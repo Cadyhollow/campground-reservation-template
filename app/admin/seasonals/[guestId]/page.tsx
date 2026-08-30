@@ -72,7 +72,18 @@ export default function SeasonalCamperPage() {
 
   // useCallback so the effect can declare it, and because the send/resend/save flows all re-run
   // it after a successful write.
-  useEffect(() => { if (!seasonId && defaultId) setSeasonId(defaultId) }, [defaultId, seasonId])
+  // An incoming ?season_id= is the season the owner was already looking at on the list, so it
+  // wins over the picker's computed default. Read in an effect (not a lazy initializer) for the
+  // same hydration reason the rest of this area does.
+  const [urlSeasonId, setUrlSeasonId] = useState<string | null>(null)
+  useEffect(() => {
+    setUrlSeasonId(new URLSearchParams(window.location.search).get('season_id') || '')
+  }, [])
+  useEffect(() => {
+    if (seasonId || urlSeasonId === null) return          // wait until the URL has been read
+    if (urlSeasonId) setSeasonId(urlSeasonId)             // the season they came in on
+    else if (defaultId) setSeasonId(defaultId)            // otherwise the picker's default
+  }, [defaultId, seasonId, urlSeasonId])
 
   const load = useCallback(async () => {
     setLoading(true); setErr('')
@@ -239,7 +250,7 @@ export default function SeasonalCamperPage() {
           <p className="text-sm text-gray-500">Site {data?.guest?.site_number || '—'} · {selectedSeason?.name || 'season'}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Link href={`/admin/seasonals/new?guestId=${guestId}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">↗ Full form</Link>
+          <Link href={`/admin/seasonals/new?guestId=${guestId}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">↗ Full form</Link>
           <label className="text-xs font-medium text-gray-500">Season</label>
           <SeasonPicker seasons={seasons} value={seasonId} onChange={setSeasonId} disabled={!seasonsLoaded}
             className="border border-gray-200 rounded-lg px-3 py-2 text-sm font-bold text-gray-900" />

@@ -27,9 +27,25 @@ export async function GET(request: NextRequest) {
     if (season?.year) year = season.year
   }
 
-  const { data: guests } = await svc.from('guests')
-    .select('id, name, site_number')
-    .eq('is_seasonal', true)
+  // ⚠ THE ROSTER IS THE SEASON'S, NOT THE PARK'S WHOLE HISTORY.
+  //
+  // This route used to return EVERY is_seasonal guest regardless of the season selected, so a
+  // park looking at 2027 saw campers who have never had a 2027 contract sitting there as "Not
+  // started" — and the "N of M signed" count was measured against all of them, so it could never
+  // reach M. With named seasons (Phase 2c) that is actively misleading: each season has its own
+  // roster, and "Clone from previous season" is the tool for populating a new one.
+  //
+  // So: find the contracts for this season FIRST, and the roster is the guests who hold one.
+  const contractScope = svc.from('seasonal_contracts')
+    .select('id, guest_id, status, packet_id, contract_signature_id, waiver_signature_id')
+  const { data: seasonContracts } = await (season_id
+    ? contractScope.eq('season_id', season_id)
+    : contractScope.eq('season_year', year))
+  const contractGuestIds = [...new Set((seasonContracts || []).map(c => c.guest_id))]
+
+  const { data: guests } = contractGuestIds.length
+    ? await svc.from('guests').select('id, name, site_number').eq('is_seasonal', true).in('id', contractGuestIds)
+    : { data: [] }
   const seasonal = guests || []
   const ids = seasonal.map(g => g.id)
   if (ids.length === 0) {
@@ -37,13 +53,8 @@ export async function GET(request: NextRequest) {
   }
 
   // Contracts for the year + their linked signatures.
-  // Filter by season when one is named, else by year (the pre-2c behaviour).
-  const contractQuery = svc.from('seasonal_contracts')
-    .select('id, guest_id, status, packet_id, contract_signature_id, waiver_signature_id')
-    .in('guest_id', ids)
-  const { data: contracts } = await (season_id
-    ? contractQuery.eq('season_id', season_id)
-    : contractQuery.eq('season_year', year))
+  // Already fetched above — the roster was derived from them.
+  const contracts = (seasonContracts || []).filter(c => ids.includes(c.guest_id))
   const byGuest = new Map((contracts || []).map(c => [c.guest_id, c]))
   const sigIds = (contracts || []).flatMap(c => [c.contract_signature_id, c.waiver_signature_id]).filter(Boolean)
   const sigStatus = new Map<string, string>()

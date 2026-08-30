@@ -90,6 +90,58 @@ export function originOf(request: NextRequest): string {
 export { packetEmailHtml, packetReceiptHtml } from '@/lib/contract-emails'
 
 /**
+ * Keep a POSTED seasonal charge in step with the contract's price.
+ *
+ * The fee is posted to the folio when a packet is sent (postSeasonalCharge). If the price then
+ * changes — a camper moves to a dearer site — the charge already on their account would otherwise
+ * still say the old figure, and the books would disagree with the agreement.
+ *
+ * ⚠ IT ADJUSTS THE EXISTING ROW. It never inserts a second charge, so a price edited five times
+ * leaves ONE seasonal charge, not a stack of them, and postSeasonalCharge's idempotency gate
+ * ("no non-voided charge for this contract") keeps holding. The row keeps its lane:'seasonal' tag
+ * and its seasonal_contract_id, so every Phase 4 guarantee survives: the lanes still sum to the
+ * account, and a voided row is still excluded.
+ *
+ * ⚠ NOTHING IS POSTED HERE. If no charge exists yet — the packet has not been sent — this does
+ * nothing at all, and the new price posts correctly at send. Creating one early would put a fee
+ * on a camper's account for an agreement they have not been given.
+ *
+ * A price cleared or set to zero VOIDS the charge rather than writing a $0 line: zero owed and
+ * "no fee agreed" are the same thing on a folio, and a voided row keeps the audit trail.
+ */
+export async function syncSeasonalCharge(
+  contractId: string,
+  newTotalCents: number | null,
+): Promise<{ changed: boolean; error?: string }> {
+  try {
+    const { data: charge } = await svc
+      .from('folio_line_items')
+      .select('id, line_total')
+      .eq('seasonal_contract_id', contractId)
+      .neq('voided', true)
+      .limit(1)
+      .maybeSingle()
+    if (!charge) return { changed: false }   // nothing posted yet — send will post the new price
+
+    const total = Number(newTotalCents ?? 0)
+    if (!Number.isFinite(total) || total <= 0) {
+      const { error } = await svc.from('folio_line_items')
+        .update({ voided: true, voided_at: new Date().toISOString(), reason: 'Seasonal fee removed' })
+        .eq('id', charge.id)
+      return error ? { changed: false, error: error.message } : { changed: true }
+    }
+    if (Number(charge.line_total) === total) return { changed: false }   // already in step
+
+    const { error } = await svc.from('folio_line_items')
+      .update({ unit_price: total, line_total: total })
+      .eq('id', charge.id)
+    return error ? { changed: false, error: error.message } : { changed: true }
+  } catch (e) {
+    return { changed: false, error: errMessage(e, 'Could not update the seasonal charge.') }
+  }
+}
+
+/**
  * The season a new contract for `year` belongs to — reused if one exists, created if not.
  *
  * Phase 2a made seasonal_contracts.season_id NOT NULL, so EVERY path that inserts a contract has
