@@ -74,6 +74,10 @@ export default function LaneCheckoutPage() {
    *  than beside the derived values — a hook must never sit in a conditional region. */
   const [keepAsCredit, setKeepAsCredit] = useState(false)
   const [saving, setSaving] = useState(false)
+  /** Non-null once a payment has gone through — switches the screen to the receipt step. */
+  const [paidTotal, setPaidTotal] = useState<number | null>(null)
+  const [emailing, setEmailing] = useState(false)
+  const [emailed, setEmailed] = useState(false)
   const [cardReady, setCardReady] = useState(false)
   const [squareErr, setSquareErr] = useState('')
   // `unknown` rather than a Square type: lib/square-card-client owns that shape and this screen
@@ -251,18 +255,38 @@ export default function LaneCheckoutPage() {
         if (error) { toast.error('Could not record the payment: ' + error.message); setSaving(false); return }
       }
 
-      // PR 4 leaves a receipt hook here — deliberately NOT sent in this PR.
       toast.success(creditCents > 0
         ? `${money(grandTotal)} recorded, plus ${money(creditCents)} account credit.`
         : `${money(grandTotal)} recorded.`)
+      // PR 4 — THE RECEIPT STEP. The payment is already recorded and final; the receipt is a
+      // follow-on the staff member chooses. Nothing auto-fires: an email a camper did not ask
+      // for, sent the instant money changes hands, is worse than no email.
+      setPaidTotal(grandTotal + creditCents)
       setSelected({}); setAmounts({}); setNote(''); setWaiveFee(false)
       setCashTendered(''); setKeepAsCredit(false)
       await load(guestId)
-      router.push(`/admin/seasonals/${guestId}`)
     } catch {
       toast.error('Something went wrong taking that payment.')
     }
     setSaving(false)
+  }
+
+  /** Email the receipt through the EXISTING receipt route. Reads folio data and sends; it
+   *  writes no money and cannot alter the payment that was just recorded. */
+  async function emailReceipt() {
+    if (!data?.folioId) return
+    setEmailing(true)
+    try {
+      const res = await fetch('/api/receipt', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folioId: data.folioId, receiptType: 'account' }),
+      })
+      const d = await res.json()
+      if (!res.ok) { toast.error(d.error || 'Could not send the receipt.'); setEmailing(false); return }
+      setEmailed(true)
+      toast.success('Receipt emailed.')
+    } catch { toast.error('Could not send the receipt.') }
+    setEmailing(false)
   }
 
   const card = 'bg-white rounded-xl border border-gray-100 p-5 mb-4'
@@ -494,6 +518,35 @@ export default function LaneCheckoutPage() {
             </div>
           </div>
         </>
+      )}
+
+      {/* ── THE RECEIPT STEP (PR 4) ───────────────────────────────────────────────────────────
+          Shown only AFTER money has changed hands. Both actions are optional and staff-driven,
+          and both go through /api/receipt — the printable copy asks the same route to RENDER
+          rather than SEND, so the printed and emailed receipts cannot differ. */}
+      {paidTotal !== null && data && (
+        <div className={card} style={{ borderColor: '#bbf7d0', background: '#f0fdf4' }}>
+          <p className="text-sm font-bold text-green-800">{money(paidTotal)} taken from {data.guest?.name || 'this camper'}.</p>
+          <p className="text-xs text-gray-600 mt-0.5 mb-3">The payment is recorded. A receipt is optional.</p>
+          <div className="flex flex-wrap gap-2">
+            {data.guest?.email ? (
+              <button onClick={emailReceipt} disabled={emailing || emailed}
+                className="px-4 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-50" style={{ background: '#2E6B8A' }}>
+                {emailed ? '✓ Emailed' : emailing ? 'Sending…' : `✉ Email receipt to ${data.guest.email}`}
+              </button>
+            ) : (
+              <span className="text-xs text-gray-500 self-center">No email on file — print one instead.</span>
+            )}
+            <Link href={`/admin/receipt/${data.folioId}`} target="_blank"
+              className="px-4 py-2 rounded-lg text-sm font-semibold border border-gray-300 text-gray-700 bg-white">
+              🖨 Print receipt
+            </Link>
+            <button onClick={() => router.push(`/admin/seasonals/${guestId}`)}
+              className="px-4 py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-600 bg-white">
+              Done
+            </button>
+          </div>
+        </div>
       )}
 
       {/* RUNNING TOTAL — pinned, so the figure is always in view as cards are tapped. */}
