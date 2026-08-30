@@ -194,7 +194,9 @@ export default function SeasonalsPage() {
               {visible.map(r => (
                 <tr key={r.guest_id} className="border-b border-gray-50 hover:bg-gray-50">
                   <td className="px-4 py-3">
-                    <Link href={`/admin/seasonals/${r.guest_id}`} className="font-semibold text-gray-900 hover:underline">{r.name}</Link>
+                    {/* The season selected here TRAVELS. Without it the camper page fell back to its own
+                        default season, so a park working through 2027 clicked a name and landed on 2028. */}
+                    <Link href={`/admin/seasonals/${r.guest_id}${seasonId ? `?season_id=${encodeURIComponent(seasonId)}` : ''}`} className="font-semibold text-gray-900 hover:underline">{r.name}</Link>
                   </td>
                   <td className="px-4 py-3 text-gray-600">{r.site_number || '—'}</td>
                   <td className="px-4 py-3">{statusPill(r.contract_status)}</td>

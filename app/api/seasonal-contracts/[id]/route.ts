@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { svc, isSummit, errMessage } from '@/lib/contract-server'
+import { svc, isSummit, errMessage, syncSeasonalCharge } from '@/lib/contract-server'
 import { requireRole } from '@/lib/require-role'
 
 
@@ -62,7 +62,26 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (error || !data) {
       return NextResponse.json({ error: error?.message || 'Could not save (contract may have just been sent).' }, { status: 409 })
     }
-    return NextResponse.json({ contract: data })
+    // ── KEEP THE BOOKS IN STEP WITH THE PRICE ────────────────────────────────────────────────
+    //
+    // If this edit changed total_due_cents AND a seasonal fee is already posted on the camper's
+    // folio, adjust that charge to match. Through the EXISTING row — never a second charge —
+    // so the folio keeps reconciling and the Phase 4 lane tag survives. A no-op when nothing is
+    // posted yet, which is the normal case for a draft.
+    //
+    // Non-fatal: the contract edit above is committed and correct. A failure here is surfaced as
+    // a warning rather than an error, because reporting failure would invite the owner to save
+    // again and re-do an edit that already landed.
+    let chargeWarning: string | undefined
+    if ('total_due_cents' in patch) {
+      const sync = await syncSeasonalCharge(id, patch.total_due_cents as number | null)
+      if (sync.error) {
+        console.error('Contract price saved but its folio charge could not be adjusted:', sync.error)
+        chargeWarning = 'The price was saved, but the charge already on this camper\u2019s account could not be updated. Check their folio.'
+      }
+    }
+
+    return NextResponse.json({ contract: data, warning: chargeWarning })
   } catch (e) {
     return NextResponse.json({ error: errMessage(e, 'Something went wrong') }, { status: 500 })
   }

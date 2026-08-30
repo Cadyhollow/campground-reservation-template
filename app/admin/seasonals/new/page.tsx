@@ -63,6 +63,8 @@ export default function NewSeasonalCamperPage() {
   const [saving, setSaving] = useState(false)
   const [existingId, setExistingId] = useState<string | null>(null)   // set when renewing an existing seasonal
   const [alreadyStatus, setAlreadyStatus] = useState<string | null>(null) // 'sent'|'signed' if one exists this year
+  /** The loaded contract's status, so the form can say plainly when it is frozen. */
+  const [contractStatus, setContractStatus] = useState<string | null>(null)
 
   // Summit gate on the freshly-loaded plan; also grab the templates for the preview.
   useEffect(() => {
@@ -76,12 +78,19 @@ export default function NewSeasonalCamperPage() {
   // the same "year's default" rule the create route and the 2a backfill use), falling back to the
   // newest season the park has so the picker is never pointlessly empty.
   useEffect(() => {
+    const urlSeason = new URLSearchParams(window.location.search).get('season_id') || ''
     fetch('/api/seasons')
       .then(r => r.json())
       .then(d => {
         const list: Season[] = d?.seasons || []
         setSeasons(list)
-        setSeasonId(prev => prev || list.filter(s => s.year === cy)[0]?.id || list[0]?.id || '')
+        // ⚠ AN INCOMING ?season_id= WINS. This form doubles as the editor for an existing camper
+        // ("Full form" on their page), and it must edit THE SEASON THE OWNER WAS LOOKING AT —
+        // not whatever the computed current season happens to be. Editing one season's contract
+        // while believing you are editing another is how a price lands on the wrong year.
+        setSeasonId(prev => prev
+          || (urlSeason && list.some(s => s.id === urlSeason) ? urlSeason : '')
+          || list.filter(s => s.year === cy)[0]?.id || list[0]?.id || '')
       })
       .catch(() => {})
       .finally(() => setSeasonsLoaded(true))
@@ -90,11 +99,24 @@ export default function NewSeasonalCamperPage() {
   // Existing seasonal (?guestId=…): prefill from the guest record; clone LAST YEAR's
   // contract party forward (always editable). Read from window.location so we don't
   // pull in useSearchParams (which would force a Suspense boundary).
+  //
+  // ⚠ THIS PREFILL USED TO LOSE MONEY, and that is why it now waits for the season.
+  //
+  // It loaded only the guest's identity and rig, never the existing CONTRACT — so the price,
+  // charge note, deposit and due-by dates all opened BLANK even when the contract held real
+  // values. Saving then PATCHed those blanks back as null. Opening "Full form" on a camper and
+  // pressing save therefore ERASED their seasonal price rather than merely failing to keep it.
+  //
+  // It also fetched `?year=${cy}`, so on a park working through a different season it read the
+  // wrong contract entirely.
   useEffect(() => {
     const gid = new URLSearchParams(window.location.search).get('guestId')
     if (!gid) return
     setExistingId(gid)
-    fetch(`/api/seasonals/guest/${gid}?year=${cy}`)
+    // Wait for the season to be resolved: the contract we prefill from IS the one we will save
+    // back to, so reading it under a different season would reintroduce the same class of bug.
+    if (!seasonsLoaded || !seasonId) return
+    fetch(`/api/seasonals/guest/${gid}?season_id=${encodeURIComponent(seasonId)}`)
       .then(r => r.json())
       .then(d => {
         const g = d?.guest
@@ -111,14 +133,36 @@ export default function NewSeasonalCamperPage() {
         // recorded before the roster existed still carries forward.
         const roster = Array.isArray(g.party) ? (g.party as Occupant[]) : []
         const lastYear = (d.contracts || []).find((c: SeasonalContract) => c.season_year === cy - 1)
-        if (roster.length) setOccupants(roster)
-        else if (lastYear && Array.isArray(lastYear.occupants) && lastYear.occupants.length) setOccupants(lastYear.occupants as Occupant[])
+
+        // THE SEASON'S OWN CONTRACT — the values the owner expects to see and edit.
+        const c: SeasonalContract | null = d?.currentContract || null
+        if (c) {
+          setContractStatus(c.status || null)
+          if (c.site_number) setSiteNumber(c.site_number)
+          setTotalDue(c.total_due_cents != null ? (c.total_due_cents / 100).toFixed(2) : '')
+          setDepositDue(c.deposit_due_cents != null ? (c.deposit_due_cents / 100).toFixed(2) : '')
+          setTotalDueBy(c.total_due_by || '')
+          setDepositDueBy(c.deposit_due_by || '')
+          setChargeNote(c.charge_note || '')
+          // Its own dates are the per-camper OVERRIDE (Phase 2b). Present ⇒ the toggle opens on.
+          if (c.season_opens || c.season_closes) {
+            setOverrideOn(true)
+            setOvOpens(c.season_opens || '')
+            setOvCloses(c.season_closes || '')
+          }
+          if (Array.isArray(c.occupants) && c.occupants.length) setOccupants(c.occupants as Occupant[])
+          else if (roster.length) setOccupants(roster)
+          else if (lastYear && Array.isArray(lastYear.occupants) && lastYear.occupants.length) setOccupants(lastYear.occupants as Occupant[])
+        } else {
+          // No contract for this season yet — a genuinely new one. Seed the party as before.
+          if (roster.length) setOccupants(roster)
+          else if (lastYear && Array.isArray(lastYear.occupants) && lastYear.occupants.length) setOccupants(lastYear.occupants as Occupant[])
+        }
       })
       .catch(() => {})
-    // `cy` is the season year this intake is for — it is read inside, so it belongs here. It is
-    // computed once from currentSeasonYear() and does not change while the form is open, so this
-    // still runs exactly once.
-  }, [cy])
+    // Re-runs when the season resolves (and if the owner switches season in the picker), which is
+    // exactly right: a different season is a different contract to load and to save back to.
+  }, [cy, seasonId, seasonsLoaded])
 
   // If any contract-relevant field changes after a draft was prepared, the draft is
   // stale — force a re-save before the action buttons re-enable.
@@ -229,6 +273,10 @@ export default function NewSeasonalCamperPage() {
       }),
     })
     if (!pRes.ok) { const e = await pRes.json().catch(() => ({})); setSaving(false); toast.error(e.error || 'Could not save contract details.'); return null }
+    // The price is saved; if a fee was already posted the route adjusted it. Surface a failure to
+    // do so rather than letting the books drift silently.
+    const pData = await pRes.json().catch(() => ({}))
+    if (pData?.warning) toast(pData.warning, { icon: '⚠️', duration: 10000 })
 
     setDraftId(id)
     setSaving(false)
@@ -286,6 +334,19 @@ export default function NewSeasonalCamperPage() {
       {existingId && (
         <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
           Renewing an existing seasonal — details pre-filled from their record, party carried over from last year. Review and adjust as needed.
+        </div>
+      )}
+      {/* A SENT OR SIGNED PACKET IS FROZEN — the contract edits below cannot be saved to it, and
+          saying so up front is better than a refusal after the owner has retyped a price. The
+          supported route is Cancel on the camper page, edit, and send again: cancelling voids the
+          posted seasonal fee and the re-send posts the amended one, so the folio stays right. */}
+      {contractStatus && contractStatus !== 'draft' && (
+        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>
+          This {seasonYear} packet has already been <strong>{contractStatus}</strong>, so its price and contract details are
+          locked. Camper details (name, address, rig, party roster) still save.{' '}
+          {contractStatus === 'sent' && existingId && (
+            <>To change the price, <Link href={`/admin/seasonals/${existingId}`} className="underline font-semibold">cancel the packet</Link>, edit, and send it again — the charge on their account follows.</>
+          )}
         </div>
       )}
       {alreadyStatus && (
