@@ -9,7 +9,18 @@ The **blueprint** every new ResoNation client is cloned from. It has no deployme
 
 ## Never touch
 - **Fee model:** `booking-quote.ts`, `pricing.ts`, `ledger.ts`. Any change must show an empty diff against these three.
-- Don't hard-code client specifics into code — **customization lives in settings/data** so updates propagate cleanly.
+- Don't hard-code client specifics into code — **customization lives in settings/data** so updates propagate cleanly. See *Configurability for every tenant* below.
+
+## Configurability for every tenant
+ResoNation is **one codebase serving many independently-owned parks**. Anything a park would reasonably want to say in its own voice — email bodies, customer-facing messages, document and contract text, notice and confirmation copy, guest-facing labels — must be **editable by that park's owner from the admin UI**, never hard-coded to one client's wording.
+
+Ship a strong suggested default so a park that configures nothing still sends sensible copy, but **the default must always be overridable**. Store the value per tenant (a settings column or equivalent), read the owner's value when present, fall back to the shared default when it's blank.
+
+**If you find yourself typing a specific park's name, phrasing, or message into code, that's the signal to make it a setting instead.**
+
+Fixed structural and safety elements — a working action button, a required link, legal scaffolding, anything whose removal would break the flow — may stay in code. But the *message* is the owner's.
+
+*(Precedent already here: the Settings note on the removed sender fields — "a control that accepts input and silently discards it is worse than no control." Same principle, both directions: don't collect input you ignore, and don't hard-code copy the owner should control.)*
 
 ## Rules that bite
 - **Server-side is the guard.** Client graying/notices are UX; a crafted request must still be refused server-side. Prove new gates with a crafted-request test.
