@@ -93,8 +93,8 @@ export default function SeasonsManager({ defaultYear, onClose }: {
     setBusy(false)
   }
 
-  const inp = 'border border-gray-200 rounded-lg px-2 py-1.5 text-sm w-full'
-  const lbl = 'block text-[11px] text-gray-500 mb-1'
+  const inp = 'border border-line rounded-lg px-2 py-1.5 text-sm w-full'
+  const lbl = 'block text-[11px] text-muted mb-1'
   const fmt = (d?: string | null) => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'
 
   const fields = (d: Draft, set: (v: Draft) => void) => (
@@ -120,32 +120,32 @@ export default function SeasonsManager({ defaultYear, onClose }: {
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 z-40" onClick={() => !busy && onClose()} />
-      <div className="fixed inset-x-4 top-1/2 -translate-y-1/2 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[620px] bg-white rounded-2xl shadow-2xl z-50 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+      <div className="fixed inset-0 bg-forest-deep/50 z-40" onClick={() => !busy && onClose()} />
+      <div className="fixed inset-x-4 top-1/2 -translate-y-1/2 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[620px] bg-card rounded-2xl shadow-2xl z-50 overflow-hidden">
+        <div className="px-6 py-4 border-b border-line-soft flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-bold text-gray-900">Seasons</h3>
-            <p className="text-xs text-gray-500 mt-0.5">Name the seasons your park runs — a year can have more than one.</p>
+            <h3 className="text-lg font-bold text-ink">Seasons</h3>
+            <p className="text-xs text-muted mt-0.5">Name the seasons your park runs — a year can have more than one.</p>
           </div>
           {!adding && (
             <button onClick={() => { setAdding(blankDraft(defaultYear)); setEditingId(null); setErr('') }}
-              className="px-3 py-2 text-xs font-bold rounded-lg text-white" style={{ background: '#2E6B8A' }}>
+              className="px-3 py-2 text-xs font-bold rounded-lg text-on-forest" style={{ background: 'var(--forest)' }}>
               + New season
             </button>
           )}
         </div>
 
         <div className="px-6 py-4 max-h-[60vh] overflow-y-auto">
-          {err && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm mb-3">{err}</div>}
+          {err && <div className="bg-danger-bg border border-danger/40 text-danger rounded-lg px-3 py-2 text-sm mb-3">{err}</div>}
 
           {adding && (
-            <div className="border border-gray-200 rounded-xl p-3 mb-4" style={{ background: '#f9fafb' }}>
+            <div className="border border-line rounded-xl p-3 mb-4" style={{ background: 'var(--card-2)' }}>
               {fields(adding, setAdding)}
               <div className="flex gap-2 justify-end mt-3">
                 <button onClick={() => { setAdding(null); setErr('') }} disabled={busy}
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-50">Cancel</button>
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-line text-ink-soft hover:bg-card disabled:opacity-50">Cancel</button>
                 <button onClick={createSeason} disabled={busy || !adding.name.trim()}
-                  className="px-3 py-1.5 rounded-lg text-xs font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>
                   {busy ? 'Saving…' : 'Add season'}
                 </button>
               </div>
@@ -153,11 +153,11 @@ export default function SeasonsManager({ defaultYear, onClose }: {
           )}
 
           {loading ? (
-            <p className="text-sm text-gray-500 py-6 text-center">Loading…</p>
+            <p className="text-sm text-muted py-6 text-center">Loading…</p>
           ) : seasons.length === 0 && !adding ? (
-            <p className="text-sm text-gray-400 py-6 text-center">No seasons yet. Add one to get started.</p>
+            <p className="text-sm text-muted py-6 text-center">No seasons yet. Add one to get started.</p>
           ) : (
-            <div className="divide-y divide-gray-100">
+            <div className="divide-y divide-line-soft">
               {seasons.map(s => (
                 <div key={s.id} className="py-3">
                   {editingId === s.id ? (
@@ -165,9 +165,9 @@ export default function SeasonsManager({ defaultYear, onClose }: {
                       {fields(editDraft, setEditDraft)}
                       <div className="flex gap-2 justify-end mt-3">
                         <button onClick={() => { setEditingId(null); setErr('') }} disabled={busy}
-                          className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">Cancel</button>
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-line text-ink-soft hover:bg-card-2 disabled:opacity-50">Cancel</button>
                         <button onClick={() => saveEdit(s.id)} disabled={busy || !editDraft.name.trim()}
-                          className="px-3 py-1.5 rounded-lg text-xs font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>
+                          className="px-3 py-1.5 rounded-lg text-xs font-bold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>
                           {busy ? 'Saving…' : 'Save'}
                         </button>
                       </div>
@@ -175,11 +175,11 @@ export default function SeasonsManager({ defaultYear, onClose }: {
                   ) : (
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <p className="text-sm font-semibold text-gray-900">{s.name}</p>
-                        <p className="text-xs text-gray-500">{s.year} · {fmt(s.opens)} – {fmt(s.closes)}</p>
+                        <p className="text-sm font-semibold text-ink">{s.name}</p>
+                        <p className="text-xs text-muted">{s.year} · {fmt(s.opens)} – {fmt(s.closes)}</p>
                       </div>
                       <button onClick={() => { setEditingId(s.id); setEditDraft(toDraft(s)); setAdding(null); setErr('') }}
-                        className="text-xs font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>Edit</button>
+                        className="text-xs font-semibold" style={{ color: 'var(--link)' }}>Edit</button>
                     </div>
                   )}
                 </div>
@@ -187,15 +187,15 @@ export default function SeasonsManager({ defaultYear, onClose }: {
             </div>
           )}
 
-          <p className="text-xs text-gray-400 mt-4">
+          <p className="text-xs text-muted mt-4">
             Dates are optional, and a season with no dates is fine. Renaming a season or fixing its dates never changes a
             packet a camper has already been sent — a sent packet keeps the dates it was signed with.
           </p>
         </div>
 
-        <div className="px-6 py-4 border-t border-gray-100 flex justify-end">
+        <div className="px-6 py-4 border-t border-line-soft flex justify-end">
           <button onClick={onClose} disabled={busy}
-            className="px-4 py-2 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>Done</button>
+            className="px-4 py-2 rounded-xl text-sm font-bold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>Done</button>
         </div>
       </div>
     </>

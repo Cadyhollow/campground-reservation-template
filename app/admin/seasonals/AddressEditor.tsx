@@ -14,9 +14,9 @@ export default function AddressEditor({ value, onChange, required }: {
   required?: boolean
 }) {
   const set = (k: keyof Address, v: string) => onChange({ ...value, [k]: v })
-  const star = required ? <span className="text-red-500">*</span> : null
-  const inp = 'w-full border border-gray-200 rounded-lg px-3 py-2 text-sm'
-  const lbl = 'block text-xs text-gray-500 mb-1'
+  const star = required ? <span className="text-danger">*</span> : null
+  const inp = 'w-full border border-line rounded-lg px-3 py-2 text-sm'
+  const lbl = 'block text-xs text-muted mb-1'
   return (
     <div className="grid grid-cols-2 gap-3">
       <div className="col-span-2">

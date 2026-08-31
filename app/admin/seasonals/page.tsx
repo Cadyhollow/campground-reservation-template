@@ -33,10 +33,10 @@ const fmtDate = (d: string | null) => d ? new Date(d).toLocaleDateString('en-US'
 
 function statusPill(status: string) {
   const map: Record<string, { bg: string; color: string; label: string }> = {
-    signed: { bg: '#f0fdf4', color: '#15803d', label: 'Signed' },
-    sent: { bg: '#fffbeb', color: '#b45309', label: 'Sent · unsigned' },
-    draft: { bg: '#eff6ff', color: '#1d4ed8', label: 'Draft' },
-    none: { bg: '#f3f4f6', color: '#6b7280', label: 'Not started' },
+    signed: { bg: 'var(--good-bg)', color: 'var(--good)', label: 'Signed' },
+    sent: { bg: 'var(--watch-bg)', color: 'var(--watch)', label: 'Sent · unsigned' },
+    draft: { bg: 'var(--draft-bg)', color: 'var(--draft)', label: 'Draft' },
+    none: { bg: 'var(--card-2)', color: 'var(--muted)', label: 'Not started' },
   }
   const s = map[status] || map.none
   return <span style={{ background: s.bg, color: s.color, fontSize: 12, fontWeight: 600, padding: '3px 9px', borderRadius: 999 }}>{s.label}</span>
@@ -145,43 +145,43 @@ export default function SeasonalsPage() {
     <div className="p-4 md:p-6">
       <div className="flex flex-col gap-3 mb-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Seasonal Campers</h2>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <h2 className="text-2xl font-bold text-ink">Seasonal Campers</h2>
+          <p className="text-sm text-muted mt-0.5">
             {loading ? 'Loading…' : `${signed} of ${total} contracts signed for ${selectedSeason?.name || 'this season'}`}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Link href="/admin/seasonals/new"
-            className="px-3 py-2 text-xs font-bold rounded-lg text-white"
-            style={{ background: '#2E6B8A' }}>
+            className="px-3 py-2 text-xs font-bold rounded-lg text-on-forest"
+            style={{ background: 'var(--forest)' }}>
             + New Seasonal Camper
           </Link>
           <SeasonPicker seasons={seasons} value={seasonId} onChange={setSeasonId} disabled={!seasonsLoaded} />
           <button onClick={() => setUnsignedOnly(v => !v)}
             className="px-3 py-2 text-xs font-medium rounded-lg border"
-            style={unsignedOnly ? { background: '#fffbeb', borderColor: '#fde68a', color: '#b45309' } : { background: '#fff', borderColor: '#e5e7eb', color: '#6b7280' }}>
+            style={unsignedOnly ? { background: 'var(--watch-bg)', borderColor: 'color-mix(in srgb, var(--watch) 40%, transparent)', color: 'var(--watch)' } : { background: 'var(--card)', borderColor: 'var(--line)', color: 'var(--muted)' }}>
             {unsignedOnly ? 'Showing unsigned' : 'Unsigned only'}
           </button>
           <button onClick={() => setSeasonsOpen(true)}
             className="px-3 py-2 text-xs font-medium rounded-lg border"
-            style={{ background: '#fff', borderColor: '#e5e7eb', color: '#6b7280' }}>
+            style={{ background: 'var(--card)', borderColor: 'var(--line)', color: 'var(--muted)' }}>
             Manage seasons
           </button>
           <button onClick={openClone}
-            className="px-3 py-2 text-xs font-semibold rounded-lg border text-white"
-            style={{ background: '#15803d', borderColor: '#15803d' }}>
+            className="px-3 py-2 text-xs font-semibold rounded-lg border text-on-good"
+            style={{ background: 'var(--good)', borderColor: 'var(--good)' }}>
             Clone from previous season
           </button>
         </div>
       </div>
 
-      {err && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm mb-3">{err}</div>}
+      {err && <div className="bg-danger-bg border border-danger/40 text-danger rounded-lg px-3 py-2 text-sm mb-3">{err}</div>}
 
-      <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+      <div className="bg-card rounded-xl border border-line-soft overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wide text-gray-400 border-b border-gray-100">
+              <tr className="text-left text-[11px] uppercase tracking-wide text-muted border-b border-line-soft">
                 <th className="px-4 py-3">Camper</th>
                 <th className="px-4 py-3">Site</th>
                 <th className="px-4 py-3">Contract</th>
@@ -193,37 +193,37 @@ export default function SeasonalsPage() {
             </thead>
             <tbody>
               {visible.map(r => (
-                <tr key={r.guest_id} className="border-b border-gray-50 hover:bg-gray-50">
+                <tr key={r.guest_id} className="border-b border-line-soft hover:bg-card-2">
                   <td className="px-4 py-3">
                     {/* The season selected here TRAVELS. Without it the camper page fell back to its own
                         default season, so a park working through 2027 clicked a name and landed on 2028. */}
-                    <Link href={`/admin/seasonals/${r.guest_id}${seasonId ? `?season_id=${encodeURIComponent(seasonId)}` : ''}`} className="font-semibold text-gray-900 hover:underline">{r.name}</Link>
+                    <Link href={`/admin/seasonals/${r.guest_id}${seasonId ? `?season_id=${encodeURIComponent(seasonId)}` : ''}`} className="font-semibold text-ink hover:underline">{r.name}</Link>
                   </td>
-                  <td className="px-4 py-3 text-gray-600">{r.site_number || '—'}</td>
+                  <td className="px-4 py-3 text-ink-soft">{r.site_number || '—'}</td>
                   <td className="px-4 py-3">{statusPill(r.contract_status)}</td>
                   <td className="px-4 py-3">
                     {r.contract_status === 'none'
-                      ? <span className="text-gray-400 text-xs">—</span>
+                      ? <span className="text-muted text-xs">—</span>
                       : statusPill(r.waiver_doc_status === 'signed' ? 'signed' : r.contract_status === 'draft' ? 'draft' : 'sent')}
                   </td>
-                  <td className="px-4 py-3 text-right font-medium" style={{ color: r.balance_cents > 0 ? '#d97706' : '#15803d' }}>
+                  <td className="tnum px-4 py-3 text-right font-medium" style={{ color: r.balance_cents > 0 ? 'var(--watch)' : 'var(--good)' }}>
                     {r.balance_cents < 0 ? 'Credit ' + fmtMoney(-r.balance_cents) : fmtMoney(r.balance_cents)}
                   </td>
-                  <td className="px-4 py-3 text-gray-500">{fmtDate(r.last_note_at)}</td>
+                  <td className="px-4 py-3 text-muted">{fmtDate(r.last_note_at)}</td>
                   {/* Straight into this camper's Take-a-payment screen, with the SEASON carried
                       through the same way the name link carries it (#64). */}
                   <td className="px-4 py-3 text-right">
                     <Link
                       href={`/admin/checkout?guestId=${r.guest_id}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`}
                       className="px-3 py-1.5 rounded-lg text-xs font-semibold border whitespace-nowrap"
-                      style={{ borderColor: '#bbf7d0', color: '#15803d', background: '#f0fdf4' }}>
+                      style={{ borderColor: 'color-mix(in srgb, var(--good) 35%, transparent)', color: 'var(--good)', background: 'var(--good-bg)' }}>
                       Pay
                     </Link>
                   </td>
                 </tr>
               ))}
               {!loading && visible.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">{unsignedOnly ? 'All contracts signed 🎉' : 'No seasonal campers.'}</td></tr>
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-muted">{unsignedOnly ? 'All contracts signed 🎉' : 'No seasonal campers.'}</td></tr>
               )}
             </tbody>
           </table>
@@ -234,39 +234,39 @@ export default function SeasonalsPage() {
 
       {cloneStep !== 'idle' && (
         <>
-          <div className="fixed inset-0 bg-black/50 z-40" onClick={() => !cloneBusy && closeClone()} />
-          <div className="fixed inset-x-4 top-1/2 -translate-y-1/2 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[440px] bg-white rounded-2xl shadow-2xl z-50 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100">
-              <h3 className="text-lg font-bold text-gray-900">Clone from a previous season</h3>
+          <div className="fixed inset-0 bg-forest-deep/50 z-40" onClick={() => !cloneBusy && closeClone()} />
+          <div className="fixed inset-x-4 top-1/2 -translate-y-1/2 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[440px] bg-card rounded-2xl shadow-2xl z-50 overflow-hidden">
+            <div className="px-6 py-4 border-b border-line-soft">
+              <h3 className="text-lg font-bold text-ink">Clone from a previous season</h3>
             </div>
-            <div className="px-6 py-4 text-sm text-gray-700 space-y-3">
-              {cloneErr && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2">{cloneErr}</div>}
+            <div className="px-6 py-4 text-sm text-ink-soft space-y-3">
+              {cloneErr && <div className="bg-danger-bg border border-danger/40 text-danger rounded-lg px-3 py-2">{cloneErr}</div>}
 
               {cloneStep === 'confirm' && (
                 <>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Copy campers from</label>
+                    <label className="block text-xs text-muted mb-1">Copy campers from</label>
                     <SeasonPicker
                       seasons={seasons.filter(x => x.id !== seasonId)}
                       value={fromSeasonId}
                       onChange={id => { setFromSeasonId(id); void previewClone(id) }}
                       disabled={cloneBusy}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                      className="w-full border border-line rounded-lg px-3 py-2 text-sm"
                     />
-                    <p className="text-xs text-gray-500 mt-1">
+                    <p className="text-xs text-muted mt-1">
                       Into <strong>{selectedSeason?.name || 'the selected season'}</strong> — the season you have selected on the list.
                     </p>
                   </div>
 
                   {!fromSeasonId ? (
-                    <p className="text-gray-500">There is no other season to copy from yet. Add one under <strong>Manage seasons</strong>.</p>
+                    <p className="text-muted">There is no other season to copy from yet. Add one under <strong>Manage seasons</strong>.</p>
                   ) : cloneBusy && !clonePreview ? (
-                    <p className="text-gray-500">Checking {nameOf(fromSeasonId)}…</p>
+                    <p className="text-muted">Checking {nameOf(fromSeasonId)}…</p>
                   ) : clonePreview ? (
                     <>
                       <p>Create <strong>{clonePreview.would_create}</strong> new draft{clonePreview.would_create === 1 ? '' : 's'} in <strong>{nameOf(clonePreview.to_season_id)}</strong> from <strong>{nameOf(clonePreview.from_season_id)}</strong>’s seasonal campers.</p>
-                      {clonePreview.would_skip > 0 && <p className="text-gray-500">{clonePreview.would_skip} already have a contract in {nameOf(clonePreview.to_season_id)} and will be skipped.</p>}
-                      <p className="text-xs text-gray-500">Drafts only — occupants and amount due carry over; site and rig are refreshed from each guest. Dates come from the season. Nothing is sent.</p>
+                      {clonePreview.would_skip > 0 && <p className="text-muted">{clonePreview.would_skip} already have a contract in {nameOf(clonePreview.to_season_id)} and will be skipped.</p>}
+                      <p className="text-xs text-muted">Drafts only — occupants and amount due carry over; site and rig are refreshed from each guest. Dates come from the season. Nothing is sent.</p>
                     </>
                   ) : null}
                 </>
@@ -276,26 +276,26 @@ export default function SeasonalsPage() {
                 <>
                   <p><strong>{cloneResult.created}</strong> draft{cloneResult.created === 1 ? '' : 's'} created.{cloneResult.skipped > 0 ? ` ${cloneResult.skipped} skipped.` : ''}</p>
                   {cloneResult.errors.length > 0 && (
-                    <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 text-xs">
+                    <div className="bg-watch-bg border border-watch/40 text-watch rounded-lg px-3 py-2 text-xs">
                       {cloneResult.errors.length} could not be created:
                       <ul className="list-disc ml-4 mt-1">{cloneResult.errors.map((e, i) => <li key={i}>{e.guest_id.slice(0, 8)}… — {e.reason}</li>)}</ul>
                     </div>
                   )}
-                  <p className="text-xs text-gray-500">Review each new draft below before sending anything.</p>
+                  <p className="text-xs text-muted">Review each new draft below before sending anything.</p>
                 </>
               )}
             </div>
-            <div className="px-6 py-4 border-t border-gray-100 flex gap-2 justify-end">
+            <div className="px-6 py-4 border-t border-line-soft flex gap-2 justify-end">
               {cloneStep === 'confirm' ? (
                 <>
-                  <button onClick={closeClone} disabled={cloneBusy} className="px-4 py-2 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">Cancel</button>
+                  <button onClick={closeClone} disabled={cloneBusy} className="px-4 py-2 rounded-xl text-sm font-semibold border border-line text-ink-soft hover:bg-card-2 disabled:opacity-50">Cancel</button>
                   <button onClick={runClone} disabled={cloneBusy || !fromSeasonId || !clonePreview || clonePreview.would_create === 0}
-                    className="px-4 py-2 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>
+                    className="px-4 py-2 rounded-xl text-sm font-bold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>
                     {cloneBusy ? 'Cloning…' : clonePreview ? `Create ${clonePreview.would_create} draft${clonePreview.would_create === 1 ? '' : 's'}` : 'Create'}
                   </button>
                 </>
               ) : (
-                <button onClick={closeClone} className="px-4 py-2 rounded-xl text-sm font-bold text-white" style={{ background: '#15803d' }}>Done</button>
+                <button onClick={closeClone} className="px-4 py-2 rounded-xl text-sm font-bold text-on-good" style={{ background: 'var(--good)' }}>Done</button>
               )}
             </div>
           </div>

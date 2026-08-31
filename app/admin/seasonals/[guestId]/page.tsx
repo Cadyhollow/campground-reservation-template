@@ -230,8 +230,8 @@ export default function SeasonalCamperPage() {
     setSendResult({ emailed: !!d.emailed, error: d.error || undefined })
   }
 
-  if (loading) return <div className="p-6 text-gray-500">Loading…</div>
-  if (err && !data) return <div className="p-6 text-red-600">{err}</div>
+  if (loading) return <div className="p-6 text-muted">Loading…</div>
+  if (err && !data) return <div className="p-6 text-danger">{err}</div>
 
   const current = data?.currentContract
   const status = current?.status || 'none'
@@ -245,39 +245,39 @@ export default function SeasonalCamperPage() {
       <Toaster />
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div>
-          <Link href="/admin/seasonals" className="text-sm text-gray-400 hover:text-gray-600">← Seasonals</Link>
-          <h2 className="text-2xl font-bold text-gray-900">{data?.guest?.name}</h2>
-          <p className="text-sm text-gray-500">Site {data?.guest?.site_number || '—'} · {selectedSeason?.name || 'season'}</p>
+          <Link href="/admin/seasonals" className="text-sm text-muted hover:text-ink-soft">← Seasonals</Link>
+          <h2 className="text-2xl font-bold text-ink">{data?.guest?.name}</h2>
+          <p className="text-sm text-muted">Site {data?.guest?.site_number || '—'} · {selectedSeason?.name || 'season'}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Link href={`/admin/seasonals/new?guestId=${guestId}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">↗ Full form</Link>
-          <label className="text-xs font-medium text-gray-500">Season</label>
+          <Link href={`/admin/seasonals/new?guestId=${guestId}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-line text-ink-soft hover:bg-card-2">↗ Full form</Link>
+          <label className="text-xs font-medium text-muted">Season</label>
           <SeasonPicker seasons={seasons} value={seasonId} onChange={setSeasonId} disabled={!seasonsLoaded}
-            className="border border-gray-200 rounded-lg px-3 py-2 text-sm font-bold text-gray-900" />
+            className="border border-line rounded-lg px-3 py-2 text-sm font-bold text-ink" />
           {status === 'signed'
-            ? <span className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: '#f0fdf4', color: '#15803d' }}>✓ Packet signed</span>
+            ? <span className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: 'var(--good-bg)', color: 'var(--good)' }}>✓ Packet signed</span>
             : status === 'sent'
               ? <>
-                  <button onClick={resend} disabled={working} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#2E6B8A' }}>{working ? '…' : '↻ Resend email'}</button>
+                  <button onClick={resend} disabled={working} className="px-4 py-2 rounded-lg text-sm font-semibold text-on-forest disabled:opacity-50" style={{ background: 'var(--forest)' }}>{working ? '…' : '↻ Resend email'}</button>
                   {/* Quiet outline, not a red fill: this is reversible by sending again, not a delete. */}
                   <button onClick={cancelPacket} disabled={working}
                     className="px-4 py-2 rounded-lg text-sm font-semibold border disabled:opacity-50"
-                    style={{ borderColor: '#fecaca', color: '#b91c1c', background: '#fff' }}>
+                    style={{ borderColor: 'color-mix(in srgb, var(--danger) 35%, transparent)', color: 'var(--danger)', background: 'var(--card)' }}>
                     {working ? '…' : 'Cancel packet'}
                   </button>
                 </>
-              : <button onClick={goToReview} disabled={working} className="px-4 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{working ? '…' : `✉ Review & send ${selectedSeason?.name || ''} packet`}</button>}
+              : <button onClick={goToReview} disabled={working} className="px-4 py-2 rounded-lg text-sm font-bold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>{working ? '…' : `✉ Review & send ${selectedSeason?.name || ''} packet`}</button>}
         </div>
       </div>
 
       {sendResult && (
-        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={sendResult.emailed ? { background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0' } : { background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>
+        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={sendResult.emailed ? { background: 'var(--good-bg)', color: 'var(--good)', border: '1px solid color-mix(in srgb, var(--good) 35%, transparent)' } : { background: 'var(--watch-bg)', color: 'var(--watch)', border: '1px solid color-mix(in srgb, var(--watch) 40%, transparent)' }}>
           {sendResult.emailed ? 'Packet emailed to the camper.' : `Packet created, but the email did not send${sendResult.error ? `: ${sendResult.error}` : ''}. Use “Resend email”.`}
         </div>
       )}
 
       {data && !hasAddress && (
-        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>
+        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: 'var(--watch-bg)', color: 'var(--watch)', border: '1px solid color-mix(in srgb, var(--watch) 40%, transparent)' }}>
           ⚠ Home address required for seasonal campers — add it below. It prints on the contract and is the mailing fallback if email delivery fails.
         </div>
       )}
@@ -285,31 +285,31 @@ export default function SeasonalCamperPage() {
       {data && <SeasonalSections data={data} mode="admin" />}
 
       {/* Rig editor (writes to guests) */}
-      <div className="bg-white rounded-xl border border-gray-100 p-5 mb-4">
+      <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide">Edit rig (saved to the camper record)</h3>
-          <button onClick={() => setRigOpen(o => !o)} className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>{rigOpen ? 'Cancel' : 'Edit'}</button>
+          <h3 className="text-sm font-bold text-muted uppercase tracking-wide">Edit rig (saved to the camper record)</h3>
+          <button onClick={() => setRigOpen(o => !o)} className="text-sm font-semibold" style={{ color: 'var(--link)' }}>{rigOpen ? 'Cancel' : 'Edit'}</button>
         </div>
         {rigOpen && (
           <div className="mt-3">
             <RigEditor value={rig} onChange={setRig} />
             <div className="mt-3">
-              <button onClick={saveRig} disabled={savingRig} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{savingRig ? 'Saving…' : 'Save rig'}</button>
+              <button onClick={saveRig} disabled={savingRig} className="px-4 py-2 rounded-lg text-sm font-semibold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>{savingRig ? 'Saving…' : 'Save rig'}</button>
             </div>
           </div>
         )}
       </div>
 
       {/* Home address editor (writes to guests) — required for seasonal campers */}
-      <div className="bg-white rounded-xl border p-5 mb-4" style={{ borderColor: hasAddress ? '#f3f4f6' : '#fde68a' }}>
+      <div className="bg-card rounded-xl border p-5 mb-4" style={{ borderColor: hasAddress ? 'var(--card-2)' : 'color-mix(in srgb, var(--watch) 40%, transparent)' }}>
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold uppercase tracking-wide" style={{ color: hasAddress ? '#9ca3af' : '#b45309' }}>
+          <h3 className="text-sm font-bold uppercase tracking-wide" style={{ color: hasAddress ? 'var(--muted)' : 'var(--watch)' }}>
             Home address {hasAddress ? '(saved to the camper record)' : '· required'}
           </h3>
-          <button onClick={() => setAddrOpen(o => !o)} className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>{addrOpen ? 'Cancel' : 'Edit'}</button>
+          <button onClick={() => setAddrOpen(o => !o)} className="text-sm font-semibold" style={{ color: 'var(--link)' }}>{addrOpen ? 'Cancel' : 'Edit'}</button>
         </div>
         {!addrOpen && (
-          <p className="text-sm mt-2" style={{ color: hasAddress ? '#374151' : '#9ca3af' }}>
+          <p className="text-sm mt-2" style={{ color: hasAddress ? 'var(--ink-soft)' : 'var(--muted)' }}>
             {hasAddress
               ? <>{g.home_street}<br />{[[g.home_city, g.home_state].filter(Boolean).join(', '), g.home_zip].filter(Boolean).join(' ')}</>
               : 'No address on file.'}
@@ -319,7 +319,7 @@ export default function SeasonalCamperPage() {
           <div className="mt-3">
             <AddressEditor value={addr} onChange={setAddr} required />
             <div className="mt-3">
-              <button onClick={saveAddr} disabled={savingAddr} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{savingAddr ? 'Saving…' : 'Save address'}</button>
+              <button onClick={saveAddr} disabled={savingAddr} className="px-4 py-2 rounded-lg text-sm font-semibold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>{savingAddr ? 'Saving…' : 'Save address'}</button>
             </div>
           </div>
         )}
@@ -327,45 +327,45 @@ export default function SeasonalCamperPage() {
 
       {/* Party roster editor (writes to guests.party) — standing camper info, like rig/address.
           Editing here changes who is on the NEXT packet; it does not alter one already sent. */}
-      <div className="bg-white rounded-xl border border-gray-100 p-5 mb-4">
+      <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide">Party (saved to the camper record)</h3>
-          <button onClick={() => { if (!partyOpen) setParty(Array.isArray(g.party) ? g.party as Occupant[] : []); setPartyOpen(o => !o) }} className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>{partyOpen ? 'Cancel' : 'Edit'}</button>
+          <h3 className="text-sm font-bold text-muted uppercase tracking-wide">Party (saved to the camper record)</h3>
+          <button onClick={() => { if (!partyOpen) setParty(Array.isArray(g.party) ? g.party as Occupant[] : []); setPartyOpen(o => !o) }} className="text-sm font-semibold" style={{ color: 'var(--link)' }}>{partyOpen ? 'Cancel' : 'Edit'}</button>
         </div>
         {!partyOpen && (
           roster.length > 0
-            ? <ul className="text-sm text-gray-700 mt-2 space-y-1">
+            ? <ul className="text-sm text-ink-soft mt-2 space-y-1">
                 {roster.map((o, i) => (
-                  <li key={i} className="flex justify-between"><span>{o.name || '—'}</span><span className="text-gray-400 capitalize">{o.kind || ''}</span></li>
+                  <li key={i} className="flex justify-between"><span>{o.name || '—'}</span><span className="text-muted capitalize">{o.kind || ''}</span></li>
                 ))}
               </ul>
-            : <p className="text-sm text-gray-400 mt-2">No one on the roster yet.</p>
+            : <p className="text-sm text-muted mt-2">No one on the roster yet.</p>
         )}
         {partyOpen && (
           <div className="mt-3">
             <PartyEditor value={party} onChange={setParty} />
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-muted mt-1">
               This is the camper&rsquo;s standing party. It fills in the next packet you send — it does not change a packet that has already gone out.
             </p>
             <div className="mt-3">
-              <button onClick={saveParty} disabled={savingParty} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#15803d' }}>{savingParty ? 'Saving…' : 'Save party'}</button>
+              <button onClick={saveParty} disabled={savingParty} className="px-4 py-2 rounded-lg text-sm font-semibold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>{savingParty ? 'Saving…' : 'Save party'}</button>
             </div>
           </div>
         )}
       </div>
 
       {/* Add note (append-only) */}
-      <div className="bg-white rounded-xl border border-gray-100 p-5 mb-4">
-        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide mb-2">Add a note</h3>
-        <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="Add a note (append-only — can't be edited or deleted)" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-        <div className="mt-2"><button onClick={addNote} disabled={savingNote || !note.trim()} className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#2E6B8A' }}>{savingNote ? 'Adding…' : 'Add note'}</button></div>
+      <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
+        <h3 className="text-sm font-bold text-muted uppercase tracking-wide mb-2">Add a note</h3>
+        <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="Add a note (append-only — can't be edited or deleted)" className="w-full border border-line rounded-lg px-3 py-2 text-sm" />
+        <div className="mt-2"><button onClick={addNote} disabled={savingNote || !note.trim()} className="px-4 py-2 rounded-lg text-sm font-semibold text-on-forest disabled:opacity-50" style={{ background: 'var(--forest)' }}>{savingNote ? 'Adding…' : 'Add note'}</button></div>
       </div>
 
       {/* Remove from seasonals — unchecks is_seasonal; keeps all records, reversible */}
       <div className="mb-4 flex justify-end">
         <button onClick={removeFromSeasonals} disabled={removing}
           className="px-4 py-2 rounded-lg text-sm font-semibold border disabled:opacity-50"
-          style={{ borderColor: '#fecaca', color: '#b91c1c', background: '#fff' }}>
+          style={{ borderColor: 'color-mix(in srgb, var(--danger) 35%, transparent)', color: 'var(--danger)', background: 'var(--card)' }}>
           {removing ? 'Removing…' : 'Remove from seasonals'}
         </button>
       </div>

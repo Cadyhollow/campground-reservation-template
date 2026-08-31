@@ -37,7 +37,7 @@
 // bearing rather than decorative.
 export type Occupant = { name: string; kind: 'adult' | 'child' }
 
-const field = 'border border-gray-200 rounded-lg px-3 py-2 text-sm'
+const field = 'border border-line rounded-lg px-3 py-2 text-sm'
 
 export default function PartyEditor({ value, onChange }: {
   value: Occupant[]
@@ -49,12 +49,12 @@ export default function PartyEditor({ value, onChange }: {
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Party</p>
+        <p className="text-xs font-bold text-muted uppercase tracking-wide">Party</p>
         <button type="button" onClick={add}
-          className="text-xs font-semibold" style={{ color: '#2E6B8A' }}>+ Add person</button>
+          className="text-xs font-semibold" style={{ color: 'var(--link)' }}>+ Add person</button>
       </div>
 
-      {value.length === 0 && <p className="text-xs text-gray-400 mb-2">No one added yet.</p>}
+      {value.length === 0 && <p className="text-xs text-muted mb-2">No one added yet.</p>}
 
       {value.map((o, i) => (
         // `flex-wrap` so that on a narrow counter tablet the name keeps a usable width and the
@@ -81,7 +81,7 @@ export default function PartyEditor({ value, onChange }: {
             type="button"
             onClick={() => onChange(value.filter((_, j) => j !== i))}
             aria-label={`Remove party member ${i + 1}`}
-            className="shrink-0 text-gray-400 hover:text-red-600 text-xl leading-none px-2 py-1"
+            className="shrink-0 text-muted hover:text-danger text-xl leading-none px-2 py-1"
           >
             ×
           </button>
@@ -92,7 +92,7 @@ export default function PartyEditor({ value, onChange }: {
           not back up at the heading. */}
       {value.length > 0 && (
         <button type="button" onClick={add}
-          className="text-xs font-semibold" style={{ color: '#2E6B8A' }}>+ Add another person</button>
+          className="text-xs font-semibold" style={{ color: 'var(--link)' }}>+ Add another person</button>
       )}
     </div>
   )

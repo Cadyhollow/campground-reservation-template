@@ -27,14 +27,14 @@ export default function RigEditor({ value, onChange }: {
     <div className="grid grid-cols-2 gap-3">
       {FIELDS.map(([k, label, type]) => (
         <div key={k}>
-          <label className="block text-xs text-gray-500 mb-1">{label}</label>
+          <label className="block text-xs text-muted mb-1">{label}</label>
           <input
             type={type}
             // The six fields are string | number | null (a number input holds a string while it is
             // being typed), so coerce for the input rather than widen the type.
             value={value[k] == null ? '' : String(value[k])}
             onChange={e => onChange({ ...value, [k]: e.target.value })}
-            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+            className="w-full border border-line rounded-lg px-3 py-2 text-sm"
           />
         </div>
       ))}
