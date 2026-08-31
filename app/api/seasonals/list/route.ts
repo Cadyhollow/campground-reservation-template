@@ -96,6 +96,11 @@ export async function GET(request: NextRequest) {
       guest_id: g.id,
       name: g.name,
       site_number: g.site_number || '',
+      // Additive (seasonal redesign PR 2): the row now carries its contract's id, because
+      // reviewing, resending and cancelling a packet moved onto this page — they were on the
+      // camper page, which is now the person rather than the paperwork. Nothing that read this
+      // payload before is affected; a camper with no contract still sends null.
+      contract_id: c?.id || null,
       contract_status: c?.status || 'none', // none|draft|sent|signed
       contract_doc_status: contractDoc,      // pending|signed|null
       waiver_doc_status: waiverDoc,

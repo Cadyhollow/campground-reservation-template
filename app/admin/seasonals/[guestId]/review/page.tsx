@@ -275,7 +275,7 @@ export default function SeasonalReviewPage() {
         <div className="rounded-lg px-3 py-2 text-sm mb-4" style={{ background: 'var(--watch-bg)', color: 'var(--watch)', border: '1px solid color-mix(in srgb, var(--watch) 40%, transparent)' }}>
           This camper already has a <strong>{alreadyStatus}</strong> {year} packet, so it can no longer be edited or re-sent from here.{' '}
           <Link href={backHref} className="underline font-semibold">Go back</Link>
-          {alreadyStatus === 'sent' && <> — from there you can resend the email, or cancel the packet to edit and send it again.</>}
+          {alreadyStatus === 'sent' && <> — on the Contracts list you can resend the email, or cancel the packet to edit and send it again.</>}
         </div>
       )}
 

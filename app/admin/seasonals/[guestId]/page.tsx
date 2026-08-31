@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { planAtLeast } from '@/lib/plan'
+import { sortSeasonsForPicker } from '@/lib/season'
 import SeasonPicker, { useSeasons } from '../SeasonPicker'
 import SeasonalSections from '../SeasonalSections'
 import PartyEditor from '../PartyEditor'
@@ -55,6 +56,9 @@ export default function SeasonalCamperPage() {
   const [active, setActive] = useState(true)
   const [togglingActive, setTogglingActive] = useState(false)
   const [enrolling, setEnrolling] = useState(false)
+  // Which season the "Add to season" dropdown is pointed at. Its own state, NOT the page's season
+  // picker: the picker decides what you are LOOKING at, this decides what you are adding them to.
+  const [addSeasonId, setAddSeasonId] = useState('')
 
   // Party ROSTER editor (writes to guests.party). Standing camper info, exactly like rig and
   // address above — NOT the per-contract `occupants` edited on the review screen at ./review.
@@ -68,9 +72,8 @@ export default function SeasonalCamperPage() {
   const [note, setNote] = useState('')
   const [savingNote, setSavingNote] = useState(false)
 
-  // Shared by Resend and Cancel. The DRAFT send path now lives on the review screen
-  // (./review), so there is no modal state here any more.
-  const [working, setWorking] = useState(false)
+  // The send outcome, still read from the query string: the review screen returns HERE after a
+  // send, so the banner stays even though the send button itself has moved to Contracts.
   const [sendResult, setSendResult] = useState<{ emailed: boolean; error?: string } | null>(null)
 
   useEffect(() => {
@@ -149,22 +152,22 @@ export default function SeasonalCamperPage() {
   // Reuses POST /api/seasonal-contracts/create rather than inserting here, because that route is
   // already idempotent and already handles losing the race on the (guest_id, season_id) unique
   // constraint. Clicking twice returns the existing draft; it never creates a second contract.
-  async function addToSeason() {
-    const year = data?.year
-    if (!year) return
+  async function addToSeason(targetSeasonId: string) {
+    const season = seasons.find(x => x.id === targetSeasonId)
+    if (!season) return
     setEnrolling(true)
     try {
       const res = await fetch('/api/seasonal-contracts/create', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guest_id: guestId, season_year: year, season_id: seasonId || undefined }),
+        body: JSON.stringify({ guest_id: guestId, season_year: season.year, season_id: season.id }),
       })
       const d = await res.json()
       if (!res.ok) toast.error(d.error || 'Could not add them to the season.')
       else {
-        const label = seasons.find(x => x.id === seasonId)?.name || String(year)
         toast.success(d.created
-          ? `Added to ${label} as a draft — they are on the Contracts list now.`
-          : `Already in ${label}.`)
+          ? `Added to ${season.name} — set the fee and send from Contracts.`
+          : `Already in ${season.name}.`)
+        setAddSeasonId('')
         await load()
       }
     } catch { toast.error('Could not add them to the season.') }
@@ -242,44 +245,12 @@ export default function SeasonalCamperPage() {
   // The draft send path. Phase 1.5 replaced the old modal — which showed the party, dates and
   // total but never the DOCUMENTS — with a full review screen that renders the real contract and
   // waiver before anything is frozen. This only navigates; the draft is created there.
-  function goToReview() {
-    if (!seasonId) return
-    // Phase 2c: the review screen is opened BY SEASON, which is what lets this camper hold a
-    // Spring and a Fall and still land on the right contract. The off-year confirm the modal
-    // carried is gone with the year picker — the season is named on the button itself now, so
-    // there is no ambiguous number to mistake.
-    router.push(`/admin/seasonals/${guestId}/review?season_id=${encodeURIComponent(seasonId)}`)
-  }
 
   // Retract a sent-but-unsigned packet. The route voids the packet's signature rows (killing the
   // camper's link) and puts the contract back to 'draft' — so after load() the header shows the
   // green “Review & send …” button again and the normal review screen handles the re-send. No separate
   // re-send UI is needed, and freezePacket mints a brand-new packet_id when it runs.
-  async function cancelPacket() {
-    const id = data?.currentContract?.id
-    if (!id) return
-    if (!window.confirm(
-      `Cancel the ${selectedSeason?.name || ''} packet?\n\n` +
-      `The link already emailed to ${data?.guest?.name || 'this camper'} will stop working, and the packet goes back to a draft you can edit.\n\n` +
-      `You will need to send it again afterwards. Anything already signed is not affected.`
-    )) return
-    setWorking(true); setSendResult(null)
-    const res = await fetch(`/api/seasonal-contracts/${id}/cancel`, { method: 'POST' })
-    const d = await res.json().catch(() => ({}))
-    setWorking(false)
-    if (!res.ok || !d.ok) { toast.error(d.error || 'Could not cancel the packet.'); return }
-    toast.success('Packet canceled — the camper\u2019s link no longer works. Edit and send again when ready.')
-    await load()
-  }
 
-  async function resend() {
-    if (!data?.currentContract?.id) return
-    setWorking(true)
-    const res = await fetch(`/api/seasonal-contracts/${data.currentContract.id}/resend`, { method: 'POST' })
-    const d = await res.json()
-    setWorking(false)
-    setSendResult({ emailed: !!d.emailed, error: d.error || undefined })
-  }
 
   if (loading) return <div className="p-6 text-muted">Loading…</div>
   if (err && !data) return <div className="p-6 text-danger">{err}</div>
@@ -323,30 +294,26 @@ export default function SeasonalCamperPage() {
             <p className="text-xs text-muted mt-0.5">Seasons: {allYears.join(', ')}</p>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Link href={`/admin/seasonals/new?guestId=${guestId}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-line text-ink-soft hover:bg-card-2">↗ Full form</Link>
           <label className="text-xs font-medium text-muted">Season</label>
           <SeasonPicker seasons={seasons} value={seasonId} onChange={setSeasonId} disabled={!seasonsLoaded}
             className="border border-line rounded-lg px-3 py-2 text-sm font-bold text-ink" />
-          {status === 'signed'
-            ? <span className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: 'var(--good-bg)', color: 'var(--good)' }}>✓ Packet signed</span>
-            : status === 'sent'
-              ? <>
-                  <button onClick={resend} disabled={working} className="px-4 py-2 rounded-lg text-sm font-semibold text-on-forest disabled:opacity-50" style={{ background: 'var(--forest)' }}>{working ? '…' : '↻ Resend email'}</button>
-                  {/* Quiet outline, not a red fill: this is reversible by sending again, not a delete. */}
-                  <button onClick={cancelPacket} disabled={working}
-                    className="px-4 py-2 rounded-lg text-sm font-semibold border disabled:opacity-50"
-                    style={{ borderColor: 'color-mix(in srgb, var(--danger) 35%, transparent)', color: 'var(--danger)', background: 'var(--card)' }}>
-                    {working ? '…' : 'Cancel packet'}
-                  </button>
-                </>
-              : <button onClick={goToReview} disabled={working} className="px-4 py-2 rounded-lg text-sm font-bold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>{working ? '…' : `✉ Review & send ${selectedSeason?.name || ''} packet`}</button>}
+          {/* ⚠ NO SEND CONTROLS HERE — AND NO CONTRACT DOCUMENT.
+              Reviewing, sending, resending and cancelling a packet all live on the Contracts page
+              now, along with the document itself. This page is the PERSON: who they are, what they
+              owe, and which seasons they are in. A link across is right; a second place to send
+              the paperwork from is what made the two pages feel like the same page. */}
+          <Link href={`/admin/seasonals${seasonId ? `?season_id=${encodeURIComponent(seasonId)}` : ''}`}
+            className="px-3 py-2 rounded-lg text-sm font-semibold border border-line text-ink-soft hover:bg-card-2 whitespace-nowrap">
+            Contracts &amp; sending →
+          </Link>
         </div>
       </div>
 
       {sendResult && (
         <div className="rounded-lg px-3 py-2 text-sm mb-3" style={sendResult.emailed ? { background: 'var(--good-bg)', color: 'var(--good)', border: '1px solid color-mix(in srgb, var(--good) 35%, transparent)' } : { background: 'var(--watch-bg)', color: 'var(--watch)', border: '1px solid color-mix(in srgb, var(--watch) 40%, transparent)' }}>
-          {sendResult.emailed ? 'Packet emailed to the camper.' : `Packet created, but the email did not send${sendResult.error ? `: ${sendResult.error}` : ''}. Use “Resend email”.`}
+          {sendResult.emailed ? 'Packet emailed to the camper.' : `Packet created, but the email did not send${sendResult.error ? `: ${sendResult.error}` : ''}. Resend it from the Contracts page.`}
         </div>
       )}
 
@@ -356,24 +323,39 @@ export default function SeasonalCamperPage() {
         </div>
       )}
 
-      {/* ⚠ THE VANISHING CAMPER, MADE IMPOSSIBLE.
-          Flagging somebody seasonal in the Guest Directory does not enrol them in a season, so
-          they hold no contract and appear on NO season's Contracts list. This is that state, said
-          out loud, one click from fixed. A seasonal camper is either enrolled or visibly one
-          click from being enrolled — never invisible. */}
-      {data && enrollment === 'not_enrolled' && (
-        <div className="rounded-xl border border-danger/40 bg-danger-bg px-4 py-4 mb-4">
-          <p className="text-sm font-bold text-danger">Not yet in {seasonLabel}.</p>
-          <p className="text-sm text-danger mt-1">
-            They are a seasonal camper, but they hold no contract for {seasonLabel} — so they do not
-            appear on that season&rsquo;s Contracts list at all. Adding them creates a draft; nothing is
-            sent to them.
-          </p>
-          <button onClick={addToSeason} disabled={enrolling || !data.year}
-            className="mt-3 px-4 py-2 rounded-lg text-sm font-bold text-on-forest disabled:opacity-50"
-            style={{ background: 'var(--forest)' }}>
-            {enrolling ? 'Adding…' : `Add to ${seasonLabel}`}
-          </button>
+      {/* SEASONS — STATUS ONLY.
+          One line per season this park runs, saying where this camper stands. Deliberately not a
+          contract: no document, no draft text, no preview, no send. Those are the Contracts
+          page's job, and duplicating them here is what made the two pages feel like one. */}
+      {data && seasons.length > 0 && (
+        <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
+          <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+            <h3 className="text-sm font-bold text-muted uppercase tracking-wide">Seasons</h3>
+            <Link href={`/admin/seasonals${seasonId ? `?season_id=${encodeURIComponent(seasonId)}` : ''}`}
+              className="text-xs font-semibold" style={{ color: 'var(--link)' }}>
+              Fees, sending &amp; documents →
+            </Link>
+          </div>
+          <ul>
+            {sortSeasonsForPicker(seasons).map(se => {
+              const c = (data.contracts || []).find(x => x.season_id === se.id)
+                     || (data.contracts || []).find(x => !x.season_id && x.season_year === se.year)
+              const st = enrollmentStatus(c)
+              const tone = ENROLLMENT_TONE[st]
+              return (
+                <li key={se.id} className="flex items-center justify-between gap-3 py-1.5 border-b border-line-soft last:border-b-0">
+                  <span className="text-sm text-ink">{se.name}</span>
+                  <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                    tone === 'good' ? 'bg-good-bg text-good'
+                      : tone === 'watch' ? 'bg-watch-bg text-watch'
+                      : tone === 'draft' ? 'bg-draft-bg text-draft'
+                      : 'bg-card-2 text-muted'}`}>
+                    {ENROLLMENT_LABEL[st]}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
         </div>
       )}
 
@@ -546,6 +528,43 @@ export default function SeasonalCamperPage() {
           {togglingActive ? '…' : active ? 'Mark inactive' : 'Mark active'}
         </button>
       </div>
+
+      {/* ADD TO SEASON — the ONE enrolment entry point on the camper side.
+          Creating a camper makes the person only; it does not create a contract. This is where a
+          person becomes enrolled: it creates their DRAFT contract for the season chosen, and that
+          draft then appears on the Contracts page to have its fee set and be sent. The camper page
+          starts it, the Contracts page finishes it.
+          Idempotent by construction — POST /api/seasonal-contracts/create returns the existing row
+          rather than a second one, so a double click cannot duplicate a contract. */}
+      {data && seasons.length > 0 && (
+        <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
+          <h3 className="text-sm font-bold text-muted uppercase tracking-wide">Add to a season</h3>
+          <p className="text-sm text-ink-soft mt-1 mb-3">
+            Creates a draft contract for the season you choose. Nothing is sent — set the fee and
+            send it from the Contracts page.
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select value={addSeasonId} onChange={e => setAddSeasonId(e.target.value)}
+              className="rounded-lg border border-line-strong bg-card px-3 py-2 text-sm text-ink">
+              <option value="">Choose a season…</option>
+              {sortSeasonsForPicker(seasons).map(se => {
+                const already = (data.contracts || []).some(
+                  x => x.season_id === se.id || (!x.season_id && x.season_year === se.year))
+                return (
+                  <option key={se.id} value={se.id} disabled={already}>
+                    {se.name}{already ? ' — already in it' : ''}
+                  </option>
+                )
+              })}
+            </select>
+            <button onClick={() => addToSeason(addSeasonId)} disabled={!addSeasonId || enrolling}
+              className="px-4 py-2 rounded-lg text-sm font-bold text-on-forest disabled:opacity-50 whitespace-nowrap"
+              style={{ background: 'var(--forest)' }}>
+              {enrolling ? 'Adding…' : 'Add to season'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Remove from seasonals — unchecks is_seasonal; keeps all records, reversible */}
       <div className="mb-4 flex justify-end">
