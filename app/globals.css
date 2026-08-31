@@ -401,3 +401,182 @@ input, select, textarea {
   .pos-cat-tile:hover,
   .pos-cat-tile:active { transform: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   THE SEASONAL THEME — the cream "ResoNation" look
+   ══════════════════════════════════════════════════════════════════════════════
+
+   The seasonal area is a Summit-tier space of its own, so stepping into it warms
+   the page from the admin's default grey to cream. This is the ONE place the
+   palette is written down. Nothing under app/admin/seasonals/ should contain a
+   hex value — it reads these tokens through the utilities registered below.
+
+   HOW IT IS SCOPED, AND HOW IT EXTENDS LATER
+   ------------------------------------------
+   `.seasonal-theme` is applied by app/admin/seasonals/layout.tsx, so it covers
+   the seasonal routes and nothing else. The tokens cascade, and the utilities
+   (bg-card, text-ink, border-line …) are global, so extending the theme to the
+   whole admin later is ONE move: put the class on app/admin/layout.tsx instead.
+   No hex values get re-typed, because there are none to re-type.
+
+   The :root defaults below exist so those utilities are never invalid outside
+   the wrapper. They deliberately reproduce today's grey admin, so a stray
+   `bg-card` on a non-seasonal page looks like it does now rather than breaking.
+
+   LIGHT / DARK
+   ------------
+   Light ships active — the admin is light today, and globals.css above is
+   explicit that /admin must NOT follow a tenant's camper-facing dark theme, so
+   this theme deliberately does not read html[data-theme] either.
+
+   Dark is defined, contrast-checked and ready. Two ways to reach it, no new
+   theme-switching machinery for either:
+       <div class="seasonal-theme" data-scheme="dark">     → always dark
+       <div class="seasonal-theme" data-scheme="system">   → follows the OS
+   Add whichever to the wrapper in the seasonal layout to turn it on.
+
+   THREE APPROVED VALUES WERE NUDGED, AND WHY
+   ------------------------------------------
+   Measured against WCAG AA, three of the approved light values failed as text and
+   were darkened to the nearest passing value with hue and saturation held, so the
+   look is unchanged to the eye:
+       --muted  #77806E -> #666D5E   (3.65:1 on paper -> 4.54:1)
+       --watch  #9A6A1A -> #8F6218   (3.98:1 on watch-bg -> 4.51:1)
+   --gold keeps its approved #B4842B, which clears the 3:1 bar for decorative use
+   (rules, icons, accents). Gold as TEXT reads --gold-ink #8D6722 instead; the
+   approved value is only 2.96:1 on paper and is not legible as body text.
+
+   --link is the other addition, and it exists because of a REAL regression caught in
+   review: these pages styled inline links with the tenant accent, and routing them to
+   --forest made them #22402D against #20301F body text — 1.22:1, i.e. indistinguishable
+   from ordinary text. Filled buttons read as buttons on their own, so they keep --forest;
+   inline text links use --link, which clears AA on both grounds AND is 2.67:1 against the
+   body ink, so it is visibly a link. They stay semibold, so colour is not the only signal.
+
+   --line stays the approved thin hairline: it is decoration, exempt from 1.4.11.
+   Form fields are the exception — a --card field on --paper is 1.07:1, so the
+   border is the only thing identifying the control, and those use --line-strong. */
+
+:root {
+  /* Non-seasonal fallback: today's grey admin. Keeps the utilities valid. */
+  --paper: #F7F7F8;      --card: #FFFFFF;       --card-2: #F9FAFB;
+  --ink: #111827;        --ink-soft: #374151;   --muted: #6B7280;
+  --line: #E5E7EB;       --line-soft: #F3F4F6;
+  --forest: #2E6B8A;     --forest-deep: #245670; --gold: #B4842B;
+  --good: #15803D;       --good-bg: #F0FDF4;
+  --watch: #B45309;      --watch-bg: #FFFBEB;
+  --draft: #1D4ED8;      --draft-bg: #EFF6FF;
+  --danger: #B91C1C;     --danger-bg: #FEF2F2;
+  --line-strong: #9CA3AF; --gold-ink: #8D6722; --link: #2E6B8A; --link-hover: #245670;
+  --on-forest: #FFFFFF;  --on-good: #FFFFFF;    --on-watch: #FFFFFF; --on-danger: #FFFFFF;
+}
+
+.seasonal-theme {
+  --paper: #F5F1E6;      --card: #FBF9F2;       --card-2: #F1ECDD;
+  --ink: #20301F;        --ink-soft: #4A5346;   --muted: #666D5E;
+  --line: #E2DCC9;       --line-soft: #ECE7D6;   --line-strong: #A18F57;
+  --forest: #22402D;     --forest-deep: #1B3324; --gold: #B4842B;
+  --gold-ink: #8D6722;   --link: #2F7A50;      --link-hover: #1B5636;
+  --good: #1F7A4D;       --good-bg: #E6F0E7;
+  --watch: #8F6218;      --watch-bg: #F4EBD6;
+  --draft: #1d4ed8;      --draft-bg: #e7edfb;
+  /* Not in the approved set — the seasonal pages have destructive actions and
+     error banners that must stay legible on cream. Warm-shifted to match. */
+  --danger: #9B2C2C;     --danger-bg: #F6E3E0;
+  /* Ink that sits ON a filled button. White works on every light-theme fill; the
+     dark theme's fills are bright, so it flips there. */
+  --on-forest: #FFFFFF;  --on-good: #FFFFFF;    --on-watch: #FFFFFF; --on-danger: #FFFFFF;
+
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-manrope), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* The dark set, defined and ready. Not active — see the note above. */
+.seasonal-theme[data-scheme="dark"] { color-scheme: dark;
+  --paper: #11150E;      --card: #191E14;       --card-2: #212619;
+  --ink: #ECEADB;        --ink-soft: #B7BCA9;   --muted: #8A917E;
+  --line: #2C3325;       --line-soft: #232A1D;   --line-strong: #5D6C4E;
+  --forest: #22402D;     --forest-deep: #16271B; --gold: #D4A445;
+  --gold-ink: #D4A445;   --link: #7FC49A;      --link-hover: #A6DCBB;
+  --good: #4CAF76;       --good-bg: #182A1E;
+  --watch: #D6A23C;      --watch-bg: #2A2413;
+  --draft: #6f9bf0;      --draft-bg: #16233b;
+  --danger: #E4837B;     --danger-bg: #2E1A18;
+  --on-forest: #FFFFFF;  --on-good: #1A3B28;    --on-watch: #523C11; --on-danger: #661B15;
+}
+@media (prefers-color-scheme: dark) {
+  .seasonal-theme[data-scheme="system"] { color-scheme: dark;
+    --paper: #11150E;    --card: #191E14;       --card-2: #212619;
+    --ink: #ECEADB;      --ink-soft: #B7BCA9;   --muted: #8A917E;
+    --line: #2C3325;     --line-soft: #232A1D;
+    --forest: #22402D;   --forest-deep: #16271B; --gold: #D4A445;
+    --good: #4CAF76;     --good-bg: #182A1E;
+    --watch: #D6A23C;    --watch-bg: #2A2413;
+    --draft: #6f9bf0;    --draft-bg: #16233b;
+    --danger: #E4837B;   --danger-bg: #2E1A18;
+    --line-strong: #5D6C4E; --gold-ink: #D4A445; --link: #7FC49A; --link-hover: #A6DCBB;
+    --on-forest: #FFFFFF; --on-good: #1A3B28;   --on-watch: #523C11; --on-danger: #661B15;
+  }
+}
+
+/* Serif headings and tabular money — the two typographic moves of the look. */
+.seasonal-theme h1, .seasonal-theme h2, .seasonal-theme h3, .seasonal-theme .font-display {
+  font-family: var(--font-newsreader), ui-serif, Georgia, "Times New Roman", serif;
+  letter-spacing: -0.01em;
+}
+/* Gold, used once and sparingly: a short rule under each page title. The four h2s in
+   this area are all page titles, which is why this can be a plain element rule. */
+.seasonal-theme h2 { position: relative; padding-bottom: 7px; }
+.seasonal-theme h2::after {
+  content: ""; position: absolute; left: 0; bottom: 0;
+  width: 34px; height: 2px; border-radius: 2px; background: var(--gold);
+}
+/* Money and any figure that should line up column-to-column. */
+.seasonal-theme .tnum {
+  font-family: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+/* Forms inherit the theme rather than the browser's default white box. */
+.seasonal-theme input, .seasonal-theme select, .seasonal-theme textarea {
+  background: var(--card); color: var(--ink); border-color: var(--line-strong);
+}
+.seasonal-theme input:focus-visible, .seasonal-theme select:focus-visible,
+.seasonal-theme textarea:focus-visible, .seasonal-theme button:focus-visible,
+.seasonal-theme a:focus-visible {
+  outline: 2px solid var(--forest); outline-offset: 2px;
+}
+.seasonal-theme ::placeholder { color: var(--muted); opacity: 1; }
+
+/* Register the tokens as Tailwind colours so the pages use bg-card / text-ink /
+   border-line instead of hexes. Global utilities, theme-scoped values. */
+@theme inline {
+  --color-paper: var(--paper);
+  --color-card: var(--card);
+  --color-card-2: var(--card-2);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-forest: var(--forest);
+  --color-forest-deep: var(--forest-deep);
+  --color-gold: var(--gold);
+  --color-gold-ink: var(--gold-ink);
+  --color-link: var(--link);
+  --color-link-hover: var(--link-hover);
+  --color-line-strong: var(--line-strong);
+  --color-on-forest: var(--on-forest);
+  --color-on-good: var(--on-good);
+  --color-on-watch: var(--on-watch);
+  --color-on-danger: var(--on-danger);
+  --color-good: var(--good);
+  --color-good-bg: var(--good-bg);
+  --color-watch: var(--watch);
+  --color-watch-bg: var(--watch-bg);
+  --color-draft: var(--draft);
+  --color-draft-bg: var(--draft-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+}

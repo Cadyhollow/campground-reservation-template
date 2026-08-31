@@ -51,7 +51,7 @@ export default function SeasonPicker({ seasons, value, onChange, className, disa
       value={value}
       disabled={disabled}
       onChange={e => onChange(e.target.value)}
-      className={className || 'border border-gray-200 rounded-lg px-3 py-2 text-sm'}
+      className={className || 'border border-line rounded-lg px-3 py-2 text-sm'}
     >
       {/* Present only until a default lands, so the control is never blank-with-no-explanation. */}
       {!value && <option value="">Select a season…</option>}

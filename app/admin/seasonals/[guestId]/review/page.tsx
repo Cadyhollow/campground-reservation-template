@@ -247,32 +247,32 @@ export default function SeasonalReviewPage() {
     router.push(`/packet/${d.packet_id}?kiosk=1`)
   }
 
-  const cardCls = 'bg-white rounded-xl border border-gray-100 p-5 mb-4'
-  const inp = 'w-full border border-gray-200 rounded-lg px-3 py-2 text-sm'
-  const lbl = 'block text-xs text-gray-500 mb-1'
+  const cardCls = 'bg-card rounded-xl border border-line-soft p-5 mb-4'
+  const inp = 'w-full border border-line rounded-lg px-3 py-2 text-sm'
+  const lbl = 'block text-xs text-muted mb-1'
   const backHref = `/admin/seasonals/${guestId}`
 
-  if (loading) return <div className="p-6 text-gray-500">Loading…</div>
-  if (err && !data) return <div className="p-6 text-red-600">{err}</div>
+  if (loading) return <div className="p-6 text-muted">Loading…</div>
+  if (err && !data) return <div className="p-6 text-danger">{err}</div>
 
   return (
     <div className="p-4 md:p-6 max-w-3xl">
       <Toaster />
 
       <div className="mb-4">
-        <Link href={backHref} className="text-sm text-gray-400 hover:text-gray-600">← {g.name || 'Camper'}</Link>
-        <h2 className="text-2xl font-bold text-gray-900">Review before sending</h2>
-        <p className="text-sm text-gray-500">
+        <Link href={backHref} className="text-sm text-muted hover:text-ink-soft">← {g.name || 'Camper'}</Link>
+        <h2 className="text-2xl font-bold text-ink">Review before sending</h2>
+        <p className="text-sm text-muted">
           {g.name || '—'} · Site {g.site_number || '—'} · {season?.name || `${year} season`}
         </p>
       </div>
 
-      <div className="rounded-lg px-3 py-2 text-sm mb-4" style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
+      <div className="rounded-lg px-3 py-2 text-sm mb-4" style={{ background: 'var(--draft-bg)', color: 'var(--draft)', border: '1px solid color-mix(in srgb, var(--draft) 35%, transparent)' }}>
         Nothing has been sent yet. Check the documents below, fix anything that is wrong, then send.
       </div>
 
       {alreadyStatus && (
-        <div className="rounded-lg px-3 py-2 text-sm mb-4" style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>
+        <div className="rounded-lg px-3 py-2 text-sm mb-4" style={{ background: 'var(--watch-bg)', color: 'var(--watch)', border: '1px solid color-mix(in srgb, var(--watch) 40%, transparent)' }}>
           This camper already has a <strong>{alreadyStatus}</strong> {year} packet, so it can no longer be edited or re-sent from here.{' '}
           <Link href={backHref} className="underline font-semibold">Go back</Link>
           {alreadyStatus === 'sent' && <> — from there you can resend the email, or cancel the packet to edit and send it again.</>}
@@ -281,33 +281,33 @@ export default function SeasonalReviewPage() {
 
       {/* ── The editable fields ─────────────────────────────────────────────────────────────── */}
       <div className={cardCls}>
-        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide mb-3">Details for this packet</h3>
+        <h3 className="text-sm font-bold text-muted uppercase tracking-wide mb-3">Details for this packet</h3>
         <PartyEditor value={occupants} onChange={setOccupants} />
-        <p className="text-xs text-gray-400 mt-1 mb-4">
+        <p className="text-xs text-muted mt-1 mb-4">
           Prefilled from the camper&rsquo;s standing party. Changes here apply to this packet only — to change the
           standing party, edit it on the camper page.
         </p>
         <div>
           <label className={lbl}>Season</label>
-          <p className="text-sm font-semibold text-gray-900">{season?.name || `${year} season`}</p>
+          <p className="text-sm font-semibold text-ink">{season?.name || `${year} season`}</p>
           {!overrideOn ? (
             <div className="flex items-start justify-between gap-3 mt-1">
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-ink-soft">
                 {eff.opens || eff.closes
-                  ? <>Runs <strong>{fmtRange(eff.opens, eff.closes)}</strong> <span className="text-gray-400">— from the season</span></>
-                  : <span className="text-amber-700">This season has no dates set yet. Add them under Manage seasons, or set dates just for this camper.</span>}
+                  ? <>Runs <strong>{fmtRange(eff.opens, eff.closes)}</strong> <span className="text-muted">— from the season</span></>
+                  : <span className="text-watch">This season has no dates set yet. Add them under Manage seasons, or set dates just for this camper.</span>}
               </p>
               <button type="button" onClick={() => { setOverrideOn(true); setOvOpens(season?.opens || ''); setOvCloses(season?.closes || '') }}
-                className="text-xs font-semibold whitespace-nowrap" style={{ color: 'var(--accent-color, #2E6B8A)' }}>
+                className="text-xs font-semibold whitespace-nowrap" style={{ color: 'var(--link)' }}>
                 Use different dates
               </button>
             </div>
           ) : (
             <div className="mt-2">
               <div className="flex items-center justify-between mb-1">
-                <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Dates for this camper only</p>
+                <p className="text-xs font-bold text-muted uppercase tracking-wide">Dates for this camper only</p>
                 <button type="button" onClick={() => { setOverrideOn(false); setOvOpens(''); setOvCloses('') }}
-                  className="text-xs font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>
+                  className="text-xs font-semibold" style={{ color: 'var(--link)' }}>
                   Use the season&rsquo;s dates
                 </button>
               </div>
@@ -336,7 +336,7 @@ export default function SeasonalReviewPage() {
             <input type="date" value={totalDueBy} onChange={e => setTotalDueBy(e.target.value)} className={inp} />
           </div>
         </div>
-        <p className="text-xs text-gray-400 mt-1">
+        <p className="text-xs text-muted mt-1">
           Display only — these print on the contract and nothing is charged from them.
         </p>
         <div className="mt-3">
@@ -345,7 +345,7 @@ export default function SeasonalReviewPage() {
             placeholder="e.g. Includes 2 extra family members, golf cart, and the second site."
             className={inp} />
         </div>
-        <p className="text-xs text-gray-400 mt-3">
+        <p className="text-xs text-muted mt-3">
           The site and rig printed below come from the camper record and are snapshotted when you send. Edit them on the
           camper page if they are wrong.
         </p>
@@ -353,29 +353,29 @@ export default function SeasonalReviewPage() {
 
       {/* ── The documents ───────────────────────────────────────────────────────────────────── */}
       <div className={cardCls}>
-        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide mb-3">The packet</h3>
-        <p className="text-xs text-gray-500 mb-2">This is exactly what the camper will see and sign:</p>
+        <h3 className="text-sm font-bold text-muted uppercase tracking-wide mb-3">The packet</h3>
+        <p className="text-xs text-muted mb-2">This is exactly what the camper will see and sign:</p>
         <PacketPreview guest={g} contract={previewContract} settings={settings} season={season} maxHeight="45vh" />
       </div>
 
       {/* ── Actions ─────────────────────────────────────────────────────────────────────────── */}
       <div className={cardCls}>
         {missing.length > 0 && (
-          <p className="text-sm text-amber-700 mb-3">
+          <p className="text-sm text-watch mb-3">
             Still needed before you can send: <strong>{missing.join(', ')}</strong>.
           </p>
         )}
         <div className="flex flex-wrap gap-3">
           <button onClick={sendPacket} disabled={!ready || working}
-            className="px-5 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>
+            className="px-5 py-2.5 rounded-xl text-sm font-bold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>
             {working ? 'Working…' : 'Send packet →'}
           </button>
           <button onClick={signInPerson} disabled={!ready || working}
-            className="px-5 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#2E6B8A' }}>
+            className="px-5 py-2.5 rounded-xl text-sm font-bold text-on-forest disabled:opacity-50" style={{ background: 'var(--forest)' }}>
             ✍ Sign now (in person)
           </button>
           <Link href={backHref}
-            className="px-5 py-2.5 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50">
+            className="px-5 py-2.5 rounded-xl text-sm font-semibold border border-line text-ink-soft hover:bg-card-2">
             Back — don&rsquo;t send
           </Link>
         </div>

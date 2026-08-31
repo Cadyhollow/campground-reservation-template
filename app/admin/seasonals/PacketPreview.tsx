@@ -11,8 +11,8 @@
 import { renderPacketDocuments } from '@/lib/contracts'
 
 const paper: React.CSSProperties = {
-  background: '#FBF8F1', border: '1px solid #F3EEE2', borderRadius: 10, padding: '1rem',
-  overflowY: 'auto', fontSize: 13, lineHeight: 1.5, color: '#374151', whiteSpace: 'pre-wrap',
+  background: 'var(--card)', border: '1px solid var(--card-2)', borderRadius: 10, padding: '1rem',
+  overflowY: 'auto', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-soft)', whiteSpace: 'pre-wrap',
 }
 
 /** What the preview needs to render. Deliberately the same shapes renderPacketDocuments takes. */
@@ -40,11 +40,11 @@ export default function PacketPreview({ guest, contract, settings, season, maxHe
   return (
     <>
       <div className="mb-2">
-        <p className="text-xs font-bold text-gray-700 mb-1">{contractTitle}</p>
+        <p className="text-xs font-bold text-ink-soft mb-1">{contractTitle}</p>
         <div style={box}>{contractText.trim() || 'Contract text is not set in Settings.'}</div>
       </div>
       <div>
-        <p className="text-xs font-bold text-gray-700 mb-1">Liability Waiver</p>
+        <p className="text-xs font-bold text-ink-soft mb-1">Liability Waiver</p>
         <div style={box}>{waiverText.trim() || 'Waiver text is not set in Settings.'}</div>
       </div>
     </>

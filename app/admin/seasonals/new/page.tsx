@@ -318,21 +318,21 @@ export default function NewSeasonalCamperPage() {
     return range ? `${s.name} · ${range}` : s.name
   }
 
-  const cardCls = 'bg-white rounded-xl border border-gray-100 p-5 mb-4'
-  const inp = 'w-full border border-gray-200 rounded-lg px-3 py-2 text-sm'
-  const lbl = 'block text-xs text-gray-500 mb-1'
+  const cardCls = 'bg-card rounded-xl border border-line-soft p-5 mb-4'
+  const inp = 'w-full border border-line rounded-lg px-3 py-2 text-sm'
+  const lbl = 'block text-xs text-muted mb-1'
 
   return (
     <div className="p-4 md:p-6 max-w-3xl">
       <Toaster />
       <div className="mb-4">
-        <Link href="/admin/seasonals" className="text-sm text-gray-400 hover:text-gray-600">← Seasonals</Link>
-        <h2 className="text-2xl font-bold text-gray-900">{existingId ? 'Seasonal Camper' : 'New Seasonal Camper'}</h2>
-        <p className="text-sm text-gray-500">One form — enter their details, then sign in person or email the packet.</p>
+        <Link href="/admin/seasonals" className="text-sm text-muted hover:text-ink-soft">← Seasonals</Link>
+        <h2 className="text-2xl font-bold text-ink">{existingId ? 'Seasonal Camper' : 'New Seasonal Camper'}</h2>
+        <p className="text-sm text-muted">One form — enter their details, then sign in person or email the packet.</p>
       </div>
 
       {existingId && (
-        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
+        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: 'var(--draft-bg)', color: 'var(--draft)', border: '1px solid color-mix(in srgb, var(--draft) 35%, transparent)' }}>
           Renewing an existing seasonal — details pre-filled from their record, party carried over from last year. Review and adjust as needed.
         </div>
       )}
@@ -341,7 +341,7 @@ export default function NewSeasonalCamperPage() {
           supported route is Cancel on the camper page, edit, and send again: cancelling voids the
           posted seasonal fee and the re-send posts the amended one, so the folio stays right. */}
       {contractStatus && contractStatus !== 'draft' && (
-        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>
+        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: 'var(--watch-bg)', color: 'var(--watch)', border: '1px solid color-mix(in srgb, var(--watch) 40%, transparent)' }}>
           This {seasonYear} packet has already been <strong>{contractStatus}</strong>, so its price and contract details are
           locked. Camper details (name, address, rig, party roster) still save.{' '}
           {contractStatus === 'sent' && existingId && (
@@ -350,7 +350,7 @@ export default function NewSeasonalCamperPage() {
         </div>
       )}
       {alreadyStatus && (
-        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>
+        <div className="rounded-lg px-3 py-2 text-sm mb-3" style={{ background: 'var(--watch-bg)', color: 'var(--watch)', border: '1px solid color-mix(in srgb, var(--watch) 40%, transparent)' }}>
           This camper already has a <strong>{alreadyStatus}</strong> {seasonYear} contract.{' '}
           {existingId && <Link href={`/admin/seasonals/${existingId}`} className="underline font-semibold">View it</Link>} — or pick a different season year above.
         </div>
@@ -358,30 +358,30 @@ export default function NewSeasonalCamperPage() {
 
       {/* WHO */}
       <div className={cardCls}>
-        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide mb-3">Who</h3>
+        <h3 className="text-sm font-bold text-muted uppercase tracking-wide mb-3">Who</h3>
         <div className="grid grid-cols-2 gap-3">
-          <div className="col-span-2"><label className={lbl}>Name <span className="text-red-500">*</span></label><input value={name} onChange={e => { setName(e.target.value); invalidateDraft() }} className={inp} /></div>
+          <div className="col-span-2"><label className={lbl}>Name <span className="text-danger">*</span></label><input value={name} onChange={e => { setName(e.target.value); invalidateDraft() }} className={inp} /></div>
           <div><label className={lbl}>Phone</label><input value={phone} onChange={e => setPhone(e.target.value)} className={inp} /></div>
           <div><label className={lbl}>Email</label><input value={email} onChange={e => setEmail(e.target.value)} className={inp} placeholder="For the packet / signed copy" /></div>
-          <div className="col-span-2"><label className={lbl}>Site <span className="text-red-500">*</span></label><input value={siteNumber} onChange={e => { setSiteNumber(e.target.value); invalidateDraft() }} className={inp} /></div>
+          <div className="col-span-2"><label className={lbl}>Site <span className="text-danger">*</span></label><input value={siteNumber} onChange={e => { setSiteNumber(e.target.value); invalidateDraft() }} className={inp} /></div>
         </div>
         <div className="mt-3">
-          <p className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Home address <span className="text-red-500">*</span></p>
+          <p className="text-xs font-bold text-muted uppercase tracking-wide mb-2">Home address <span className="text-danger">*</span></p>
           <AddressEditor value={addr} onChange={v => { setAddr(v); invalidateDraft() }} required />
         </div>
       </div>
 
       {/* SETUP */}
       <div className={cardCls}>
-        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide mb-3">Setup</h3>
-        <p className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Rig</p>
+        <h3 className="text-sm font-bold text-muted uppercase tracking-wide mb-3">Setup</h3>
+        <p className="text-xs font-bold text-muted uppercase tracking-wide mb-2">Rig</p>
         <RigEditor value={rig} onChange={v => { setRig(v); invalidateDraft() }} />
         <div className="mt-4"><PartyEditor value={occupants} onChange={v => { setOccupants(v); invalidateDraft() }} /></div>
         <div className="mt-4">
-          <label className={lbl}>Season <span className="text-red-500">*</span></label>
+          <label className={lbl}>Season <span className="text-danger">*</span></label>
           {seasonsLoaded && seasons.length === 0 ? (
             // No seasons yet: an empty dropdown would be a dead end, so name the fix and link to it.
-            <div className="rounded-lg px-3 py-2 text-sm" style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a' }}>
+            <div className="rounded-lg px-3 py-2 text-sm" style={{ background: 'var(--watch-bg)', color: 'var(--watch)', border: '1px solid color-mix(in srgb, var(--watch) 40%, transparent)' }}>
               This park has no seasons yet. Create one first — open{' '}
               <Link href="/admin/seasonals" className="underline font-semibold">Seasonals → Manage seasons</Link>{' '}
               and add a season (for example &ldquo;{cy} Season&rdquo;), then come back here.
@@ -398,22 +398,22 @@ export default function NewSeasonalCamperPage() {
           <div className="mt-3">
             {!overrideOn ? (
               <div className="flex items-start justify-between gap-3">
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-ink-soft">
                   {season.opens || season.closes
-                    ? <>Runs <strong>{fmtRange(season.opens, season.closes)}</strong> <span className="text-gray-400">— from the season</span></>
-                    : <span className="text-amber-700">This season has no dates set yet. Add them under Manage seasons, or set dates just for this camper below.</span>}
+                    ? <>Runs <strong>{fmtRange(season.opens, season.closes)}</strong> <span className="text-muted">— from the season</span></>
+                    : <span className="text-watch">This season has no dates set yet. Add them under Manage seasons, or set dates just for this camper below.</span>}
                 </p>
                 <button type="button" onClick={() => { setOverrideOn(true); setOvOpens(season.opens || ''); setOvCloses(season.closes || ''); invalidateDraft() }}
-                  className="text-xs font-semibold whitespace-nowrap" style={{ color: 'var(--accent-color, #2E6B8A)' }}>
+                  className="text-xs font-semibold whitespace-nowrap" style={{ color: 'var(--link)' }}>
                   Use different dates
                 </button>
               </div>
             ) : (
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Dates for this camper only</p>
+                  <p className="text-xs font-bold text-muted uppercase tracking-wide">Dates for this camper only</p>
                   <button type="button" onClick={() => { setOverrideOn(false); setOvOpens(''); setOvCloses(''); invalidateDraft() }}
-                    className="text-xs font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>
+                    className="text-xs font-semibold" style={{ color: 'var(--link)' }}>
                     Use the season&rsquo;s dates
                   </button>
                 </div>
@@ -429,7 +429,7 @@ export default function NewSeasonalCamperPage() {
 
       {/* CONTRACT */}
       <div className={cardCls}>
-        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide mb-3">Contract</h3>
+        <h3 className="text-sm font-bold text-muted uppercase tracking-wide mb-3">Contract</h3>
         <div className="mb-3">
           <label className={lbl}>Total due (display only, $)</label>
           <input type="number" step="0.01" value={totalDue} onChange={e => { setTotalDue(e.target.value); invalidateDraft() }} placeholder="0.00" className={`${inp} max-w-[200px]`} />
@@ -448,7 +448,7 @@ export default function NewSeasonalCamperPage() {
             <input type="date" value={totalDueBy} onChange={e => { setTotalDueBy(e.target.value); invalidateDraft() }} className={inp} />
           </div>
         </div>
-        <p className="text-xs text-gray-400 mb-3">
+        <p className="text-xs text-muted mb-3">
           Display only — these print on the contract and nothing is charged from them. They appear wherever the contract body
           uses <code>{'{{deposit_due}}'}</code>, <code>{'{{deposit_due_by}}'}</code> or <code>{'{{total_due_by}}'}</code>.
         </p>
@@ -457,32 +457,32 @@ export default function NewSeasonalCamperPage() {
           <textarea value={chargeNote} onChange={e => { setChargeNote(e.target.value); invalidateDraft() }} rows={3}
             placeholder="e.g. Includes 2 extra family members, golf cart, and the second site."
             className={inp} />
-          <p className="text-xs text-gray-400 mt-1">The camper sees this. It appears in the preview below wherever the contract body uses <code>{'{{charge_note}}'}</code>.</p>
+          <p className="text-xs text-muted mt-1">The camper sees this. It appears in the preview below wherever the contract body uses <code>{'{{charge_note}}'}</code>.</p>
         </div>
-        <p className="text-xs text-gray-500 mb-2">This is exactly what the camper will see and sign:</p>
+        <p className="text-xs text-muted mb-2">This is exactly what the camper will see and sign:</p>
         <PacketPreview guest={previewGuest} contract={previewContract} settings={settings} season={season} />
       </div>
 
       {/* ACTIONS */}
       <div className={cardCls}>
         {!ready && (
-          <p className="text-sm text-amber-700 mb-3">Still needed before you can sign or send: <strong>{missing.join(', ')}</strong>.</p>
+          <p className="text-sm text-watch mb-3">Still needed before you can sign or send: <strong>{missing.join(', ')}</strong>.</p>
         )}
         {ready && !draftId && (
-          <p className="text-sm text-gray-500 mb-3">Ready. Save to prepare the contract, then sign in person or send the packet.</p>
+          <p className="text-sm text-muted mb-3">Ready. Save to prepare the contract, then sign in person or send the packet.</p>
         )}
-        {draftId && <p className="text-sm text-green-700 mb-3">Contract prepared. Choose an action below.</p>}
+        {draftId && <p className="text-sm text-good mb-3">Contract prepared. Choose an action below.</p>}
         <div className="flex flex-wrap gap-3">
           <button onClick={prepareDraft} disabled={!ready || saving || !!draftId}
-            className="px-5 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#2E6B8A' }}>
+            className="px-5 py-2.5 rounded-xl text-sm font-bold text-on-forest disabled:opacity-50" style={{ background: 'var(--forest)' }}>
             {saving ? 'Saving…' : draftId ? 'Saved ✓' : 'Save camper & prepare contract'}
           </button>
           <button onClick={onSignNow} disabled={!draftId || saving}
-            className="px-5 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>
+            className="px-5 py-2.5 rounded-xl text-sm font-bold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>
             ✍ Sign now (in person)
           </button>
           <button onClick={onSendPacket} disabled={!draftId || saving}
-            className="px-5 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50" style={{ background: '#15803d' }}>
+            className="px-5 py-2.5 rounded-xl text-sm font-bold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>
             ✉ Send packet
           </button>
         </div>

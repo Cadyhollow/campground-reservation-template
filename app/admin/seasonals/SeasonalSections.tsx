@@ -14,17 +14,17 @@ const fmtDate = (d: string | null | undefined) =>
 
 function docBadge(status: string | null) {
   const map: Record<string, { bg: string; color: string; label: string }> = {
-    signed: { bg: '#f0fdf4', color: '#15803d', label: '✓ Signed' },
-    pending: { bg: '#fffbeb', color: '#b45309', label: 'Sent · unsigned' },
+    signed: { bg: 'var(--good-bg)', color: 'var(--good)', label: '✓ Signed' },
+    pending: { bg: 'var(--watch-bg)', color: 'var(--watch)', label: 'Sent · unsigned' },
   }
-  const s = (status && map[status]) || { bg: '#f3f4f6', color: '#6b7280', label: 'Not sent' }
+  const s = (status && map[status]) || { bg: 'var(--card-2)', color: 'var(--muted)', label: 'Not sent' }
   return <span style={{ background: s.bg, color: s.color, fontSize: 12, fontWeight: 600, padding: '2px 8px', borderRadius: 999 }}>{s.label}</span>
 }
 
 const Section = ({ title, right, children }: { title: string; right?: React.ReactNode; children: React.ReactNode }) => (
-  <div className="bg-white rounded-xl border border-gray-100 p-5 mb-4">
+  <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
     <div className="flex items-center justify-between mb-3">
-      <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wide">{title}</h3>
+      <h3 className="text-sm font-bold text-muted uppercase tracking-wide">{title}</h3>
       {right}
     </div>
     {children}
@@ -32,7 +32,7 @@ const Section = ({ title, right, children }: { title: string; right?: React.Reac
 )
 
 const Row = ({ label, value }: { label: string; value: React.ReactNode }) => (
-  <div className="flex justify-between text-sm py-1"><span className="text-gray-500">{label}</span><span className="font-medium text-gray-900 text-right">{value}</span></div>
+  <div className="flex justify-between text-sm py-1"><span className="text-muted">{label}</span><span className="font-medium text-ink text-right">{value}</span></div>
 )
 
 /** The lanes shown on the camper page, in the order an owner reads them. `other` is deliberately
@@ -50,7 +50,7 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
   // One rendering of an amount, so a lane line and the account line cannot disagree about what a
   // credit looks like.
   const money = (cents: number) => (
-    <span style={{ color: cents > 0 ? '#d97706' : '#15803d' }}>
+    <span className="tnum" style={{ color: cents > 0 ? 'var(--watch)' : 'var(--good)' }}>
       {cents < 0 ? 'Credit ' + fmtMoney(-cents) : fmtMoney(cents)}
     </span>
   )
@@ -92,24 +92,24 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
             <Row label="Liability waiver" value={docBadge(current.waiver_signature?.status ?? (current.status === 'draft' ? null : 'pending'))} />
             {current.packet_id && (
               <div className="mt-2">
-                <Link href={`/packet/${current.packet_id}`} target="_blank" className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>
+                <Link href={`/packet/${current.packet_id}`} target="_blank" className="text-sm font-semibold" style={{ color: 'var(--link)' }}>
                   View packet {current.status === 'signed' ? '(signed copy)' : ''} →
                 </Link>
               </div>
             )}
           </>
         ) : (
-          <p className="text-sm text-gray-500">No {data.year} packet yet.</p>
+          <p className="text-sm text-muted">No {data.year} packet yet.</p>
         )}
         {prior.length > 0 && (
-          <div className="mt-3 pt-3 border-t border-gray-100">
-            <p className="text-xs font-semibold text-gray-400 uppercase mb-1">Prior years</p>
+          <div className="mt-3 pt-3 border-t border-line-soft">
+            <p className="text-xs font-semibold text-muted uppercase mb-1">Prior years</p>
             {prior.map(c => (
               <div key={c.id} className="flex items-center justify-between text-sm py-1">
-                <span className="text-gray-600">{c.season_year}</span>
+                <span className="text-ink-soft">{c.season_year}</span>
                 <span className="flex items-center gap-2">
                   {docBadge(c.status === 'signed' ? 'signed' : c.status === 'sent' ? 'pending' : null)}
-                  {c.packet_id && <Link href={`/packet/${c.packet_id}`} target="_blank" className="text-xs" style={{ color: 'var(--accent-color, #2E6B8A)' }}>view →</Link>}
+                  {c.packet_id && <Link href={`/packet/${c.packet_id}`} target="_blank" className="text-xs" style={{ color: 'var(--link)' }}>view →</Link>}
                 </span>
               </div>
             ))}
@@ -139,17 +139,17 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
             {lanes.untaggedPayments !== 0 && (
               <Row
                 label="Payments not yet assigned"
-                value={<span style={{ color: '#15803d' }}>−{fmtMoney(lanes.untaggedPayments)}</span>}
+                value={<span className="tnum" style={{ color: 'var(--good)' }}>−{fmtMoney(lanes.untaggedPayments)}</span>}
               />
             )}
-            <div className="mt-2 pt-2 border-t border-gray-100">
+            <div className="mt-2 pt-2 border-t border-line-soft">
               <Row label="Account balance" value={money(data.balance_cents)} />
             </div>
           </>
         ) : (
-          <Row label="Account balance" value={<span style={{ color: data.balance_cents > 0 ? '#d97706' : '#15803d' }}>{data.balance_cents < 0 ? 'Credit ' + fmtMoney(-data.balance_cents) : fmtMoney(data.balance_cents)}</span>} />
+          <Row label="Account balance" value={<span className="tnum" style={{ color: data.balance_cents > 0 ? 'var(--watch)' : 'var(--good)' }}>{data.balance_cents < 0 ? 'Credit ' + fmtMoney(-data.balance_cents) : fmtMoney(data.balance_cents)}</span>} />
         )}
-        <Row label="Last payment" value={data.lastPayment ? `${fmtMoney(data.lastPayment.amount - (data.lastPayment.surcharge_amount || 0))} · ${fmtDate(data.lastPayment.paid_at)}` : '—'} />
+        <Row label="Last payment" value={data.lastPayment ? <span className="tnum">{`${fmtMoney(data.lastPayment.amount - (data.lastPayment.surcharge_amount || 0))} · ${fmtDate(data.lastPayment.paid_at)}`}</span> : '—'} />
         {admin && data.folioId && (
           <div className="mt-3 flex flex-wrap items-center gap-3">
             {/* Phase 4 PR 3. Shown only when the park is SEPARATED — `lanes` is present exactly
@@ -157,12 +157,12 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
                 keeps taking payments on the folio, unchanged. */}
             {lanes && (
               <Link href={`/admin/checkout?guestId=${g.id}`}
-                className="px-3 py-2 rounded-lg text-xs font-bold text-white"
-                style={{ background: '#15803d' }}>
+                className="px-3 py-2 rounded-lg text-xs font-bold text-on-good"
+                style={{ background: 'var(--good)' }}>
                 Take a payment
               </Link>
             )}
-            <Link href={`/admin/folio/guest/${g.id}`} className="text-sm font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>Open folio →</Link>
+            <Link href={`/admin/folio/guest/${g.id}`} className="text-sm font-semibold" style={{ color: 'var(--link)' }}>Open folio →</Link>
           </div>
         )}
       </Section>
@@ -176,16 +176,16 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
 
       <Section title="Party">
         {occupants.length > 0 ? (
-          <ul className="text-sm text-gray-800 space-y-1">
+          <ul className="text-sm text-ink space-y-1">
             {occupants.map((o, i) => (
-              <li key={i} className="flex justify-between"><span>{o.name || '—'}</span><span className="text-gray-400 capitalize">{o.kind || ''}</span></li>
+              <li key={i} className="flex justify-between"><span>{o.name || '—'}</span><span className="text-muted capitalize">{o.kind || ''}</span></li>
             ))}
           </ul>
-        ) : <p className="text-sm text-gray-500">No party recorded yet.</p>}
-        {partyIsRoster && <p className="text-xs text-gray-400 mt-2">From the camper&rsquo;s standing party — no packet has been sent yet.</p>}
+        ) : <p className="text-sm text-muted">No party recorded yet.</p>}
+        {partyIsRoster && <p className="text-xs text-muted mt-2">From the camper&rsquo;s standing party — no packet has been sent yet.</p>}
       </Section>
 
-      <Section title="Electric" right={admin ? <Link href="/admin/electric-billing" className="text-xs font-semibold" style={{ color: 'var(--accent-color, #2E6B8A)' }}>Electric billing →</Link> : undefined}>
+      <Section title="Electric" right={admin ? <Link href="/admin/electric-billing" className="text-xs font-semibold" style={{ color: 'var(--link)' }}>Electric billing →</Link> : undefined}>
         {(() => {
           // Phase C2 — voided readings: admin sees them MARKED (audit trail); the
           // camper view hides them entirely (Decision 2d). Component is shared
@@ -196,17 +196,17 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
             {electricRows.slice(0, 4).map(r => {
               const isVoided = r.voided === true
               return (
-              <div key={r.id} className="flex justify-between py-1 border-b border-gray-50 last:border-0" style={{ opacity: isVoided ? 0.6 : 1 }}>
-                <span className="text-gray-600" style={{ textDecoration: isVoided ? 'line-through' : 'none' }}>{r.billing_month || fmtDate(r.created_at)}</span>
-                <span className="font-medium text-gray-900" style={{ textDecoration: isVoided ? 'line-through' : 'none' }}>
+              <div key={r.id} className="flex justify-between py-1 border-b border-line-soft last:border-0" style={{ opacity: isVoided ? 0.6 : 1 }}>
+                <span className="text-ink-soft" style={{ textDecoration: isVoided ? 'line-through' : 'none' }}>{r.billing_month || fmtDate(r.created_at)}</span>
+                <span className="tnum font-medium text-ink" style={{ textDecoration: isVoided ? 'line-through' : 'none' }}>
                   {r.kwh_used != null ? `${r.kwh_used} kWh` : ''}{r.final_amount != null ? ` · ${fmtMoney(r.final_amount)}` : ''}
-                  {isVoided && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: '0.05em', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 4px' }}>VOIDED</span>}
+                  {isVoided && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: '0.05em', color: 'var(--danger)', background: 'var(--danger-bg)', border: '1px solid color-mix(in srgb, var(--danger) 35%, transparent)', borderRadius: 4, padding: '1px 4px' }}>VOIDED</span>}
                 </span>
               </div>
               )
             })}
           </div>
-        ) : <p className="text-sm text-gray-500">No electric readings yet.</p>
+        ) : <p className="text-sm text-muted">No electric readings yet.</p>
         })()}
       </Section>
 
@@ -214,13 +214,13 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
         {(data.notes || []).length > 0 ? (
           <div className="space-y-2">
             {(data.notes || []).map(n => (
-              <div key={n.id} className="text-sm border-l-2 border-gray-100 pl-3">
-                <div className="text-gray-800">{n.body}</div>
-                <div className="text-xs text-gray-400">{n.author} · {fmtDate(n.created_at)}</div>
+              <div key={n.id} className="text-sm border-l-2 border-line-soft pl-3">
+                <div className="text-ink">{n.body}</div>
+                <div className="text-xs text-muted">{n.author} · {fmtDate(n.created_at)}</div>
               </div>
             ))}
           </div>
-        ) : <p className="text-sm text-gray-500">No notes yet.</p>}
+        ) : <p className="text-sm text-muted">No notes yet.</p>}
       </Section>
     </div>
   )
