@@ -45,6 +45,9 @@ export const CONTRACT_TOKENS: readonly ContractToken[] = [
   { key: 'deposit_due',      label: 'Deposit due' },
   { key: 'deposit_due_by',   label: 'Deposit due by' },
   { key: 'charge_note',      label: 'Charge note' },
+  // The instalment block. Renders as nothing at all when the contract has no schedule, so a
+  // body carrying this token is safe for every camper, scheduled or not.
+  { key: 'payment_schedule', label: 'Payment schedule' },
 ] as const
 
 /** '{{deposit_due}}' — the text actually inserted into a box. One place builds the braces. */

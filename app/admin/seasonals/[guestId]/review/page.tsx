@@ -21,6 +21,7 @@ import PartyEditor from '../../PartyEditor'
 import PacketPreview, { missingPacketFields } from '../../PacketPreview'
 import toast, { Toaster } from 'react-hot-toast'
 import type { SeasonalGuestData, SeasonalContract, SeasonalGuest, Season } from '@/lib/seasonal-types'
+import { emptyDraft, toDrafts, toStored, type ScheduleDraft } from '@/lib/payment-schedule'
 import { effectiveSeasonDates } from '@/lib/contracts'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 
@@ -58,6 +59,8 @@ export default function SeasonalReviewPage() {
 
   const [settings, setSettings] = useState<SeasonalSettings | null>(null)
   const [data, setData] = useState<SeasonalGuestData | null>(null)
+  // The optional instalment plan. DISPLAY ONLY — it prints on the agreement and charges nothing.
+  const [schedule, setSchedule] = useState<ScheduleDraft[]>([])
   const [draft, setDraft] = useState<SeasonalContract | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -117,6 +120,7 @@ export default function SeasonalReviewPage() {
       setTotalDue(c.total_due_cents != null ? (c.total_due_cents / 100).toFixed(2) : '')
       setChargeNote(c.charge_note || '')
       setDepositDue(c.deposit_due_cents != null ? (c.deposit_due_cents / 100).toFixed(2) : '')
+      setSchedule(toDrafts((c as { payment_schedule?: unknown }).payment_schedule))
       setTotalDueBy(c.total_due_by || '')
       setDepositDueBy(c.deposit_due_by || '')
       // The contract's own dates ARE the override. A pre-2b draft has them filled in (they were
@@ -170,6 +174,7 @@ export default function SeasonalReviewPage() {
     total_due_by: totalDueBy || null,
     deposit_due_by: depositDueBy || null,
     charge_note: chargeNote,
+    payment_schedule: toStored(schedule),
     ...overrideDates,
   }
 
@@ -202,6 +207,9 @@ export default function SeasonalReviewPage() {
         total_due_by: totalDueBy || null,
         deposit_due_by: depositDueBy || null,
         charge_note: chargeNote.trim() || null,
+        // Blank rows are dropped here rather than stored — an owner who added a row and thought
+        // better of it should not leave an empty line on a signed agreement.
+        payment_schedule: toStored(schedule),
         // Null unless the owner explicitly chose different dates — a null override is what makes
         // this contract inherit its season. The freeze resolves and snapshots the result.
         ...overrideDates,
@@ -339,6 +347,62 @@ export default function SeasonalReviewPage() {
         <p className="text-xs text-muted mt-1">
           Display only — these print on the contract and nothing is charged from them.
         </p>
+
+        {/* PAYMENT SCHEDULE — optional, repeatable, and display-only like everything above it.
+            Parks collect the fee in instalments (September, January, March, May is a common
+            shape), not merely a deposit and a balance. This prints that plan on the agreement.
+            EVERY FIELD IS OPTIONAL on purpose: "something in January, figure to be agreed" is a
+            real row in the autumn, and a row with only a date must be storable and must print
+            what it knows. A row left completely empty is simply dropped on save. */}
+        <div className="mt-4 rounded-lg border border-line-soft p-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <label className={lbl}>Payment schedule (optional)</label>
+            <button type="button" onClick={() => setSchedule(rows => [...rows, emptyDraft()])}
+              className="text-xs font-semibold" style={{ color: 'var(--link)' }}>
+              + Add an instalment
+            </button>
+          </div>
+          {schedule.length === 0 ? (
+            <p className="text-xs text-muted mt-1">
+              None — the contract prints exactly as it does today. Add rows if this camper pays in
+              instalments.
+            </p>
+          ) : (
+            <>
+              {schedule.map((row, i) => (
+                <div key={i} className="grid grid-cols-12 gap-2 mt-2 items-end">
+                  <div className="col-span-5">
+                    <label className="block text-[11px] text-muted mb-1">Label</label>
+                    <input value={row.label} placeholder="e.g. January instalment"
+                      onChange={e => setSchedule(rows => rows.map((r, j) => j === i ? { ...r, label: e.target.value } : r))}
+                      className={inp} />
+                  </div>
+                  <div className="col-span-3">
+                    <label className="block text-[11px] text-muted mb-1">Amount ($)</label>
+                    <input type="number" step="0.01" value={row.amount} placeholder="0.00"
+                      onChange={e => setSchedule(rows => rows.map((r, j) => j === i ? { ...r, amount: e.target.value } : r))}
+                      className={inp} />
+                  </div>
+                  <div className="col-span-3">
+                    <label className="block text-[11px] text-muted mb-1">Due by</label>
+                    <input type="date" value={row.due_by}
+                      onChange={e => setSchedule(rows => rows.map((r, j) => j === i ? { ...r, due_by: e.target.value } : r))}
+                      className={inp} />
+                  </div>
+                  <div className="col-span-1 pb-2">
+                    <button type="button" aria-label={`Remove instalment ${i + 1}`}
+                      onClick={() => setSchedule(rows => rows.filter((_, j) => j !== i))}
+                      className="text-sm font-bold" style={{ color: 'var(--danger)' }}>×</button>
+                  </div>
+                </div>
+              ))}
+              <p className="text-xs text-muted mt-2">
+                Display only — the schedule prints on the contract in this order. Nothing is
+                charged from it, and the deposit and total above are unchanged.
+              </p>
+            </>
+          )}
+        </div>
         <div className="mt-3">
           <label className={lbl}>Note about the charge (prints on the contract)</label>
           <textarea value={chargeNote} onChange={e => setChargeNote(e.target.value)} rows={3}

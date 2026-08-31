@@ -15,6 +15,10 @@ const EDITABLE = [
   // (unlike the season dates): they are plain columns ON the contract, so the document renders
   // them as they stand, and this route already refuses any edit once the status leaves 'draft'.
   'deposit_due_cents', 'total_due_by', 'deposit_due_by',
+  // DISPLAY ONLY, like the two _cents fields above it. Editing it prints differently and
+  // charges nothing — note that syncSeasonalCharge below fires on total_due_cents ONLY, so a
+  // schedule edit can never move money.
+  'payment_schedule',
   'season_opens', 'season_closes',
   'camper_type', 'camper_length', 'camper_amperage',
   'camper_make', 'camper_model', 'camper_year',
