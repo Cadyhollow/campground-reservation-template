@@ -57,6 +57,8 @@ export const SOURCE_BLURB: Record<RevenueSource, string> = {
   electric: 'Metered electricity billed to campers',
   store: 'Camp store — walk-up sales and campers’ tabs',
   other: 'Guest-account charges outside the buckets above',
+  // Retained as a value so a future caller can still say "genuinely un-sourceable", but
+  // sourceOfPayment() no longer produces it: an untagged seasonal payment is Seasonal now.
   unassigned: 'Payments that name no source — file them from the folio',
 }
 
@@ -127,12 +129,27 @@ const LANE_TO_SOURCE: Record<string, RevenueSource> = {
  *        the same lane their folio shows;
  *      • anyone else's house tab is `other`.
  *
- * ⚠ RULE 4: AN UNTAGGED SEASONAL PAYMENT IS `unassigned`, NOT A GUESS. Every payment taken
- * before Phase 4 names no lane. R1 established that this app does not invent one — doing so
- * would rewrite a park's financial history, and here it would also silently inflate whichever
- * source got the guess. It is reported as its own honest line instead, which is why `unassigned`
- * exists as a value at all. Note this only ever applies to seasonal campers: every other source
- * is decided by the folio, which is always known.
+ * ⚠ RULE 4: AN UNTAGGED PAYMENT ON A SEASONAL CAMPER'S FOLIO IS SEASONAL REVENUE.
+ *
+ * This is an INFERENCE, in the same spirit as the three above it, and it is the last one tried.
+ * Money a seasonal camper paid into their own account is seasonal money — that is what the
+ * account is for — so reporting it as "not yet assigned to a source" described the tagging, not
+ * the money, and left a park's largest revenue stream looking orphaned. On a real park that was
+ * most of the seasonal income sitting in a bucket labelled as if nobody knew where it came from.
+ *
+ * ⚠ IT CANNOT SWALLOW A TRUER SOURCE, because it is only ever reached when every sharper signal
+ * has already been tried. An explicit lane wins first, so a camper's store tab stays Store and
+ * their electric stays Electric. A reservation-linked folio was claimed as nightly two rules
+ * earlier. What is left is a payment into a seasonal account with nothing more specific to say
+ * about it — and for a PAYMENT there is nothing more specific available: unlike a charge, a
+ * payment has no product_id and no electric reading, so its lane tag is the only sharper signal
+ * that exists, and it is checked first.
+ *
+ * ⚠ THIS IS THE DISPLAY LAYER ONLY. lib/ledger-lanes.ts still refuses to infer a seasonal LANE,
+ * and must keep refusing: a lane drives what a camper is BILLED for on a separated park, where
+ * guessing would put money on an invoice nobody agreed to. Attributing revenue on an owner's own
+ * dashboard carries no such risk — nothing is billed from it, and the total is unchanged either
+ * way. Two layers, two rules, deliberately.
  */
 export function sourceOfPayment(folio: SourceFolio | null | undefined, payment: SourcePayment): RevenueSource {
   const type = (folio?.folio_type || '').trim().toLowerCase()
@@ -141,7 +158,8 @@ export function sourceOfPayment(folio: SourceFolio | null | undefined, payment: 
   if (folio?.segment === 'long_term') return 'long_term'
   if (folio?.segment === 'seasonal') {
     const lane = (payment.lane || '').trim().toLowerCase()
-    return LANE_TO_SOURCE[lane] || 'unassigned'
+    // The explicit tag wins; otherwise it is seasonal money. See RULE 4 above.
+    return LANE_TO_SOURCE[lane] || 'seasonal'
   }
   return 'other'
 }
