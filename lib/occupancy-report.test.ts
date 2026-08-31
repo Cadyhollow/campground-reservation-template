@@ -4,6 +4,7 @@ import {
   siteTypesFrom, typeLabel, isRentable, resolveSiteType, siteTypeByNumber,
   nightsBetween, isWeekendNight, isMidweekNight, seasonRange, buildOccupants,
   buildOccupancyReport, buildSeasonalProgram, isSeasonalSite, UNRESOLVED_TYPE,
+  splitSiteNumbers, resolveSiteTypes,
   type RentableSite, type Occupant,
 } from './occupancy-report.ts'
 
@@ -440,4 +441,116 @@ test('THE COMBINED ALL-SITES TOTAL SURVIVES THE SPLIT', () => {
   assert.equal(transientOnly.total.units, 2, 'while the breakdown below covers only the transient ones')
   assert.ok(combined.total.occupiedNights > transientOnly.total.occupiedNights,
     'the combined figure includes the seasonal nights the transient table deliberately omits')
+})
+
+// ═══ ONE CAMPER, TWO SITES ═══════════════════════════════════════════════════════════════════
+//
+// A seasonal camper who rents a second site has it recorded as one free-text value: "43, 44".
+// Read whole it matched nothing and BOTH sites read open; read as one site the second read open
+// while somebody was living on it — which sends an owner to sell a site that is taken.
+
+const TWO_SITE_SITES: RentableSite[] = [
+  { id: 'a', site_number: '43', site_type: 'rv_site', is_available: true, is_seasonal_site: true },
+  { id: 'b', site_number: '44', site_type: 'rv_site', is_available: true, is_seasonal_site: true },
+  { id: 'c', site_number: '45', site_type: 'rv_site', is_available: true, is_seasonal_site: true },
+]
+const twoSiteByNumber = siteTypeByNumber(TWO_SITE_SITES)
+
+test('a SINGLE site value takes exactly the path it always did', () => {
+  // The regression that matters most: no comma, no change.
+  assert.deepEqual(splitSiteNumbers('43'), ['43'])
+  assert.deepEqual(resolveSiteTypes('43', twoSiteByNumber), { siteNumbers: ['43'], types: ['rv_site'] })
+  assert.equal(resolveSiteType('43', twoSiteByNumber), 'rv_site', 'and the original resolver is untouched')
+})
+
+test('a COMMA value yields every site, however it was typed', () => {
+  assert.deepEqual(splitSiteNumbers('43, 44'), ['43', '44'])
+  assert.deepEqual(splitSiteNumbers('43,44'), ['43', '44'], 'no space')
+  assert.deepEqual(splitSiteNumbers('  43 ,  44  '), ['43', '44'], 'ragged whitespace')
+  assert.deepEqual(splitSiteNumbers('C1, c1'), ['c1'], 'case-insensitive, and de-duplicated')
+})
+
+test('blank and duplicate tokens cannot inflate occupancy', () => {
+  assert.deepEqual(splitSiteNumbers('43,,44,'), ['43', '44'], 'stray commas are typing, not sites')
+  assert.deepEqual(splitSiteNumbers('43, 43'), ['43'], 'one site cannot be filled twice')
+  assert.deepEqual(splitSiteNumbers(''), [])
+  assert.deepEqual(splitSiteNumbers(null), [])
+  assert.deepEqual(splitSiteNumbers('   ,  '), [])
+})
+
+test('AN UNKNOWN TOKEN IS KEPT, NOT SWALLOWED', () => {
+  // "43, 999" must fill 43 AND still report the camper — a site number pointing at nothing is a
+  // real thing an owner needs to fix, and hiding it would only make the numbers look tidier.
+  const r = resolveSiteTypes('43, 999', twoSiteByNumber)
+  assert.deepEqual(r.siteNumbers, ['43', '999'])
+  assert.deepEqual(r.types, ['rv_site', UNRESOLVED_TYPE])
+})
+
+test('BOTH SITES OF A DOUBLE-SITE CAMPER READ AS FILLED', () => {
+  const { occupants } = buildOccupants(
+    [{ guest_id: 'g1', site_number: '43, 44', total_due_cents: 200000, status: 'signed' }],
+    new Map(),
+    [{ id: 'g1', name: 'Wilson', site_number: '43, 44', is_seasonal: true,
+       season_start: '2027-04-30', season_end: '2027-10-10' }],
+    twoSiteByNumber)
+  assert.deepEqual(occupants[0].siteNumbers, ['43', '44'])
+
+  const prog = buildSeasonalProgram(TWO_SITE_SITES, occupants, WINDOW)
+  assert.equal(prog.totalSites, 3)
+  assert.equal(prog.filled, 2, 'ONE camper fills TWO sites')
+  assert.equal(prog.open, 1)
+  assert.deepEqual(prog.openSites.map(s => s.siteNumber), ['45'],
+    'only the genuinely empty site is open — 44 is not')
+  assert.deepEqual(prog.unresolved, [], 'and they are no longer unresolved')
+})
+
+test('THE FILL RATIO VISIBLY GROWS — the before/after this change exists for', () => {
+  const camper = [{ id: 'g1', name: 'Wilson', site_number: '43, 44', is_seasonal: true,
+                    season_start: '2027-04-30', season_end: '2027-10-10' }]
+  const contract = [{ guest_id: 'g1', site_number: '43, 44', total_due_cents: 200000, status: 'signed' }]
+  const { occupants } = buildOccupants(contract, new Map(), camper, twoSiteByNumber)
+  const after = buildSeasonalProgram(TWO_SITE_SITES, occupants, WINDOW)
+
+  // BEFORE: the old single-value resolver saw "43, 44" as one unmatchable string.
+  const before = buildSeasonalProgram(TWO_SITE_SITES, [{
+    key: 'Wilson', type: resolveSiteType('43, 44', twoSiteByNumber), siteNumber: '43, 44',
+    seasonal: true, from: '2027-04-30', to: '2027-10-11', totalCents: 200000,
+  }], WINDOW)
+
+  assert.equal(before.filled, 0, 'before: the whole string matched nothing')
+  assert.equal(before.open, 3)
+  assert.deepEqual(before.unresolved, ['Wilson'])
+  assert.equal(after.filled, 2, 'after: both sites filled')
+  assert.equal(after.open, 1)
+  assert.ok(after.fillPct > before.fillPct, `fill grew ${before.fillPct}% -> ${after.fillPct}%`)
+})
+
+test('a camper on two sites occupies TWO site-nights and still pays ONE fee', () => {
+  // The nights multiply; the money must not. Otherwise the average nightly rate reads double.
+  const W = { start: '2027-05-01', end: '2027-05-10' }   // 10 nights
+  const one: Occupant = { key: 'Single', type: 'rv_site', siteNumber: '45', siteNumbers: ['45'],
+    types: ['rv_site'], seasonal: true, from: '2027-05-01', to: '2027-05-11', totalCents: 100000 }
+  const two: Occupant = { key: 'Double', type: 'rv_site', siteNumber: '43', siteNumbers: ['43', '44'],
+    types: ['rv_site', 'rv_site'], seasonal: true, from: '2027-05-01', to: '2027-05-11', totalCents: 100000 }
+
+  const rSingle = buildOccupancyReport(TWO_SITE_SITES, [], new Map(), [one], W)
+  const rDouble = buildOccupancyReport(TWO_SITE_SITES, [], new Map(), [two], W)
+  assert.equal(rSingle.total.occupiedNights, 10)
+  assert.equal(rDouble.total.occupiedNights, 20, 'two sites, ten nights each')
+  assert.equal(rDouble.total.revenueCents, rSingle.total.revenueCents,
+    'THE SAME ONE FEE — split across the sites it bought, never counted twice')
+  assert.ok(rDouble.total.avgNightlyCents! < rSingle.total.avgNightlyCents!,
+    'and the per-site-night rate is correspondingly lower, which is the truth')
+})
+
+test('a park with no double-site campers is byte-identical', () => {
+  const plain = [{ id: 'g1', name: 'Solo', site_number: '43', is_seasonal: true,
+                   season_start: '2027-04-30', season_end: '2027-10-10' }]
+  const { occupants } = buildOccupants([], new Map(), plain, twoSiteByNumber)
+  assert.deepEqual(occupants[0].siteNumbers, ['43'])
+  assert.equal(occupants[0].siteNumber, '43')
+  assert.equal(occupants[0].type, 'rv_site')
+  const prog = buildSeasonalProgram(TWO_SITE_SITES, occupants, WINDOW)
+  assert.equal(prog.filled, 1)
+  assert.equal(prog.open, 2)
 })
