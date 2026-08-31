@@ -10,6 +10,10 @@ import { createBrowserSupabase } from '@/lib/supabase-browser'
 // prerender.
 const supabase = createBrowserSupabase()
 import toast, { Toaster } from 'react-hot-toast'
+// ONE token catalog, read by both boxes below — see lib/contract-tokens.ts for why the list is
+// not written out here any more.
+import { CONTRACT_TOKENS, tokenText, insertAtCursor, stripTagsForDisplay } from '@/lib/contract-tokens'
+import { defaultPacketIntro } from '@/lib/contract-emails'
 import Image from 'next/image'
 import imageCompression from 'browser-image-compression'
 // The same arithmetic the guest-facing date picker and the server-side gate use, so the date this
@@ -144,6 +148,49 @@ export default function SettingsPage() {
   // row, so it self-activates the moment a tenant is migrated, with no code change.
   const [hasPetColumns, setHasPetColumns] = useState(false)
   const [hasPacketIntroColumn, setHasPacketIntroColumn] = useState(false)
+  // Refs so a merge-field chip can insert at the CURSOR rather than appending at the end.
+  const contractTextRef = useRef<HTMLTextAreaElement | null>(null)
+  const packetIntroRef = useRef<HTMLTextAreaElement | null>(null)
+
+  /**
+   * Put a merge field into a box at the cursor.
+   *
+   * ⚠ CLICKING, NOT TYPING, IS THE POINT. `renderTemplate` replaces an unknown token with '' and
+   * never with the literal text, so a hand-typed {{deposti_due}} produces a BLANK space in a
+   * camper's email with no error anywhere. A button cannot misspell.
+   */
+  function insertToken(
+    ref: React.RefObject<HTMLTextAreaElement | null>,
+    current: string,
+    apply: (next: string) => void,
+    key: string,
+  ) {
+    const el = ref.current
+    const at = el ? el.selectionStart ?? current.length : current.length
+    const to = el ? el.selectionEnd ?? at : at
+    const { value, cursor } = insertAtCursor(current, at, to, tokenText(key))
+    apply(value)
+    // Restore focus and drop the caret after what was inserted, so the owner keeps typing where
+    // they were rather than being thrown to the end of the box.
+    requestAnimationFrame(() => {
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(cursor, cursor)
+    })
+  }
+
+  /** The clickable merge fields. Same catalog, same component, both boxes. */
+  const MergeFieldChips = ({ onPick }: { onPick: (key: string) => void }) => (
+    <div className="flex flex-wrap gap-1.5 mb-2">
+      {CONTRACT_TOKENS.map(t => (
+        <button key={t.key} type="button" onClick={() => onPick(t.key)}
+          title={tokenText(t.key)}
+          className="text-xs px-2 py-1 rounded-full border border-gray-200 bg-white text-gray-600 hover:border-green-400 hover:bg-green-50 hover:text-green-800 transition-colors">
+          + {t.label}
+        </button>
+      ))}
+    </div>
+  )
   const [hasBillingModeColumn, setHasBillingModeColumn] = useState(false)
   const [earlyPriceInput, setEarlyPriceInput] = useState('0.00')
   const [latePriceInput, setLatePriceInput] = useState('0.00')
@@ -582,7 +629,12 @@ export default function SettingsPage() {
       waiver_enabled: form.waiver_enabled,
       waiver_text: form.waiver_text,
       contract_text: form.contract_text,
-      ...(hasPacketIntroColumn ? { packet_email_intro: form.packet_email_intro } : {}),
+      // ⚠ BLANK SAVES AS NULL, NOT ''. Blank means "use the built-in default", which is exactly
+      // how the send path already reads it (renderPacketIntro trims and returns '' for either),
+      // so this only makes the stored row say what the owner meant: unset, not "set to empty".
+      ...(hasPacketIntroColumn
+        ? { packet_email_intro: form.packet_email_intro.trim() || null }
+        : {}),
       ...(hasBillingModeColumn ? { billing_mode: form.billing_mode } : {}),
       maintenance_mode: form.maintenance_mode,
       maintenance_message: form.maintenance_message,
@@ -1160,7 +1212,8 @@ export default function SettingsPage() {
               The body of the seasonal admission agreement. A packet cannot be sent while this is empty.
               Use the merge fields below and they are filled in for each camper.
             </p>
-            <textarea className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-sans leading-relaxed" rows={14}
+            <MergeFieldChips onPick={k => insertToken(contractTextRef, form.contract_text, v => setForm({ ...form, contract_text: v }), k)} />
+            <textarea ref={contractTextRef} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-sans leading-relaxed" rows={14}
               placeholder="SEASONAL ADMISSION AGREEMENT — {{season_name}}&#10;&#10;Between the campground and {{name}} of:&#10;{{home_address}}&#10;&#10;Site {{site_number}}, from {{opens}} to {{closes}}."
               value={form.contract_text} onChange={e => setForm({ ...form, contract_text: e.target.value })} />
             <p className="text-xs text-gray-400 mt-2">
@@ -1171,16 +1224,28 @@ export default function SettingsPage() {
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-1">Packet Invitation Email</label>
             <p className="text-xs text-gray-400 mb-2">
-              The message in the email that asks a camper to sign. Plain text is fine — for example your winter
-              payment instructions. <strong>Leave it blank to use the standard message.</strong> The greeting and the
-              &ldquo;Review &amp; Sign Packet&rdquo; button are always included, so the link can never be lost.
+              The message in the email that asks a camper to sign. Plain text and line breaks are fine — for example
+              your winter payment instructions. <strong>Leave it blank and the standard message below is used.</strong> The
+              greeting and the &ldquo;Review &amp; Sign Packet&rdquo; button are always included, so the link can never be lost.
             </p>
+            {hasPacketIntroColumn && (
+              <MergeFieldChips onPick={k => insertToken(packetIntroRef, form.packet_email_intro, v => setForm({ ...form, packet_email_intro: v }), k)} />
+            )}
             <textarea
+              ref={packetIntroRef}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-sans leading-relaxed"
               rows={6}
               disabled={!hasPacketIntroColumn}
-              placeholder={'Your ' + '{{season_name}}' + ' packet is ready to sign. Your deposit of ' + '{{deposit_due}}' + ' is due by ' + '{{deposit_due_by}}' + '.\nOver the winter we accept cheques at the office.'}
+              /* ⚠ THE REAL DEFAULT, not an invented example — an owner should see exactly what
+                 they are replacing. Its <strong> tags are stripped for display only: the default
+                 is trusted code that goes straight into the email body, while a park's own text
+                 is HTML-ESCAPED, so showing markup here would teach the one thing that cannot
+                 work. Nothing about the default or the escaping changes. */
+              placeholder={stripTagsForDisplay(defaultPacketIntro(new Date().getFullYear()))}
               value={form.packet_email_intro} onChange={e => setForm({ ...form, packet_email_intro: e.target.value })} />
+            <p className="text-xs text-gray-400 mt-1">
+              Write plain words — no HTML needed, and any you type is shown as text rather than formatting.
+            </p>
             {!hasPacketIntroColumn && (
               <p className="text-xs text-amber-700 mt-1">
                 This park&rsquo;s database does not have this field yet — it arrives with the next update.
@@ -1188,17 +1253,24 @@ export default function SettingsPage() {
             )}
           </div>
 
+          {/* ⚠ RENDERED FROM lib/contract-tokens.ts, not written out here. This list used to be
+              typed by hand alongside the real one in buildContractVars — two lists, one truth,
+              and the copy nobody remembers to update is the one an owner reads. */}
           <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
             <p className="text-xs font-semibold text-gray-600 mb-1">Merge fields (usable in both boxes above)</p>
             <p className="text-xs text-gray-500 leading-relaxed">
-              <code>{'{{name}}'}</code> <code>{'{{site_number}}'}</code> <code>{'{{season_name}}'}</code>{' '}
-              <code>{'{{opens}}'}</code> <code>{'{{closes}}'}</code> <code>{'{{total_due}}'}</code>{' '}
-              <code>{'{{deposit_due}}'}</code> <code>{'{{total_due_by}}'}</code> <code>{'{{deposit_due_by}}'}</code>{' '}
-              <code>{'{{charge_note}}'}</code> <code>{'{{party_names}}'}</code> <code>{'{{camper_make_year}}'}</code>{' '}
-              <code>{'{{home_address}}'}</code> <code>{'{{year}}'}</code>
+              Click a field above to drop it in where your cursor is — no need to type the braces.
+            </p>
+            <p className="text-xs text-gray-500 leading-relaxed mt-1">
+              {CONTRACT_TOKENS.map(t => (
+                <span key={t.key} className="inline-block mr-2 whitespace-nowrap">
+                  <code>{tokenText(t.key)}</code> <span className="text-gray-400">{t.label}</span>
+                </span>
+              ))}
             </p>
             <p className="text-xs text-gray-400 mt-2">
-              A field with nothing behind it prints as blank — never as the raw <code>{'{{…}}'}</code> text.
+              A field with nothing behind it prints as blank — never as the raw <code>{'{{…}}'}</code> text,
+              which is why clicking beats typing: a misspelled field disappears silently.
             </p>
           </div>
         </div>
