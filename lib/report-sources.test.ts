@@ -59,12 +59,55 @@ test("a seasonal camper's payment is split by the lane their FOLIO shows", () =>
   assert.equal(sourceOfPayment(f, { amount: 1, lane: ' Electric ' }), 'electric', 'trimmed, case-insensitive')
 })
 
-test('AN UNTAGGED SEASONAL PAYMENT IS ADMITTED, NOT GUESSED', () => {
+test('AN UNTAGGED PAYMENT ON A SEASONAL FOLIO IS SEASONAL REVENUE', () => {
+  // Changed deliberately. It used to report `unassigned`, which described the TAGGING rather
+  // than the money and left a park's largest revenue stream looking orphaned on its own
+  // dashboard. Money a seasonal camper paid into their own account is seasonal money.
   const f = folios.get('f-seasonal')
   for (const lane of [null, undefined, '', '   ', 'bogus', 'SEASONALish']) {
-    assert.equal(sourceOfPayment(f, { amount: 1, lane }), 'unassigned',
-      `${JSON.stringify(lane)} must not be guessed into a source`)
+    assert.equal(sourceOfPayment(f, { amount: 1, lane }), 'seasonal',
+      `${JSON.stringify(lane)} should fall back to seasonal, not to a limbo bucket`)
   }
+})
+
+test('SEASONAL IS THE LAST RESORT — a truer source always wins', () => {
+  // The precedence that keeps the inference safe. For a PAYMENT the lane tag is the only sharper
+  // signal that exists (unlike a charge, a payment has no product_id and no electric reading),
+  // and it is checked first.
+  const f = folios.get('f-seasonal')
+  assert.equal(sourceOfPayment(f, { amount: 1, lane: 'store' }), 'store', "a camper's tab stays Store")
+  assert.equal(sourceOfPayment(f, { amount: 1, lane: 'electric' }), 'electric', 'their electric stays Electric')
+  assert.equal(sourceOfPayment(f, { amount: 1, lane: ' Store ' }), 'store', 'trimmed and case-insensitive')
+  // And a folio linked to a reservation was claimed as nightly two rules earlier.
+  assert.equal(sourceOfPayment({ folio_type: 'guest_account', segment: 'seasonal', reservation_id: 'r1' },
+    { amount: 1 }), 'nightly', 'a reservation link still beats seasonal')
+})
+
+test('the inference is SCOPED TO SEASONAL CAMPERS — nobody else is touched', () => {
+  assert.equal(sourceOfPayment(folios.get('f-monthly'), { amount: 1 }), 'long_term',
+    'long-term stays its own source and is NOT merged into seasonal')
+  assert.equal(sourceOfPayment(folios.get('f-house'), { amount: 1 }), 'other',
+    "an ordinary guest's house tab is still `other`")
+  assert.equal(sourceOfPayment(folios.get('f-walkin'), { amount: 1 }), 'store')
+  assert.equal(sourceOfPayment(undefined, { amount: 1 }), 'other', 'an unknown folio is unchanged')
+})
+
+test('THE TOTAL IS UNCHANGED — money is RE-BUCKETED, never created or lost', () => {
+  // The property that makes this safe to ship: whatever moves out of `unassigned` lands in
+  // `seasonal`, and the independently-summed total does not move at all.
+  const untagged = [
+    { folio_id: 'f-seasonal', amount: 500000, paid_at: at('10') },
+    { folio_id: 'f-seasonal', amount: 250000, paid_at: at('11') },
+    { folio_id: 'f-seasonal', amount: 4799, lane: 'store', paid_at: at('12') },
+    { folio_id: 'f-monthly', amount: 65300, paid_at: at('13') },
+  ]
+  const t = sumBySource(untagged, folios, [], W)
+  assert.equal(t.bySource.unassigned, 0, 'the limbo bucket is now empty')
+  assert.equal(t.bySource.seasonal, 750000, 'and that money is reported as Seasonal')
+  assert.equal(t.bySource.store, 4799, 'while the tagged store payment is untouched')
+  assert.equal(t.bySource.long_term, 65300, 'and long-term is untouched')
+  assert.equal(SOURCES.reduce((s, k) => s + t.bySource[k], 0), t.total, 'the partition still holds')
+  assert.equal(t.total, 500000 + 250000 + 4799 + 65300, 'and the grand total is exactly the same')
 })
 
 test('an unknown folio is `other`, not a crash and not nightly', () => {
