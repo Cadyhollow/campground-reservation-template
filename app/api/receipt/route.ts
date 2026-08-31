@@ -92,12 +92,24 @@ export async function POST(request: NextRequest) {
     const totalPaid = (reservation ? ((reservation as any).amount_paid || 0) : 0) + paymentsTotal
     const balanceRemaining = chargesTotal - totalPaid
 
-    // ── PR 4: IS THIS A LANE RECEIPT? ────────────────────────────────────────────────────────
+    // ── IS THIS A LANE RECEIPT? ──────────────────────────────────────────────────────────────
     //
-    // Only a SEASONAL camper's guest_account folio at a SEPARATED park. Everything else — a
-    // combined park, a transient guest's account, a reservation or walk-up — renders exactly as
-    // it does today. billing_mode is read in its own guarded query: a park without the Phase 4
-    // column must still get its receipt.
+    // Two ways in, and the difference matters:
+    //
+    //   1. billing_mode === 'separated' — the park's whole-account receipt is GROUPED by lane by
+    //      default, because that is how a separated park reads every account.
+    //   2. an explicit `lane` was asked for — the owner pressed "Send seasonal receipt" for THIS
+    //      payment. That is a deliberate per-receipt request, not a park-wide presentation
+    //      default, so ⚠ IT MUST WORK ON A COMBINED PARK TOO.
+    //
+    // Before, `lane` was silently ignored unless the park was separated: a combined park asking
+    // for a seasonal-only receipt got the whole account back, electric and store included, with
+    // nothing to say the filter had been dropped. Combined is the default for every park, so the
+    // feature was unreachable for almost everyone who wanted it.
+    //
+    // Everything else — a transient guest's account, a reservation, a walk-up — renders exactly
+    // as it does today. billing_mode is still read in its own guarded query: a park without the
+    // Phase 4 column must still get its receipt.
     let billingMode: 'combined' | 'separated' = 'combined'
     try {
       const { data: modeRow } = await supabase.from('settings').select('billing_mode').limit(1).single()
@@ -110,7 +122,8 @@ export async function POST(request: NextRequest) {
       guestIsSeasonal = !!g?.is_seasonal
     }
 
-    const laneReceipt = billingMode === 'separated' && guestIsSeasonal && !folio.reservation_id
+    const laneReceipt =
+      (onlyLane !== null || billingMode === 'separated') && guestIsSeasonal && !folio.reservation_id
 
     // The electric signal, resolved the same way everywhere in Phase 4 — the readings that point
     // at these charges, never the category.
