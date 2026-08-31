@@ -238,8 +238,40 @@ export default function LaneCheckoutPage() {
       }))
   }
 
+  /**
+   * The camper's guest_account folio, created if they have never had one.
+   *
+   * ⚠ WHY THIS IS SAFE FROM CREATING A SECOND FOLIO. `data.folioId` comes from
+   * GET /api/seasonals/guest, whose lookup is the BROADER one — folio_type + guest_id, with no
+   * status filter — so an empty string here means the camper genuinely has no guest_account
+   * folio at all, not merely no OPEN one. (The folio page's own find-or-create does filter on
+   * status='open'; that asymmetry predates this and is left alone.)
+   *
+   * An empty folio is a valid state and is NOT created up front. It is created here, on the first
+   * payment, which is the moment it first means anything — an autumn deposit months before the
+   * contract is sent is the ordinary case, not an edge one.
+   */
+  async function ensureFolio(): Promise<string | null> {
+    if (data?.folioId) return data.folioId
+    const g = data?.guest
+    if (!g?.id) return null
+    const { data: created, error } = await supabase.from('folios').insert({
+      reservation_id: null,
+      guest_id: g.id,
+      guest_name: g.name || '',
+      guest_email: g.email || '',
+      folio_type: 'guest_account',
+      status: 'open',
+      label: 'Seasonal Account',
+    }).select('id').single()
+    if (error || !created) { toast.error('Could not open a folio for this camper.'); return null }
+    return created.id as string
+  }
+
   async function takePayment() {
-    if (!data?.folioId || baseTotal <= 0) return
+    if (baseTotal <= 0) return
+    const folioId = await ensureFolio()
+    if (!folioId) return
     const split = splits()
     setSaving(true)
     try {
@@ -251,8 +283,8 @@ export default function LaneCheckoutPage() {
         const res = await fetch('/api/admin-card-payment', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            sourceId: tok.token, folioId: data.folioId, note,
-            guestName: data.guest?.name || '',
+            sourceId: tok.token, folioId, note,
+            guestName: data?.guest?.name || '',
             lanes: split.map(l => ({ lane: l.lane, amount: l.amount + l.surchargeAmount, surchargeAmount: l.surchargeAmount })),
           }),
         })
@@ -265,7 +297,7 @@ export default function LaneCheckoutPage() {
         // `lane: string | null` — the credit row below carries null, which is the whole point of
         // it (an account credit belongs to no single lane).
         const rows: Record<string, unknown>[] = split.map(l => ({
-          folio_id: data.folioId,
+          folio_id: folioId,
           method,
           amount: l.amount,
           surcharge_amount: 0,
@@ -289,7 +321,7 @@ export default function LaneCheckoutPage() {
         const creditLane = split.length === 1 ? split[0].lane : null
         if (creditCents > 0) {
           rows.push({
-            folio_id: data.folioId, method, amount: creditCents, surcharge_amount: 0,
+            folio_id: folioId, method, amount: creditCents, surcharge_amount: 0,
             status: 'completed', note: (note ? note + ' · ' : '') + 'Account credit',
             lane: creditLane,
           })
@@ -323,12 +355,14 @@ export default function LaneCheckoutPage() {
    * being recorded as having paid twice.
    */
   async function sendToTerminal() {
-    if (!data?.folioId || baseTotal <= 0) return
+    if (baseTotal <= 0) return
+    const folioId = await ensureFolio()
+    if (!folioId) return
     setSaving(true)
     try {
       const res = await fetch('/api/terminal/charge', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folioId: data.folioId, note, lanes: splits() }),
+        body: JSON.stringify({ folioId, note, lanes: splits() }),
       })
       const d = await res.json()
       if (!res.ok || !d.checkoutId) { toast.error(d.error || 'Could not reach the terminal.'); setSaving(false); return }
@@ -685,7 +719,9 @@ export default function LaneCheckoutPage() {
               <p className="text-2xl font-bold text-gray-900">{money(grandTotal)}</p>
             </div>
             <button onClick={takePayment}
-              disabled={saving || baseTotal <= 0 || !data.folioId || !!checkoutId || (method === 'card' && (cardEntryMode === 'terminal' || !cardReady))}
+              // No `!data.folioId` here any more: a camper with no folio is one who has simply
+              // never been charged, and taking their first payment is what opens one.
+              disabled={saving || baseTotal <= 0 || !!checkoutId || (method === 'card' && (cardEntryMode === 'terminal' || !cardReady))}
               className="w-full py-3 rounded-xl text-sm font-bold text-white disabled:opacity-50"
               style={{ background: '#15803d' }}>
               {saving ? 'Recording…' : `Take payment · ${money(grandTotal)}`}

@@ -143,3 +143,29 @@ export function normalizeParty(rows: unknown): PartyMember[] {
     })
     .filter(p => p.name)
 }
+
+/**
+ * Attributes that ask the browser NOT to treat these as a checkout address.
+ *
+ * ⚠ THE "SAVE ADDRESS?" POPUP IS THE BROWSER'S, NOT OURS. Chrome offers to save an address to the
+ * signed-in Google account whenever a page's fields look like a shipping/billing form — which
+ * ours legitimately do: street, city, state, ZIP, name, phone. Nothing in this app asks for it and
+ * nothing in this app can switch it off outright.
+ *
+ * What is available is discouragement, and these are the levers that actually move it:
+ *   · autoComplete="off"  — necessary, and on its own routinely IGNORED by Chrome for address
+ *                           fields, which is why it is not the whole answer.
+ *   · a non-semantic `name` — the heuristic reads field names as much as labels. A field called
+ *                           `gr-home_street` is not `street-address`.
+ *   · data-1p-ignore / data-lpignore — 1Password and LastPass respect these.
+ *
+ * ⚠ SO THIS IS BEST-EFFORT AND BROWSER-CONTROLLED. It should stop the prompt in normal use in
+ * Chrome; a different browser, or a Chrome release that changes its heuristic, may still offer.
+ * The only complete fix is on the viewer's side (Chrome → Autofill → Addresses → off).
+ */
+export const noAutofill = (key: string) => ({
+  autoComplete: 'off' as const,
+  name: `gr-${key}`,
+  'data-1p-ignore': true,
+  'data-lpignore': true,
+})

@@ -129,9 +129,23 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
             The lane breakdown is purely additive and only a separated park ever sees it. */}
         {lanes ? (
           <>
-            {LANE_ROWS.map(({ lane, label }) => (
-              <Row key={lane} label={label} value={money(lanes.byLane[lane].balance)} />
-            ))}
+            {/* A lane in CREDIT says so in words. A camper who pays a deposit before any charge
+                exists has a negative seasonal balance, and "−$500.00" is a figure somebody has to
+                decode; "credit on account" is what it actually means. The credit is not parked
+                anywhere special — when the seasonal charge is posted at send, the lane balance is
+                charges − payments and it nets automatically. */}
+            {LANE_ROWS.map(({ lane, label }) => {
+              const bal = lanes.byLane[lane].balance
+              return (
+                <Row key={lane} label={label} value={
+                  bal < 0
+                    ? <span className="tnum" style={{ color: 'var(--good)' }}>
+                        credit on account {fmtMoney(-bal)}
+                      </span>
+                    : money(bal)
+                } />
+              )
+            })}
             {/* Shown HONESTLY rather than folded into a lane. Until the checkout screen lands,
                 every payment is recorded against the whole account rather than against one lane,
                 so a camper will normally have some sitting here. Silently spreading it across
@@ -150,19 +164,27 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
           <Row label="Account balance" value={<span className="tnum" style={{ color: data.balance_cents > 0 ? 'var(--watch)' : 'var(--good)' }}>{data.balance_cents < 0 ? 'Credit ' + fmtMoney(-data.balance_cents) : fmtMoney(data.balance_cents)}</span>} />
         )}
         <Row label="Last payment" value={data.lastPayment ? <span className="tnum">{`${fmtMoney(data.lastPayment.amount - (data.lastPayment.surcharge_amount || 0))} · ${fmtDate(data.lastPayment.paid_at)}`}</span> : '—'} />
-        {admin && data.folioId && (
+        {/* ⚠ ALWAYS SHOWN — no `data.folioId` guard, and no billing-mode guard.
+            AN EMPTY FOLIO IS A VALID STATE. A camper who has never been charged is exactly the
+            camper an owner most often needs to take money from — an early deposit in the autumn,
+            months before the contract is sent. Hiding "Take a payment" until a charge existed made
+            the ordinary case the impossible one. There is nothing to create up front: the folio is
+            created on the first payment.
+
+            WHICH SCREEN, THOUGH, DEPENDS ON THE PARK, and both are the EXISTING lane-aware path:
+              separated → /admin/checkout, the lane boxes (Phase 4 PR 3).
+              combined  → the folio's own payment box, which carries the lane selector from #77.
+            No second payment path is built here; this only routes to the one that fits. */}
+        {admin && (
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            {/* Phase 4 PR 3. Shown only when the park is SEPARATED — `lanes` is present exactly
-                then — because the lane checkout has nothing to select otherwise. A combined park
-                keeps taking payments on the folio, unchanged. */}
-            {lanes && (
-              <Link href={`/admin/checkout?guestId=${g.id}`}
-                className="px-3 py-2 rounded-lg text-xs font-bold text-on-good"
-                style={{ background: 'var(--good)' }}>
-                Take a payment
-              </Link>
-            )}
-            <Link href={`/admin/folio/guest/${g.id}`} className="text-sm font-semibold" style={{ color: 'var(--link)' }}>Open folio →</Link>
+            <Link href={data.billingMode === 'separated' ? `/admin/checkout?guestId=${g.id}` : `/admin/folio/guest/${g.id}`}
+              className="px-3 py-2 rounded-lg text-xs font-bold text-on-good"
+              style={{ background: 'var(--good)' }}>
+              Take a payment
+            </Link>
+            <Link href={`/admin/folio/guest/${g.id}`} className="text-sm font-semibold" style={{ color: 'var(--link)' }}>
+              {data.folioId ? 'Open folio →' : 'View folio (empty) →'}
+            </Link>
           </div>
         )}
       </Section>

@@ -173,3 +173,57 @@ test('no contract, no fee — and the summary says that rather than showing $0.0
   assert.equal(v.feeCents, null)
   assert.equal(depositSummary(v), 'No seasonal fee set for this season yet.')
 })
+
+// ── 4. paying before there is anything to pay ─────────────────────────────────────────────────
+//
+// The ordinary autumn case: a camper hands over a deposit months before the contract is sent, so
+// the payment lands on a lane with NO charge on it. Three things have to hold, and all three are
+// properties of `charges − payments` rather than of any special "prepayment" handling:
+//   · the lane goes NEGATIVE and reads as a credit, not as an error or a zero
+//   · the whole-account invariant still holds
+//   · when the charge is finally posted at send, the credit nets against it by itself
+
+test('a seasonal payment with NO charge is a credit, not a zero and not an error', () => {
+  const lanes = laneBalances([], [payment('seasonal', 50000)], CTX)
+  assert.equal(lanes.byLane.seasonal.charges, 0)
+  assert.equal(lanes.byLane.seasonal.payments, 50000)
+  assert.equal(lanes.byLane.seasonal.balance, -50000, 'a credit must be a negative lane balance')
+
+  const v = depositView(null, lanes)
+  assert.equal(v.paidCents, 50000)
+  assert.equal(v.balanceCents, -50000)
+  // No contract yet, so there is no fee to compare against — say that rather than invent one.
+  assert.equal(v.feeCents, null)
+  assert.equal(depositSummary(v), 'No seasonal fee set for this season yet.')
+})
+
+test('the whole-account invariant survives a credit', () => {
+  // accountBalance must still equal charges − payments across everything, negative or not.
+  const lanes = laneBalances([charge('a', 'store', 2500)], [payment('seasonal', 50000)], CTX)
+  assert.equal(lanes.accountBalance, 2500 - 50000)
+  assert.equal(lanes.accountBalance, lanes.totalCharges - lanes.totalPayments)
+})
+
+test('when the seasonal charge is finally posted, the credit nets against it automatically', () => {
+  const pre = laneBalances([], [payment('seasonal', 50000)], CTX)
+  assert.equal(pre.byLane.seasonal.balance, -50000, 'credit before the charge')
+
+  // Send day: the seasonal fee posts. Nothing re-files the payment — the lane is just re-summed.
+  const post = laneBalances([charge('fee', 'seasonal', 200000)], [payment('seasonal', 50000)], CTX)
+  assert.equal(post.byLane.seasonal.balance, 150000, 'the $500 credit did not come off the $2000 fee')
+
+  const v = depositView({ total_due_cents: 200000, deposit_due_cents: 50000 }, post)
+  assert.equal(v.paidCents, 50000)
+  assert.equal(v.balanceCents, 150000)
+  assert.equal(v.depositCovered, true)
+  assert.equal(depositSummary(v), 'Deposit paid — balance due in the spring.')
+})
+
+test('a credit LARGER than the eventual charge stays a credit', () => {
+  const lanes = laneBalances([charge('fee', 'seasonal', 30000)], [payment('seasonal', 50000)], CTX)
+  assert.equal(lanes.byLane.seasonal.balance, -20000)
+  const v = depositView({ total_due_cents: 30000, deposit_due_cents: null }, lanes)
+  assert.equal(v.balanceCents, -20000)
+  // Over-paid reads as paid in full, never as "owes minus twenty thousand".
+  assert.equal(depositSummary(v), 'Paid in full.')
+})

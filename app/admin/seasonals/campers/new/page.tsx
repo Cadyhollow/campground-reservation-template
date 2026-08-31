@@ -5,7 +5,7 @@ import Link from 'next/link'
 import toast, { Toaster } from 'react-hot-toast'
 import { planAtLeast } from '@/lib/plan'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
-import { emptyGuestForm, GUEST_FIELD_GROUPS, type GuestRecordForm } from '@/lib/guest-record'
+import { emptyGuestForm, GUEST_FIELD_GROUPS, type GuestRecordForm, noAutofill } from '@/lib/guest-record'
 
 const supabase = createBrowserSupabase()
 
@@ -81,6 +81,7 @@ export default function NewCamperPage() {
                   </label>
                   <input
                     type={f.type === 'number' ? 'number' : 'text'}
+                    {...noAutofill(f.key)}
                     value={form[f.key]}
                     onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))}
                     className="w-full rounded-lg border border-line-strong bg-card px-3 py-2 text-sm text-ink"

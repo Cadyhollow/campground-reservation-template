@@ -11,7 +11,7 @@ import {
   depositView, depositSummary, enrollmentStatus, ENROLLMENT_LABEL, ENROLLMENT_TONE,
 } from '@/lib/seasonal-directory'
 import {
-  guestFormFrom, guestPatchFrom, GUEST_FIELD_GROUPS, type GuestRecordForm,
+  guestFormFrom, guestPatchFrom, GUEST_FIELD_GROUPS, noAutofill, type GuestRecordForm,
 } from '@/lib/guest-record'
 import toast, { Toaster } from 'react-hot-toast'
 import type { SeasonalGuestData, SeasonalGuest } from '@/lib/seasonal-types'
@@ -295,7 +295,7 @@ export default function SeasonalCamperPage() {
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Link href={`/admin/seasonals/new?guestId=${guestId}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-line text-ink-soft hover:bg-card-2">↗ Full form</Link>
+          <Link href={`/admin/seasonals/new?guestId=${guestId}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-line text-ink-soft hover:bg-card-2">↗ Full intake form</Link>
           <label className="text-xs font-medium text-muted">Season</label>
           <SeasonPicker seasons={seasons} value={seasonId} onChange={setSeasonId} disabled={!seasonsLoaded}
             className="border border-line rounded-lg px-3 py-2 text-sm font-bold text-ink" />
@@ -410,8 +410,6 @@ export default function SeasonalCamperPage() {
         </div>
       )}
 
-      {data && <SeasonalSections data={data} mode="admin" />}
-
       {/* PERSONAL INFORMATION — one card over the one guests row. Replaces the separate rig and
           home-address editors, which wrote the same row through two hand-built field lists. */}
       <div className="bg-card rounded-xl border p-5 mb-4"
@@ -420,9 +418,13 @@ export default function SeasonalCamperPage() {
           <h3 className="text-sm font-bold uppercase tracking-wide" style={{ color: hasAddress ? 'var(--muted)' : 'var(--watch)' }}>
             Personal information {hasAddress ? '' : '· home address required'}
           </h3>
+          {/* A LABELLED BUTTON, NOT A BARE "Edit" LINK. The only way in used to be a small
+              unlabelled "↗ Full form" in the header, which nobody would guess was how you change
+              a phone number. Editing the record is the most common thing done on this page, so it
+              looks like a button and says what it edits. */}
           <button onClick={() => { if (!personalOpen) setPersonal(guestFormFrom(g as unknown as Record<string, unknown>)); setPersonalOpen(o => !o) }}
-            className="text-sm font-semibold" style={{ color: 'var(--link)' }}>
-            {personalOpen ? 'Cancel' : 'Edit'}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold border border-line bg-card-2 text-ink-soft hover:bg-card whitespace-nowrap">
+            {personalOpen ? 'Cancel' : '✎ Edit details'}
           </button>
         </div>
 
@@ -452,6 +454,7 @@ export default function SeasonalCamperPage() {
                       <label className="block text-xs text-muted mb-1">{f.label}</label>
                       <input
                         type={f.type === 'number' ? 'number' : 'text'}
+                        {...noAutofill(f.key)}
                         value={personal[f.key]}
                         onChange={e => setPersonal(prev => ({ ...prev, [f.key]: e.target.value }))}
                         className="w-full rounded-lg border border-line-strong bg-card px-3 py-2 text-sm text-ink"
@@ -480,7 +483,9 @@ export default function SeasonalCamperPage() {
       <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-bold text-muted uppercase tracking-wide">Party (saved to the camper record)</h3>
-          <button onClick={() => { if (!partyOpen) setParty(Array.isArray(g.party) ? g.party as Occupant[] : []); setPartyOpen(o => !o) }} className="text-sm font-semibold" style={{ color: 'var(--link)' }}>{partyOpen ? 'Cancel' : 'Edit'}</button>
+          <button onClick={() => { if (!partyOpen) setParty(Array.isArray(g.party) ? g.party as Occupant[] : []); setPartyOpen(o => !o) }}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold border border-line bg-card-2 text-ink-soft hover:bg-card whitespace-nowrap">
+            {partyOpen ? 'Cancel' : '✎ Edit party'}</button>
         </div>
         {!partyOpen && (
           roster.length > 0
@@ -503,6 +508,9 @@ export default function SeasonalCamperPage() {
           </div>
         )}
       </div>
+
+
+      {data && <SeasonalSections data={data} mode="admin" />}
 
       {/* Add note (append-only) */}
       <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
