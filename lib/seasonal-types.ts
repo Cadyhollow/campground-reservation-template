@@ -154,6 +154,12 @@ import type { LaneBalances } from '@/lib/ledger-lanes'
 
 export type SeasonalGuestData = {
   year: number
+  /**
+   * The PARK's billing mode. Deliberately separate from `lanes`, which is null both on a combined
+   * park AND for a camper who has no folio yet — two different facts that must not be conflated
+   * when deciding which payment screen to send someone to.
+   */
+  billingMode?: 'combined' | 'separated'
   guest: SeasonalGuest
   contracts: SeasonalContract[]
   currentContract: SeasonalContract | null

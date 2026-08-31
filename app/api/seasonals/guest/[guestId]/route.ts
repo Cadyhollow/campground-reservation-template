@@ -126,8 +126,17 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     }
   }
 
+  // ⚠ THE PARK'S BILLING MODE TRAVELS SEPARATELY FROM `lanes`, AND THAT DISTINCTION IS THE POINT.
+  //
+  // `lanes` is null in TWO unrelated situations: a COMBINED park, and a camper who has no folio
+  // yet. The screen was reading null as "combined" and so sent a camper with no folio to the plain
+  // folio instead of the lane checkout — which is exactly the camper most likely to be paying an
+  // early deposit against a lane. The mode is a property of the PARK; state it as one.
+  const billingMode = await getBillingMode()
+
   return NextResponse.json({
     year,
+    billingMode,
     guest,
     contracts: contractsOut,
     currentContract,

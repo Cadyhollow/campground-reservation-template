@@ -3,15 +3,18 @@ import { useCallback, useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { planAtLeast } from '@/lib/plan'
+import { sortSeasonsForPicker } from '@/lib/season'
 import SeasonPicker, { useSeasons } from '../SeasonPicker'
 import SeasonalSections from '../SeasonalSections'
-import AddressEditor from '../AddressEditor'
-import RigEditor from '../RigEditor'
 import PartyEditor from '../PartyEditor'
+import {
+  depositView, depositSummary, enrollmentStatus, ENROLLMENT_LABEL, ENROLLMENT_TONE,
+} from '@/lib/seasonal-directory'
+import {
+  guestFormFrom, guestPatchFrom, GUEST_FIELD_GROUPS, noAutofill, type GuestRecordForm,
+} from '@/lib/guest-record'
 import toast, { Toaster } from 'react-hot-toast'
 import type { SeasonalGuestData, SeasonalGuest } from '@/lib/seasonal-types'
-import type { Rig } from '../RigEditor'
-import type { Address } from '../AddressEditor'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 
 // PR 5b-1: the admin browser now talks to Supabase as the LOGGED-IN USER rather than as
@@ -37,15 +40,25 @@ export default function SeasonalCamperPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
 
-  // Rig editor
-  const [rigOpen, setRigOpen] = useState(false)
-  const [rig, setRig] = useState<Rig>({})
-  const [savingRig, setSavingRig] = useState(false)
+  // PERSONAL INFORMATION — one editor over the one `guests` row.
+  //
+  // This replaces the separate rig and home-address cards. They wrote the same row through two
+  // hand-built field lists, which is the drift lib/guest-record.ts exists to end: the fields, the
+  // grouping and the normalisation all come from there now, and the Guest Directory builds its
+  // patch with the same function. Editing a phone number here and editing it there are the same
+  // write to the same row — which is why the two screens can never disagree.
+  const [personalOpen, setPersonalOpen] = useState(false)
+  const [personal, setPersonal] = useState<GuestRecordForm>(guestFormFrom(null))
+  const [savingPersonal, setSavingPersonal] = useState(false)
 
-  // Home address editor (writes to guests). Required for seasonal campers.
-  const [addrOpen, setAddrOpen] = useState(false)
-  const [addr, setAddr] = useState<Address>({})
-  const [savingAddr, setSavingAddr] = useState(false)
+  // Active / inactive, and enrolment. `active` is seeded from the loaded row and defaults to
+  // true on a park that has not run the seasonal_active migration — matching the column default.
+  const [active, setActive] = useState(true)
+  const [togglingActive, setTogglingActive] = useState(false)
+  const [enrolling, setEnrolling] = useState(false)
+  // Which season the "Add to season" dropdown is pointed at. Its own state, NOT the page's season
+  // picker: the picker decides what you are LOOKING at, this decides what you are adding them to.
+  const [addSeasonId, setAddSeasonId] = useState('')
 
   // Party ROSTER editor (writes to guests.party). Standing camper info, exactly like rig and
   // address above — NOT the per-contract `occupants` edited on the review screen at ./review.
@@ -59,9 +72,8 @@ export default function SeasonalCamperPage() {
   const [note, setNote] = useState('')
   const [savingNote, setSavingNote] = useState(false)
 
-  // Shared by Resend and Cancel. The DRAFT send path now lives on the review screen
-  // (./review), so there is no modal state here any more.
-  const [working, setWorking] = useState(false)
+  // The send outcome, still read from the query string: the review screen returns HERE after a
+  // send, so the banner stays even though the send button itself has moved to Contracts.
   const [sendResult, setSendResult] = useState<{ emailed: boolean; error?: string } | null>(null)
 
   useEffect(() => {
@@ -91,7 +103,12 @@ export default function SeasonalCamperPage() {
       const res = await fetch(`/api/seasonals/guest/${guestId}?season_id=${encodeURIComponent(seasonId)}`)
       const d = await res.json()
       if (!res.ok) setErr(d.error || 'Could not load camper.')
-      else { setData(d); setRig({ ...d.guest }); setAddr({ ...d.guest }); setParty(Array.isArray(d.guest?.party) ? d.guest.party : []) }
+      else {
+        setData(d)
+        setPersonal(guestFormFrom(d.guest as Record<string, unknown>))
+        setActive((d.guest as { seasonal_active?: boolean })?.seasonal_active !== false)
+        setParty(Array.isArray(d.guest?.party) ? d.guest.party : [])
+      }
     } catch { setErr('Could not load camper.') }
     setLoading(false)
   }, [guestId, seasonId])
@@ -108,32 +125,69 @@ export default function SeasonalCamperPage() {
     router.replace(`/admin/seasonals/${guestId}`)
   }, [router, guestId])
 
-  async function saveRig() {
-    setSavingRig(true)
-    const { error } = await supabase.from('guests').update({
-      camper_type: rig.camper_type || null,
-      camper_length: rig.camper_length ? parseInt(String(rig.camper_length), 10) : null,
-      camper_amperage: rig.camper_amperage || null,
-      camper_make: rig.camper_make || null,
-      camper_model: rig.camper_model || null,
-      camper_year: rig.camper_year ? parseInt(String(rig.camper_year), 10) : null,
-    }).eq('id', guestId)
-    setSavingRig(false)
-    if (error) { toast.error('Could not save rig: ' + error.message); return } // keep the editor open
-    setRigOpen(false); await load()
+  // ONE SAVE FOR THE WHOLE RECORD, through the shared patch builder.
+  //
+  // ⚠ WHAT THIS DELIBERATELY DOES NOT TOUCH: is_seasonal, seasonal_active, and the party roster.
+  // guestPatchFrom() omits all three, so correcting a phone number can never un-flag a camper or
+  // wipe their roster. Membership and active/inactive are their own deliberate actions below.
+  //
+  // ⚠ AND WHAT IT CANNOT REACH: a contract that has already been SENT or SIGNED. Those render
+  // from `document_text` frozen onto their signature rows at send time — the packet route reads
+  // that row and never re-renders — so a sent agreement is a fixed document whatever changes
+  // here. A DRAFT has no signature rows yet and is rendered live at preview, so edits show up in
+  // it. That boundary is what keeps the paperwork trustworthy, and it is structural rather than
+  // something this screen has to remember.
+  async function savePersonal() {
+    if (!personal.name.trim()) { toast.error('A name is required.'); return }
+    setSavingPersonal(true)
+    const { error } = await supabase.from('guests').update(guestPatchFrom(personal)).eq('id', guestId)
+    setSavingPersonal(false)
+    if (error) { toast.error('Could not save: ' + error.message); return }  // keep the editor open
+    setPersonalOpen(false); await load()
+    toast.success('Saved to the camper record.')
   }
 
-  async function saveAddr() {
-    setSavingAddr(true)
-    const { error } = await supabase.from('guests').update({
-      home_street: addr.home_street?.trim() || null,
-      home_city: addr.home_city?.trim() || null,
-      home_state: addr.home_state?.trim() || null,
-      home_zip: addr.home_zip?.trim() || null,
-    }).eq('id', guestId)
-    setSavingAddr(false)
-    if (error) { toast.error('Could not save address: ' + error.message); return } // keep the editor open
-    setAddrOpen(false); await load()
+  // ENROLMENT — the fix for the vanishing camper.
+  //
+  // Reuses POST /api/seasonal-contracts/create rather than inserting here, because that route is
+  // already idempotent and already handles losing the race on the (guest_id, season_id) unique
+  // constraint. Clicking twice returns the existing draft; it never creates a second contract.
+  async function addToSeason(targetSeasonId: string) {
+    const season = seasons.find(x => x.id === targetSeasonId)
+    if (!season) return
+    setEnrolling(true)
+    try {
+      const res = await fetch('/api/seasonal-contracts/create', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guest_id: guestId, season_year: season.year, season_id: season.id }),
+      })
+      const d = await res.json()
+      if (!res.ok) toast.error(d.error || 'Could not add them to the season.')
+      else {
+        toast.success(d.created
+          ? `Added to ${season.name} — set the fee and send from Contracts.`
+          : `Already in ${season.name}.`)
+        setAddSeasonId('')
+        await load()
+      }
+    } catch { toast.error('Could not add them to the season.') }
+    setEnrolling(false)
+  }
+
+  // Active / inactive. Its own endpoint and its own button — "they left the programme" is a
+  // decision, never something that rides along on a typo correction.
+  async function toggleActive(next: boolean) {
+    setTogglingActive(true)
+    try {
+      const res = await fetch('/api/seasonals/campers', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guest_id: guestId, active: next }),
+      })
+      const d = await res.json()
+      if (!res.ok) toast.error(d.error || 'Could not change that.')
+      else { setActive(d.active); toast.success(next ? 'Marked active.' : 'Marked inactive — their history is kept.') }
+    } catch { toast.error('Could not change that.') }
+    setTogglingActive(false)
   }
 
   // Saves the STANDING roster onto the guest, the same shape as saveRig/saveAddr above.
@@ -191,44 +245,12 @@ export default function SeasonalCamperPage() {
   // The draft send path. Phase 1.5 replaced the old modal — which showed the party, dates and
   // total but never the DOCUMENTS — with a full review screen that renders the real contract and
   // waiver before anything is frozen. This only navigates; the draft is created there.
-  function goToReview() {
-    if (!seasonId) return
-    // Phase 2c: the review screen is opened BY SEASON, which is what lets this camper hold a
-    // Spring and a Fall and still land on the right contract. The off-year confirm the modal
-    // carried is gone with the year picker — the season is named on the button itself now, so
-    // there is no ambiguous number to mistake.
-    router.push(`/admin/seasonals/${guestId}/review?season_id=${encodeURIComponent(seasonId)}`)
-  }
 
   // Retract a sent-but-unsigned packet. The route voids the packet's signature rows (killing the
   // camper's link) and puts the contract back to 'draft' — so after load() the header shows the
   // green “Review & send …” button again and the normal review screen handles the re-send. No separate
   // re-send UI is needed, and freezePacket mints a brand-new packet_id when it runs.
-  async function cancelPacket() {
-    const id = data?.currentContract?.id
-    if (!id) return
-    if (!window.confirm(
-      `Cancel the ${selectedSeason?.name || ''} packet?\n\n` +
-      `The link already emailed to ${data?.guest?.name || 'this camper'} will stop working, and the packet goes back to a draft you can edit.\n\n` +
-      `You will need to send it again afterwards. Anything already signed is not affected.`
-    )) return
-    setWorking(true); setSendResult(null)
-    const res = await fetch(`/api/seasonal-contracts/${id}/cancel`, { method: 'POST' })
-    const d = await res.json().catch(() => ({}))
-    setWorking(false)
-    if (!res.ok || !d.ok) { toast.error(d.error || 'Could not cancel the packet.'); return }
-    toast.success('Packet canceled — the camper\u2019s link no longer works. Edit and send again when ready.')
-    await load()
-  }
 
-  async function resend() {
-    if (!data?.currentContract?.id) return
-    setWorking(true)
-    const res = await fetch(`/api/seasonal-contracts/${data.currentContract.id}/resend`, { method: 'POST' })
-    const d = await res.json()
-    setWorking(false)
-    setSendResult({ emailed: !!d.emailed, error: d.error || undefined })
-  }
 
   if (loading) return <div className="p-6 text-muted">Loading…</div>
   if (err && !data) return <div className="p-6 text-danger">{err}</div>
@@ -239,40 +261,59 @@ export default function SeasonalCamperPage() {
   const hasAddress = !!(g.home_street && g.home_city && g.home_state && g.home_zip)
   const roster: Occupant[] = Array.isArray(g.party) ? (g.party as Occupant[]) : []
   const selectedSeason = seasons.find(s => s.id === seasonId) || null
+  // The two facts this release adds: where they stand with THIS season's paperwork, and how the
+  // seasonal fee is actually being paid off. Both are read-only derivations — depositView only
+  // arranges the lane totals /api/seasonals/guest already computed.
+  const fmtMoney = (c: number) => (c < 0 ? '−$' : '$') + (Math.abs(c) / 100).toFixed(2)
+  const enrollment = enrollmentStatus(current)
+  const deposit = depositView(current, data?.lanes)
+  const seasonLabel = selectedSeason?.name || (data?.year ? String(data.year) : 'this season')
+  const memberSince = (data?.contracts || []).reduce<number | null>(
+    (min, c) => (c.season_year != null && (min === null || c.season_year < min) ? c.season_year : min), null)
+  const allYears = [...new Set((data?.contracts || []).map(c => c.season_year).filter(y => y != null))].sort()
 
   return (
     <div className="p-4 md:p-6 max-w-3xl">
       <Toaster />
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div>
-          <Link href="/admin/seasonals" className="text-sm text-muted hover:text-ink-soft">← Seasonals</Link>
-          <h2 className="text-2xl font-bold text-ink">{data?.guest?.name}</h2>
-          <p className="text-sm text-muted">Site {data?.guest?.site_number || '—'} · {selectedSeason?.name || 'season'}</p>
+          <Link href="/admin/seasonals/campers" className="text-sm text-muted hover:text-ink-soft">← Campers</Link>
+          <h2 className="text-2xl font-bold text-ink">
+            {data?.guest?.name}
+            {!active && (
+              <span className="ml-2 align-middle inline-block rounded-full bg-card-2 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-muted">
+                Inactive
+              </span>
+            )}
+          </h2>
+          <p className="text-sm text-muted">
+            Site {data?.guest?.site_number || '—'} · {seasonLabel}
+            {memberSince != null && <> · member since {memberSince}</>}
+          </p>
+          {allYears.length > 0 && (
+            <p className="text-xs text-muted mt-0.5">Seasons: {allYears.join(', ')}</p>
+          )}
         </div>
-        <div className="flex items-center gap-2">
-          <Link href={`/admin/seasonals/new?guestId=${guestId}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-line text-ink-soft hover:bg-card-2">↗ Full form</Link>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Link href={`/admin/seasonals/new?guestId=${guestId}${seasonId ? `&season_id=${encodeURIComponent(seasonId)}` : ''}`} className="px-3 py-2 rounded-lg text-sm font-semibold border border-line text-ink-soft hover:bg-card-2">↗ Full intake form</Link>
           <label className="text-xs font-medium text-muted">Season</label>
           <SeasonPicker seasons={seasons} value={seasonId} onChange={setSeasonId} disabled={!seasonsLoaded}
             className="border border-line rounded-lg px-3 py-2 text-sm font-bold text-ink" />
-          {status === 'signed'
-            ? <span className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: 'var(--good-bg)', color: 'var(--good)' }}>✓ Packet signed</span>
-            : status === 'sent'
-              ? <>
-                  <button onClick={resend} disabled={working} className="px-4 py-2 rounded-lg text-sm font-semibold text-on-forest disabled:opacity-50" style={{ background: 'var(--forest)' }}>{working ? '…' : '↻ Resend email'}</button>
-                  {/* Quiet outline, not a red fill: this is reversible by sending again, not a delete. */}
-                  <button onClick={cancelPacket} disabled={working}
-                    className="px-4 py-2 rounded-lg text-sm font-semibold border disabled:opacity-50"
-                    style={{ borderColor: 'color-mix(in srgb, var(--danger) 35%, transparent)', color: 'var(--danger)', background: 'var(--card)' }}>
-                    {working ? '…' : 'Cancel packet'}
-                  </button>
-                </>
-              : <button onClick={goToReview} disabled={working} className="px-4 py-2 rounded-lg text-sm font-bold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>{working ? '…' : `✉ Review & send ${selectedSeason?.name || ''} packet`}</button>}
+          {/* ⚠ NO SEND CONTROLS HERE — AND NO CONTRACT DOCUMENT.
+              Reviewing, sending, resending and cancelling a packet all live on the Contracts page
+              now, along with the document itself. This page is the PERSON: who they are, what they
+              owe, and which seasons they are in. A link across is right; a second place to send
+              the paperwork from is what made the two pages feel like the same page. */}
+          <Link href={`/admin/seasonals${seasonId ? `?season_id=${encodeURIComponent(seasonId)}` : ''}`}
+            className="px-3 py-2 rounded-lg text-sm font-semibold border border-line text-ink-soft hover:bg-card-2 whitespace-nowrap">
+            Contracts &amp; sending →
+          </Link>
         </div>
       </div>
 
       {sendResult && (
         <div className="rounded-lg px-3 py-2 text-sm mb-3" style={sendResult.emailed ? { background: 'var(--good-bg)', color: 'var(--good)', border: '1px solid color-mix(in srgb, var(--good) 35%, transparent)' } : { background: 'var(--watch-bg)', color: 'var(--watch)', border: '1px solid color-mix(in srgb, var(--watch) 40%, transparent)' }}>
-          {sendResult.emailed ? 'Packet emailed to the camper.' : `Packet created, but the email did not send${sendResult.error ? `: ${sendResult.error}` : ''}. Use “Resend email”.`}
+          {sendResult.emailed ? 'Packet emailed to the camper.' : `Packet created, but the email did not send${sendResult.error ? `: ${sendResult.error}` : ''}. Resend it from the Contracts page.`}
         </div>
       )}
 
@@ -282,45 +323,157 @@ export default function SeasonalCamperPage() {
         </div>
       )}
 
-      {data && <SeasonalSections data={data} mode="admin" />}
-
-      {/* Rig editor (writes to guests) */}
-      <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-muted uppercase tracking-wide">Edit rig (saved to the camper record)</h3>
-          <button onClick={() => setRigOpen(o => !o)} className="text-sm font-semibold" style={{ color: 'var(--link)' }}>{rigOpen ? 'Cancel' : 'Edit'}</button>
-        </div>
-        {rigOpen && (
-          <div className="mt-3">
-            <RigEditor value={rig} onChange={setRig} />
-            <div className="mt-3">
-              <button onClick={saveRig} disabled={savingRig} className="px-4 py-2 rounded-lg text-sm font-semibold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>{savingRig ? 'Saving…' : 'Save rig'}</button>
-            </div>
+      {/* SEASONS — STATUS ONLY.
+          One line per season this park runs, saying where this camper stands. Deliberately not a
+          contract: no document, no draft text, no preview, no send. Those are the Contracts
+          page's job, and duplicating them here is what made the two pages feel like one. */}
+      {data && seasons.length > 0 && (
+        <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
+          <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+            <h3 className="text-sm font-bold text-muted uppercase tracking-wide">Seasons</h3>
+            <Link href={`/admin/seasonals${seasonId ? `?season_id=${encodeURIComponent(seasonId)}` : ''}`}
+              className="text-xs font-semibold" style={{ color: 'var(--link)' }}>
+              Fees, sending &amp; documents →
+            </Link>
           </div>
-        )}
-      </div>
+          <ul>
+            {sortSeasonsForPicker(seasons).map(se => {
+              const c = (data.contracts || []).find(x => x.season_id === se.id)
+                     || (data.contracts || []).find(x => !x.season_id && x.season_year === se.year)
+              const st = enrollmentStatus(c)
+              const tone = ENROLLMENT_TONE[st]
+              return (
+                <li key={se.id} className="flex items-center justify-between gap-3 py-1.5 border-b border-line-soft last:border-b-0">
+                  <span className="text-sm text-ink">{se.name}</span>
+                  <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                    tone === 'good' ? 'bg-good-bg text-good'
+                      : tone === 'watch' ? 'bg-watch-bg text-watch'
+                      : tone === 'draft' ? 'bg-draft-bg text-draft'
+                      : 'bg-card-2 text-muted'}`}>
+                    {ENROLLMENT_LABEL[st]}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
 
-      {/* Home address editor (writes to guests) — required for seasonal campers */}
-      <div className="bg-card rounded-xl border p-5 mb-4" style={{ borderColor: hasAddress ? 'var(--card-2)' : 'color-mix(in srgb, var(--watch) 40%, transparent)' }}>
+      {/* DEPOSIT AND BALANCE — these campers pay a deposit in the fall and the balance in the
+          spring, so those are the four numbers that matter at the counter. Nothing is recomputed:
+          paid and balance ARE the seasonal lane's own totals. */}
+      {data && current && (deposit.feeCents != null || deposit.depositDueCents != null) && (
+        <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-muted uppercase tracking-wide">Seasonal fee · {seasonLabel}</h3>
+            <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+              ENROLLMENT_TONE[enrollment] === 'good' ? 'bg-good-bg text-good'
+                : ENROLLMENT_TONE[enrollment] === 'watch' ? 'bg-watch-bg text-watch'
+                : ENROLLMENT_TONE[enrollment] === 'draft' ? 'bg-draft-bg text-draft' : 'bg-danger-bg text-danger'}`}>
+              {ENROLLMENT_LABEL[enrollment]}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {([
+              ['Season fee', deposit.feeCents, 'var(--ink)'],
+              ['Deposit due', deposit.depositDueCents, 'var(--ink-soft)'],
+              ['Paid', deposit.paidCents, 'var(--good)'],
+              ['Balance', deposit.balanceCents, deposit.balanceCents && deposit.balanceCents > 0 ? 'var(--watch)' : 'var(--good)'],
+            ] as [string, number | null, string][]).map(([label, cents, color]) => (
+              <div key={label} className="rounded-lg bg-card-2 px-3 py-2">
+                <p className="text-[11px] uppercase tracking-wide text-muted">{label}</p>
+                <p className="tnum text-lg font-bold" style={{ color }}>
+                  {cents == null ? '—' : (cents < 0 ? '−$' : '$') + (Math.abs(cents) / 100).toFixed(2)}
+                </p>
+              </div>
+            ))}
+          </div>
+          <p className="text-sm text-ink-soft mt-3">{depositSummary(deposit)}</p>
+          {deposit.depositDueCents == null && (
+            <p className="text-xs text-muted mt-1">No deposit is stated on this agreement.</p>
+          )}
+          {/* ⚠ THE HONEST FOOTNOTE, AND IT MATTERS MORE THAN IT LOOKS.
+              Every payment taken before lane tagging shipped is UNTAGGED: it is real money on the
+              account, but it names no lane, and laneBalances deliberately does not guess one —
+              guessing would rewrite a park's financial history. So "Paid $0.00" above can sit
+              beside a camper who has plainly paid, and without this line an owner would read it
+              as "they have paid nothing" and go and ask them for money they already sent. */}
+          {data.lanes && data.lanes.untaggedPayments > 0 && (
+            <p className="text-xs mt-2 rounded-lg px-3 py-2"
+              style={{ background: 'var(--watch-bg)', color: 'var(--watch)' }}>
+              <strong>{fmtMoney(data.lanes.untaggedPayments)}</strong> of payments on this account are not
+              filed to a lane, so they are not counted in <em>Paid</em> above. That is every payment taken
+              before payments could be tagged — the money is on the account, it just does not name the
+              seasonal fee. The whole-account balance below is the complete picture.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* PERSONAL INFORMATION — one card over the one guests row. Replaces the separate rig and
+          home-address editors, which wrote the same row through two hand-built field lists. */}
+      <div className="bg-card rounded-xl border p-5 mb-4"
+        style={{ borderColor: hasAddress ? 'var(--line-soft)' : 'color-mix(in srgb, var(--watch) 40%, transparent)' }}>
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-bold uppercase tracking-wide" style={{ color: hasAddress ? 'var(--muted)' : 'var(--watch)' }}>
-            Home address {hasAddress ? '(saved to the camper record)' : '· required'}
+            Personal information {hasAddress ? '' : '· home address required'}
           </h3>
-          <button onClick={() => setAddrOpen(o => !o)} className="text-sm font-semibold" style={{ color: 'var(--link)' }}>{addrOpen ? 'Cancel' : 'Edit'}</button>
+          {/* A LABELLED BUTTON, NOT A BARE "Edit" LINK. The only way in used to be a small
+              unlabelled "↗ Full form" in the header, which nobody would guess was how you change
+              a phone number. Editing the record is the most common thing done on this page, so it
+              looks like a button and says what it edits. */}
+          <button onClick={() => { if (!personalOpen) setPersonal(guestFormFrom(g as unknown as Record<string, unknown>)); setPersonalOpen(o => !o) }}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold border border-line bg-card-2 text-ink-soft hover:bg-card whitespace-nowrap">
+            {personalOpen ? 'Cancel' : '✎ Edit details'}
+          </button>
         </div>
-        {!addrOpen && (
-          <p className="text-sm mt-2" style={{ color: hasAddress ? 'var(--ink-soft)' : 'var(--muted)' }}>
-            {hasAddress
-              ? <>{g.home_street}<br />{[[g.home_city, g.home_state].filter(Boolean).join(', '), g.home_zip].filter(Boolean).join(' ')}</>
-              : 'No address on file.'}
-          </p>
+
+        {!personalOpen && (
+          <div className="mt-3 grid gap-x-6 gap-y-1 sm:grid-cols-2">
+            {GUEST_FIELD_GROUPS.flatMap(grp => grp.fields).map(f => {
+              const v = (g as unknown as Record<string, unknown>)[f.key]
+              const shown = v === null || v === undefined || v === '' ? '—' : String(v)
+              return (
+                <div key={f.key} className="flex justify-between gap-4 py-0.5 text-sm">
+                  <span className="text-muted">{f.label}</span>
+                  <span className="text-ink text-right">{shown}</span>
+                </div>
+              )
+            })}
+          </div>
         )}
-        {addrOpen && (
+
+        {personalOpen && (
           <div className="mt-3">
-            <AddressEditor value={addr} onChange={setAddr} required />
-            <div className="mt-3">
-              <button onClick={saveAddr} disabled={savingAddr} className="px-4 py-2 rounded-lg text-sm font-semibold text-on-good disabled:opacity-50" style={{ background: 'var(--good)' }}>{savingAddr ? 'Saving…' : 'Save address'}</button>
-            </div>
+            {GUEST_FIELD_GROUPS.map(grp => (
+              <div key={grp.title} className="mb-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-muted mb-2">{grp.title}</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {grp.fields.map(f => (
+                    <div key={f.key} className={f.wide ? 'sm:col-span-2' : ''}>
+                      <label className="block text-xs text-muted mb-1">{f.label}</label>
+                      <input
+                        type={f.type === 'number' ? 'number' : 'text'}
+                        {...noAutofill(f.key)}
+                        value={personal[f.key]}
+                        onChange={e => setPersonal(prev => ({ ...prev, [f.key]: e.target.value }))}
+                        className="w-full rounded-lg border border-line-strong bg-card px-3 py-2 text-sm text-ink"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <p className="text-xs text-muted mb-3">
+              This is the camper&rsquo;s one record — the Guest Directory shows these same fields, because it is
+              the same row. Saving updates any <strong>draft</strong> packet that renders from it; a packet
+              already <strong>sent or signed</strong> is a frozen document and never changes.
+            </p>
+            <button onClick={savePersonal} disabled={savingPersonal}
+              className="px-4 py-2 rounded-lg text-sm font-semibold text-on-good disabled:opacity-50"
+              style={{ background: 'var(--good)' }}>
+              {savingPersonal ? 'Saving…' : 'Save camper record'}
+            </button>
           </div>
         )}
       </div>
@@ -330,7 +483,9 @@ export default function SeasonalCamperPage() {
       <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-bold text-muted uppercase tracking-wide">Party (saved to the camper record)</h3>
-          <button onClick={() => { if (!partyOpen) setParty(Array.isArray(g.party) ? g.party as Occupant[] : []); setPartyOpen(o => !o) }} className="text-sm font-semibold" style={{ color: 'var(--link)' }}>{partyOpen ? 'Cancel' : 'Edit'}</button>
+          <button onClick={() => { if (!partyOpen) setParty(Array.isArray(g.party) ? g.party as Occupant[] : []); setPartyOpen(o => !o) }}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold border border-line bg-card-2 text-ink-soft hover:bg-card whitespace-nowrap">
+            {partyOpen ? 'Cancel' : '✎ Edit party'}</button>
         </div>
         {!partyOpen && (
           roster.length > 0
@@ -354,12 +509,70 @@ export default function SeasonalCamperPage() {
         )}
       </div>
 
+
+      {data && <SeasonalSections data={data} mode="admin" />}
+
       {/* Add note (append-only) */}
       <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
         <h3 className="text-sm font-bold text-muted uppercase tracking-wide mb-2">Add a note</h3>
         <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="Add a note (append-only — can't be edited or deleted)" className="w-full border border-line rounded-lg px-3 py-2 text-sm" />
         <div className="mt-2"><button onClick={addNote} disabled={savingNote || !note.trim()} className="px-4 py-2 rounded-lg text-sm font-semibold text-on-forest disabled:opacity-50" style={{ background: 'var(--forest)' }}>{savingNote ? 'Adding…' : 'Add note'}</button></div>
       </div>
+
+      {/* ACTIVE / INACTIVE — "they left the programme", which is NOT the same as "remove from
+          seasonals" beside it. Inactive keeps them in the Campers directory with all their
+          history; removing un-flags them and takes them out of the seasonal screens entirely. */}
+      <div className="bg-card rounded-xl border border-line-soft p-5 mb-4 flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h3 className="text-sm font-bold text-muted uppercase tracking-wide">Programme status</h3>
+          <p className="text-sm text-ink-soft mt-1">
+            {active
+              ? 'Active — a current seasonal camper.'
+              : 'Inactive — they have left the programme. Their contracts, payments and readings are all kept.'}
+          </p>
+        </div>
+        <button onClick={() => toggleActive(!active)} disabled={togglingActive}
+          className="px-4 py-2 rounded-lg text-sm font-semibold border border-line bg-card text-ink-soft disabled:opacity-50 whitespace-nowrap">
+          {togglingActive ? '…' : active ? 'Mark inactive' : 'Mark active'}
+        </button>
+      </div>
+
+      {/* ADD TO SEASON — the ONE enrolment entry point on the camper side.
+          Creating a camper makes the person only; it does not create a contract. This is where a
+          person becomes enrolled: it creates their DRAFT contract for the season chosen, and that
+          draft then appears on the Contracts page to have its fee set and be sent. The camper page
+          starts it, the Contracts page finishes it.
+          Idempotent by construction — POST /api/seasonal-contracts/create returns the existing row
+          rather than a second one, so a double click cannot duplicate a contract. */}
+      {data && seasons.length > 0 && (
+        <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
+          <h3 className="text-sm font-bold text-muted uppercase tracking-wide">Add to a season</h3>
+          <p className="text-sm text-ink-soft mt-1 mb-3">
+            Creates a draft contract for the season you choose. Nothing is sent — set the fee and
+            send it from the Contracts page.
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select value={addSeasonId} onChange={e => setAddSeasonId(e.target.value)}
+              className="rounded-lg border border-line-strong bg-card px-3 py-2 text-sm text-ink">
+              <option value="">Choose a season…</option>
+              {sortSeasonsForPicker(seasons).map(se => {
+                const already = (data.contracts || []).some(
+                  x => x.season_id === se.id || (!x.season_id && x.season_year === se.year))
+                return (
+                  <option key={se.id} value={se.id} disabled={already}>
+                    {se.name}{already ? ' — already in it' : ''}
+                  </option>
+                )
+              })}
+            </select>
+            <button onClick={() => addToSeason(addSeasonId)} disabled={!addSeasonId || enrolling}
+              className="px-4 py-2 rounded-lg text-sm font-bold text-on-forest disabled:opacity-50 whitespace-nowrap"
+              style={{ background: 'var(--forest)' }}>
+              {enrolling ? 'Adding…' : 'Add to season'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Remove from seasonals — unchecks is_seasonal; keeps all records, reversible */}
       <div className="mb-4 flex justify-end">

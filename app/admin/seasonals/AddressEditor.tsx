@@ -1,4 +1,5 @@
 'use client'
+import { noAutofill } from '@/lib/guest-record'
 // Controlled home-address field group. No save of its own — the parent owns
 // persistence. Used by both the camper page and the new intake form.
 export type Address = {
@@ -21,20 +22,20 @@ export default function AddressEditor({ value, onChange, required }: {
     <div className="grid grid-cols-2 gap-3">
       <div className="col-span-2">
         <label className={lbl}>Street {star}</label>
-        <input value={value.home_street ?? ''} onChange={e => set('home_street', e.target.value)} className={inp} />
+        <input value={value.home_street ?? ''} onChange={e => set('home_street', e.target.value)} className={inp} {...noAutofill('home_street')} />
       </div>
       <div>
         <label className={lbl}>City {star}</label>
-        <input value={value.home_city ?? ''} onChange={e => set('home_city', e.target.value)} className={inp} />
+        <input value={value.home_city ?? ''} onChange={e => set('home_city', e.target.value)} className={inp} {...noAutofill('home_city')} />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className={lbl}>State {star}</label>
-          <input value={value.home_state ?? ''} onChange={e => set('home_state', e.target.value)} className={inp} />
+          <input value={value.home_state ?? ''} onChange={e => set('home_state', e.target.value)} className={inp} {...noAutofill('home_state')} />
         </div>
         <div>
           <label className={lbl}>ZIP {star}</label>
-          <input value={value.home_zip ?? ''} onChange={e => set('home_zip', e.target.value)} className={inp} />
+          <input value={value.home_zip ?? ''} onChange={e => set('home_zip', e.target.value)} className={inp} {...noAutofill('home_zip')} />
         </div>
       </div>
     </div>
