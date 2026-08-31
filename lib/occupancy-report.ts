@@ -82,8 +82,13 @@ export function typeLabel(type: string): string {
 export type Occupant = {
   key: string
   type: string
-  /** The site number they name, normalised. Empty when they name none. */
+  /** The FIRST site they name, normalised. Kept so a single-site occupant reads exactly as it
+   *  always has; `siteNumbers` is the whole truth when a camper holds more than one. */
   siteNumber?: string
+  /** EVERY site they hold, normalised and de-duplicated. See splitSiteNumbers(). */
+  siteNumbers?: string[]
+  /** The type of each entry in `siteNumbers`, in the same order. */
+  types?: string[]
   /** True for a SEASONAL camper; false for a monthly or other long-stay one. */
   seasonal?: boolean
   /** First night held. */
@@ -115,6 +120,48 @@ export function resolveSiteType(
   const key = norm(siteNumber)
   if (!key) return UNRESOLVED_TYPE
   return byNumber.get(key) || UNRESOLVED_TYPE
+}
+
+/**
+ * One camper can hold more than one site.
+ *
+ * A seasonal camper who rents a second site — usually at a discounted rate — has that recorded
+ * as a single free-text value: "43, 44". Read whole, that string matches no site at all, so the
+ * camper resolved to nothing and BOTH their sites read as open. Read as one site, the second one
+ * read as open while somebody was living on it — which sends an owner to sell a site that is
+ * taken. Splitting is what makes a second site countable.
+ *
+ * ⚠ A SINGLE VALUE TAKES THE IDENTICAL PATH IT ALWAYS DID: no comma means one token, and that
+ * token is normalised exactly as `resolveSiteType` normalises it. The common case is unchanged.
+ *
+ * Blank tokens are dropped ("43,," and a trailing comma are typing, not a site) and duplicates
+ * are collapsed, so a value like "43, 43" cannot fill one site twice and overstate occupancy.
+ */
+export function splitSiteNumbers(value: string | null | undefined): string[] {
+  if (typeof value !== 'string') return []
+  const out: string[] = []
+  for (const raw of value.split(',')) {
+    const t = norm(raw)
+    if (t && !out.includes(t)) out.push(t)
+  }
+  return out
+}
+
+/**
+ * Every site a camper holds, paired with its type.
+ *
+ * ⚠ AN UNKNOWN TOKEN IS KEPT, NOT DROPPED. "43, 999" on a park with no site 999 yields site 43
+ * AND an `unresolved` entry — because a camper pointing at a site that does not exist is a real
+ * thing an owner needs to see and fix, and silently discarding the token would hide it while
+ * making the numbers look tidier.
+ */
+export function resolveSiteTypes(
+  value: string | null | undefined,
+  byNumber: ReadonlyMap<string, string>,
+): { siteNumbers: string[]; types: string[] } {
+  const siteNumbers = splitSiteNumbers(value)
+  if (siteNumbers.length === 0) return { siteNumbers: [], types: [UNRESOLVED_TYPE] }
+  return { siteNumbers, types: siteNumbers.map(n => byNumber.get(n) || UNRESOLVED_TYPE) }
 }
 
 /** site_number → site_type, for the lookup above. */
@@ -204,12 +251,16 @@ export function buildOccupants(
     if (c.guest_id) withContract.add(c.guest_id)
     const range = seasonRange(c, (c.season_id && seasonsById.get(c.season_id)) || null, camper)
     if (!range) { undated.push(who); continue }
-    const sn = norm(c.site_number || camper?.site_number)
+    const raw = c.site_number || camper?.site_number
+    const { siteNumbers, types } = resolveSiteTypes(raw, byNumber)
     occupants.push({
       key: who,
-      // The contract's own site number wins — it is what was agreed for that season.
-      type: resolveSiteType(sn, byNumber),
-      siteNumber: sn,
+      // The contract's own site number wins — it is what was agreed for that season. A camper
+      // holding two sites names both here; see splitSiteNumbers().
+      type: types[0],
+      types,
+      siteNumber: siteNumbers[0] || '',
+      siteNumbers,
       seasonal: true,
       from: range.from, to: range.to,
       totalCents: c.total_due_cents || 0,
@@ -224,10 +275,13 @@ export function buildOccupants(
     const who = camper.name || 'Camper'
     const range = seasonRange(null, null, camper)
     if (!range) { undated.push(who); continue }
+    const resolved = resolveSiteTypes(camper.site_number, byNumber)
     occupants.push({
       key: who,
-      type: resolveSiteType(camper.site_number, byNumber),
-      siteNumber: norm(camper.site_number),
+      type: resolved.types[0],
+      types: resolved.types,
+      siteNumber: resolved.siteNumbers[0] || '',
+      siteNumbers: resolved.siteNumbers,
       seasonal: !!camper.is_seasonal,
       from: range.from, to: range.to,
       // ⚠ NO CONTRACT MEANS NO AMOUNT TO ATTRIBUTE, and the schema has nowhere else to look. The
@@ -240,6 +294,15 @@ export function buildOccupants(
 
   return { occupants, undated }
 }
+
+/** Every site an occupant holds. Falls back to the singular field so an Occupant built by older
+ *  code (or by a test) behaves exactly as it did. */
+export const sitesOf = (o: Occupant): string[] =>
+  o.siteNumbers && o.siteNumbers.length ? o.siteNumbers : (o.siteNumber ? [o.siteNumber] : [])
+
+/** The type of each site they hold, same fallback. */
+export const typesOf = (o: Occupant): string[] =>
+  o.types && o.types.length ? o.types : [o.type]
 
 // ── THE WINDOW ───────────────────────────────────────────────────────────────────────────────
 
@@ -334,7 +397,8 @@ export function buildSeasonalProgram(
   const allSiteNumbers = new Set((sites || []).map(s => norm(s.site_number)).filter(Boolean))
 
   const seasonalCampers = (occupants || []).filter(o => o.seasonal)
-  const heldNumbers = new Set(seasonalCampers.map(o => o.siteNumber || '').filter(Boolean))
+  // EVERY site each camper holds, not just the first — a second site is occupied too.
+  const heldNumbers = new Set(seasonalCampers.flatMap(sitesOf))
 
   const openSites = seasonalSites
     .filter(s => !heldNumbers.has(norm(s.site_number)))
@@ -384,11 +448,14 @@ export function buildSeasonalProgram(
     campersWithoutFee,
     // ⚠ Surfaced, never silently reclassified. A seasonal camper on a transient-flagged site is a
     // designation the park has not made yet, and the fix is one toggle on the Sites screen.
+    // ⚠ ANY of a camper's sites being mis-designated is worth surfacing, not just the first.
     onTransientSites: seasonalCampers
-      .filter(o => o.siteNumber && allSiteNumbers.has(o.siteNumber) && !flaggedSeasonal.has(o.siteNumber))
+      .filter(o => sitesOf(o).some(n => allSiteNumbers.has(n) && !flaggedSeasonal.has(n)))
       .map(o => o.key),
+    // Likewise for a token that matches nothing: "43, 999" fills 43 AND still reports the camper,
+    // because a site number pointing at nothing is a real thing an owner needs to fix.
     unresolved: seasonalCampers
-      .filter(o => !o.siteNumber || !allSiteNumbers.has(o.siteNumber))
+      .filter(o => sitesOf(o).length === 0 || sitesOf(o).some(n => !allSiteNumbers.has(n)))
       .map(o => o.key),
   }
 }
@@ -535,17 +602,30 @@ export function buildOccupancyReport(
   // ── Seasonal / monthly occupants: the total spread over the season's nights ──
   const unresolvedOccupants: string[] = []
   for (const o of occupants || []) {
-    if (o.type === UNRESOLVED_TYPE) unresolvedOccupants.push(o.key)
+    const heldTypes = typesOf(o)
+    // Any unresolvable token names the camper — see resolveSiteTypes().
+    if (heldTypes.some(t => t === UNRESOLVED_TYPE)) unresolvedOccupants.push(o.key)
     const held: string[] = []
     for (let d = o.from; d < o.to; d = addDays(d, 1)) {
       held.push(d)
       if (held.length > 4000) break
     }
     if (!held.length) continue
-    const perNight = Math.round((o.totalCents || 0) / held.length)
+
+    // ⚠ A CAMPER ON TWO SITES OCCUPIES TWO SITE-NIGHTS PER NIGHT, AND STILL PAYS ONE FEE.
+    //
+    // So the nights multiply and the money does not: the per-night amount is divided across the
+    // sites it bought. A $2,000 season fee covering two sites is $1,000 of season against each,
+    // which keeps `revenueCents` exactly what it was and stops the average nightly rate reading
+    // double. Splitting evenly is the neutral choice — the discount on a second site is real but
+    // is nowhere in the data, and inventing a ratio would be worse than sharing it.
+    const perNightTotal = Math.round((o.totalCents || 0) / held.length)
+    const perNight = Math.round(perNightTotal / Math.max(1, heldTypes.length))
     for (const n of held) {
       if (!inWindow(n)) continue
-      countNight(o.type, n, perNight, !!o.revenueUnknown || !o.totalCents)
+      for (const t of heldTypes) {
+        countNight(t, n, perNight, !!o.revenueUnknown || !o.totalCents)
+      }
     }
   }
 
