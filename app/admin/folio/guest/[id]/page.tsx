@@ -6,7 +6,7 @@ import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/PosCategoryTiles'
 import RefundModal, { type RefundTarget } from '@/app/components/RefundModal'
 import { folioPaymentRefundable, REFUNDABLE_STATUSES } from '@/lib/refundable'
-import { classifyLineItem, normalizeBillingMode, type Lane } from '@/lib/ledger-lanes'
+import { classifyLineItem, normalizeBillingMode, LANES, type Lane } from '@/lib/ledger-lanes'
 import { notVoided } from '@/lib/ledger'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useRole } from '@/lib/use-role'
@@ -766,7 +766,20 @@ export default function GuestAccountPage() {
           )}
 
           {(lineItems.length > 0 || payments.length > 0) && (
-            <ReceiptButtons folioId={folio?.id || ''} guestEmail={folio?.guest_email || guest?.email || ''} receiptType='account' />
+            <ReceiptButtons
+              folioId={folio?.id || ''}
+              guestEmail={folio?.guest_email || guest?.email || ''}
+              receiptType='account'
+              // Straight off the lane groups this page already computes, so the button, the
+              // warning and the receipt cannot disagree about what the seasonal lane holds.
+              seasonal={guest?.is_seasonal ? {
+                charges: laneGroups.find(g => g.key === 'seasonal')?.charges || 0,
+                paid: laneGroups.find(g => g.key === 'seasonal')?.paid || 0,
+                untagged: payments
+                  .filter(p => REFUNDABLE_STATUSES.includes(p.status || '') && !LANES.includes(String(p.lane) as never))
+                  .reduce((s, p) => s + (p.amount || 0) - (p.surcharge_amount || 0), 0),
+              } : null}
+            />
           )}
         </div>
 
@@ -1075,9 +1088,21 @@ function VariableProductTile({ product, onAdd }: { product: any, onAdd: (p: any,
   )
 }
 
-function ReceiptButtons({ folioId, guestEmail, receiptType }: { folioId: string, guestEmail: string, receiptType: string }) {
+function ReceiptButtons({ folioId, guestEmail, receiptType, seasonal }: {
+  folioId: string, guestEmail: string, receiptType: string,
+  /**
+   * Present only for a SEASONAL camper, and only then is the seasonal-fee receipt offered.
+   *  · charges / paid — the seasonal LANE's own figures, straight off the same lane maths the
+   *    folio prints, so the button can say what the receipt will say before it is sent.
+   *  · untagged — money paid against the ACCOUNT rather than a lane. See the warning below; this
+   *    is the difference between a useful receipt and a confusing one.
+   */
+  seasonal?: { charges: number; paid: number; untagged: number } | null,
+}) {
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)
+  const [sendingSeasonal, setSendingSeasonal] = useState(false)
+  const [sentSeasonal, setSentSeasonal] = useState(false)
   const [error, setError] = useState('')
 
   async function sendReceipt() {
@@ -1092,6 +1117,27 @@ function ReceiptButtons({ folioId, guestEmail, receiptType }: { folioId: string,
     const data = await res.json()
     setSending(false)
     if (data.success) { setSent(true); setTimeout(() => setSent(false), 3000) }
+    else setError(data.error || 'Failed to send receipt')
+  }
+
+  /**
+   * The seasonal-fee receipt: the same route, asked for ONE lane.
+   *
+   * Nothing about the send, the money formatting or the card-fee row differs — that is the point
+   * of passing `lane` rather than writing a second receipt.
+   */
+  async function sendSeasonalReceipt() {
+    if (!guestEmail) { setError('No email on file for this guest'); return }
+    setSendingSeasonal(true)
+    setError('')
+    const res = await fetch('/api/receipt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folioId, receiptType, lane: 'seasonal' }),
+    })
+    const data = await res.json()
+    setSendingSeasonal(false)
+    if (data.success) { setSentSeasonal(true); setTimeout(() => setSentSeasonal(false), 3000) }
     else setError(data.error || 'Failed to send receipt')
   }
 
@@ -1112,6 +1158,42 @@ function ReceiptButtons({ folioId, guestEmail, receiptType }: { folioId: string,
           🖨 Print
         </button>
       </div>
+      {/* ── THE SEASONAL-FEE RECEIPT ────────────────────────────────────────────────────────
+          Offered only for a seasonal camper who actually has a seasonal charge — a receipt for a
+          fee that does not exist is not worth a button. */}
+      {seasonal && seasonal.charges > 0 && (
+        <>
+          <button
+            onClick={sendSeasonalReceipt}
+            disabled={sendingSeasonal}
+            style={{ background: sentSeasonal ? '#15803d' : '#fff', color: sentSeasonal ? '#fff' : '#0072B2', border: '1px solid #0072B2', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+          >
+            {sendingSeasonal ? 'Sending...' : sentSeasonal ? '✓ Seasonal receipt sent!' : '⛺ Send seasonal fee receipt'}
+          </button>
+          <p style={{ fontSize: 11, color: '#9ca3af', margin: 0, textAlign: 'center' }}>
+            Seasonal fee only — electric and store are not on it.
+          </p>
+
+          {/* ⚠ THE WARNING THAT STOPS A CONFUSING RECEIPT.
+              The seasonal receipt lists only payments FILED TO THE SEASONAL LANE, and computes
+              its balance from exactly those — so it is always internally honest. But a payment
+              taken against the whole account carries no lane, and on a combined park that is
+              every payment: the folio's payment box does not ask which lane it is for. So a
+              camper who has genuinely paid can receive a receipt saying the fee is outstanding.
+              Rather than guess a lane (which would rewrite what the money was for), say so, and
+              point at the fix — each payment row above can be filed to a lane in one tap. */}
+          {seasonal.untagged > 0 && (
+            <p style={{ fontSize: 11, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 8px', margin: 0 }}>
+              <strong>${(seasonal.untagged / 100).toFixed(2)} is paid against the account, not filed to a lane</strong> — it will
+              NOT appear on the seasonal receipt, which would show{' '}
+              {seasonal.charges - seasonal.paid > 0
+                ? `$${((seasonal.charges - seasonal.paid) / 100).toFixed(2)} still owing`
+                : 'the fee as settled'}.
+              File it to <em>Seasonal</em> on the payment row above first.
+            </p>
+          )}
+        </>
+      )}
       {!guestEmail && <p style={{ fontSize: 12, color: '#9ca3af', margin: 0, textAlign: 'center' }}>No email on file — print only</p>}
       {error && <p style={{ fontSize: 12, color: '#dc2626', margin: 0 }}>{error}</p>}
     </div>
