@@ -124,6 +124,18 @@ export default function GuestAccountPage() {
   const [waiveFee, setWaiveFee] = useState(false)
   const [terminalDeviceId, setTerminalDeviceId] = useState('')
   const [cardEntryMode, setCardEntryMode] = useState('terminal')
+  /**
+   * What this payment is FOR — written to folio_payments.lane.
+   *
+   * '' means "the whole account", which is exactly today's behaviour: no tag, applies to the
+   * balance as a whole. Anything else is the owner SAYING what the money is for, which is the
+   * only thing that makes a lane-scoped receipt possible.
+   *
+   * ⚠ THIS IS A TAG, NOT A CALCULATION. It changes no amount, no surcharge, and no balance —
+   * combined mode still totals the account exactly as it does now. It only lets the seasonal fee
+   * be told apart from the store tab and the electric bill afterwards.
+   */
+  const [paymentLane, setPaymentLane] = useState<Lane | ''>('')
   const [terminalStatus, setTerminalStatus] = useState('idle')
   const [terminalCheckoutId, setTerminalCheckoutId] = useState<string | null>(null)
   const [paymentNote, setPaymentNote] = useState('')
@@ -327,6 +339,15 @@ export default function GuestAccountPage() {
           folioId: folio.id,
           note: paymentNote || 'Guest account payment',
           surchargeAmount,
+          // A ONE-LANE SPLIT when the owner named a lane. recordCardPayment writes one row per
+          // lane, so a single entry is the same single row it would have written anyway — same
+          // amount, same surcharge — plus the tag. Omitted entirely for "whole account", which
+          // takes the untagged path unchanged.
+          // ⚠ `amount` HERE IS THE GROSS, surcharge included — laneSplitTotal() sums exactly this
+          // to decide what the card is charged, and folio_payments.amount is stored gross too.
+          // Passing the net would charge the card LESS than the non-split path does and silently
+          // drop the surcharge. Same figure the untagged branch above sends: totalCharge.
+          ...(paymentLane ? { lanes: [{ lane: paymentLane, amount: totalCharge, surchargeAmount }] } : {}),
         }),
       })
       const data = await res.json()
@@ -388,6 +409,10 @@ export default function GuestAccountPage() {
       // See the staff folio: the fee is rendered from surcharge_amount now, so baking it
       // into the note printed it twice. Amounts unchanged; only this note's text is shorter.
       note: paymentNote,
+      // ⚠ THE ONLY NEW THING WRITTEN, AND IT IS METADATA. Spreads to nothing when the owner left
+      // it on "whole account", so that payment is byte-identical to one recorded before this
+      // existed. `amount` and `surcharge_amount` above are untouched either way.
+      ...(paymentLane ? { lane: paymentLane } : {}),
     })
     setSavingPayment(false)
     setShowPayment(false)
@@ -396,6 +421,7 @@ export default function GuestAccountPage() {
     setPaymentNote('')
     setPaymentMethod('cash')
     setWaiveFee(false)
+    setPaymentLane('')
     await loadFolioData(folio.id)
   }
 
@@ -754,7 +780,22 @@ export default function GuestAccountPage() {
               {totalDue > 0 ? `Collect Payment · $${(totalDue/100).toFixed(2)}` : 'Add Payment / Credit'}
             </button>
           ) : (
-          <button onClick={() => { setPaymentAmount(totalDue > 0 ? (totalDue/100).toFixed(2) : ''); setCashTendered(''); setShowPayment(true) }} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
+          <button onClick={() => {
+              // ⚠ THE DEFAULT IS EARNED, NOT ASSUMED. Seasonal is pre-selected only for a
+              // seasonal camper who actually has a fee outstanding — that is when "they are
+              // paying their fee" is what is almost certainly happening. With the fee settled it
+              // falls back to the whole account, so a store payment on a paid-up camper is never
+              // quietly filed as seasonal. The amount follows the same rule: the lane's own
+              // balance when there is one, otherwise today's whole-account prefill.
+              const seasonalDue = guest?.is_seasonal
+                ? (laneGroups.find(g => g.key === 'seasonal')?.subtotal ?? 0)
+                : 0
+              const lane = seasonalDue > 0 ? 'seasonal' as const : '' as const
+              setPaymentLane(lane)
+              const prefill = lane ? seasonalDue : totalDue
+              setPaymentAmount(prefill > 0 ? (prefill/100).toFixed(2) : '')
+              setCashTendered(''); setShowPayment(true)
+            }} style={{ width: '100%', background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 10, padding: '14px', fontWeight: 700, fontSize: 16, cursor: 'pointer', marginTop: 8 }}>
             {totalDue > 0 ? `Collect Payment · $${(totalDue/100).toFixed(2)}` : 'Add Payment / Credit'}
           </button>
           )}
@@ -834,6 +875,53 @@ export default function GuestAccountPage() {
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Collect Payment</h2>
               <button onClick={() => { setShowPayment(false); setCashTendered('') }} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>×</button>
             </div>
+            {/* ── WHAT IS THIS PAYMENT FOR? ───────────────────────────────────────────────
+                Shown only for a SEASONAL camper — nobody else has lanes to tell apart, and a
+                selector on every folio would be a question most operators cannot answer.
+
+                ⚠ IT SETS A TAG, NOT A TOTAL. The amount, the surcharge and the whole-account
+                balance are identical whichever is chosen; combined mode still totals the account
+                exactly as it does today. What changes is that afterwards the seasonal fee can be
+                told apart from the store tab and the electric bill — which is the whole reason
+                the seasonal receipt can show "fee · paid · $0" without dragging in the rest.
+
+                The default is Seasonal ONLY when there is a seasonal fee outstanding, because
+                that is when "this camper is paying their fee" is overwhelmingly what is
+                happening. Once the fee is settled it defaults back to the whole account, so a
+                store payment on a paid-up camper is never silently filed as seasonal. */}
+            {guest?.is_seasonal && (
+              <>
+                <label style={ml}>What is this payment for?</label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(104px, 1fr))', gap: 8, marginBottom: 16 }}>
+                  {([
+                    { v: 'seasonal' as const, label: 'Seasonal fee' },
+                    { v: 'electric' as const, label: 'Electric' },
+                    { v: 'store' as const, label: 'Store' },
+                    { v: '' as const, label: 'Whole account' },
+                  ]).map(o => {
+                    const on = paymentLane === o.v
+                    const due = o.v ? (laneGroups.find(g => g.key === o.v)?.subtotal ?? 0) : 0
+                    return (
+                      <button key={o.label}
+                        onClick={() => {
+                          setPaymentLane(o.v)
+                          // Prefill the amount owed on that lane — but ONLY into an empty box, so
+                          // a figure the operator has already typed is never overwritten.
+                          if (o.v && due > 0 && !paymentAmount) setPaymentAmount((due / 100).toFixed(2))
+                        }}
+                        style={{ padding: '10px 8px', border: '2px solid ' + (on ? '#0072B2' : '#e5e7eb'), borderRadius: 8, background: on ? '#eaf3f9' : '#fff', fontWeight: 600, fontSize: 13, cursor: 'pointer', color: on ? '#0072B2' : '#374151', lineHeight: 1.3 }}>
+                        {o.label}
+                        {o.v && due > 0 && (
+                          <span style={{ display: 'block', fontSize: 11, fontWeight: 500, color: on ? '#0072B2' : '#9ca3af' }}>
+                            ${(due / 100).toFixed(2)} due
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </>
+            )}
             <label style={ml}>Payment method</label>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))', gap: 8, marginBottom: 16 }}>
               {allPaymentMethods(customMethods).map(m => (
