@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { requireRole } from '@/lib/require-role'
 import { notVoided } from '@/lib/ledger'
 import { classifyLineItem, normalizeBillingMode, LANES, type Lane } from '@/lib/ledger-lanes'
+import { paymentLines, balanceLine, receiptMoney } from '@/lib/receipt-lines'
 
 function getResend() { return new Resend(process.env.RESEND_API_KEY) }
 const supabase = createClient(
@@ -140,7 +141,9 @@ export async function POST(request: NextRequest) {
 
     const isReservationType = receiptType === 'reservation' || folio.reservation_id
 
-    const money = (c: number) => `$${(c / 100).toFixed(2)}`
+    // One formatter for every figure on a receipt, shared with lib/receipt-lines.ts so the rows
+    // and the totals cannot render the same amount two different ways.
+    const money = receiptMoney
 
     // Per-night transparency on the stay line. base_nightly_rate is written at booking
     // time; fall back to dividing the stay by its nights when it's absent (older rows).
@@ -232,25 +235,44 @@ export async function POST(request: NextRequest) {
       ? laneSections.reduce((s, sec) => s + sec.subtotal, 0)
       : itemsTotal - paymentsTotal
 
-    const laneSectionsHtml = laneSections.map(sec => `
+    // ⚠ THE ORDER AND THE LABELS ARE THE FIX. See lib/receipt-lines.ts.
+    //
+    // This section used to print the lane's REMAINING BALANCE beside the heading — so a camper
+    // who had paid in full got a receipt reading "Seasonal fee $0.00" when their fee was
+    // $1,895.00, and the same balance appeared again at the foot of the page. Right figure,
+    // wrong label, printed twice.
+    //
+    // It now reads like an ordinary receipt: the charge, then each payment as its own line
+    // (oldest first — `payments` is ordered by paid_at), then a rule, then the balance ONCE.
+    const row = (label: string, value: string, o: { colour?: string; size?: number; bold?: boolean; indent?: boolean; top?: boolean } = {}) => {
+      const pad = o.top ? '10px 0 4px' : '6px 0'
+      const border = o.top ? 'border-top:1px solid #374151;' : ''
+      const labelColour = o.bold ? '#ffffff' : (o.indent ? '#6B7280' : '#9CA3AF')
+      return `
+      <tr>
+        <td style="padding:${pad};${o.indent ? 'padding-left:12px;' : ''}color:${labelColour};font-size:${o.size || 14}px;${o.bold ? 'font-weight:bold;' : ''}${border}">${label}</td>
+        <td style="padding:${pad};color:${o.colour || '#ffffff'};font-size:${o.size || 14}px;text-align:right;${o.bold ? 'font-weight:bold;' : ''}${border}">${value}</td>
+      </tr>`
+    }
+
+    const laneSectionsHtml = laneSections.map(sec => {
+      // A lane-scoped receipt has no grand total below it, so its section line IS the balance.
+      // The account receipt does, so its sections are subtotals. See lib/receipt-lines.ts.
+      const bal = balanceLine(sec.subtotal, onlyLane ? 'balance' : 'subtotal')
+      return `
   <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;margin:0 0 12px;">
-      <h3 style="color:#ffffff;margin:0;font-size:16px;">${sec.label}</h3>
-      <span style="color:${sec.subtotal > 0 ? '#FCD34D' : '#4ADE80'};font-size:16px;font-weight:bold;">${sec.subtotal < 0 ? 'Credit ' : ''}${money(Math.abs(sec.subtotal))}</span>
-    </div>
+    <h3 style="color:#ffffff;margin:0 0 12px;font-size:16px;">${sec.label}</h3>
     <table style="width:100%;border-collapse:collapse;">
-      ${sec.items.map((i: any) => `
-      <tr>
-        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;">${i.description}</td>
-        <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">${money(i.line_total)}</td>
-      </tr>`).join('')}
-      ${sec.pays.map((p: any) => `
-      <tr>
-        <td style="padding:6px 0;color:#9CA3AF;font-size:14px;text-transform:capitalize;">${p.method} — ${new Date(p.paid_at).toLocaleDateString()}</td>
-        <td style="padding:6px 0;color:#4ADE80;font-size:14px;text-align:right;">−${money(p.amount - (p.surcharge_amount || 0))}</td>
-      </tr>`).join('')}
+      ${sec.items.map((i: any) => row(i.description, money(i.line_total))).join('')}
+      ${sec.pays.flatMap((p: any) => paymentLines(p).map(l =>
+        l.kind === 'payment'
+          ? row(l.label, '\u2212' + money(Math.abs(l.amount)), { colour: '#4ADE80' })
+          : row(l.label, money(l.amount), { size: 12, indent: true, colour: '#6B7280' }),
+      )).join('')}
+      ${row(bal.label, bal.value, { bold: true, top: true, size: 15, colour: bal.paid ? '#4ADE80' : '#FCD34D' })}
     </table>
-  </div>`).join('')
+  </div>`
+    }).join('')
 
     const unassignedHtml = (!onlyLane && unassignedTotal !== 0) ? `
   <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
@@ -279,14 +301,15 @@ export async function POST(request: NextRequest) {
   </div>
   ${laneSectionsHtml}
   ${unassignedHtml}
+  ${onlyLane ? '' : `
   <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
     <table style="width:100%;border-collapse:collapse;">
       <tr>
-        <td style="padding:8px 0 4px;color:#ffffff;font-size:16px;font-weight:bold;">${laneGrandTotal < 0 ? 'Credit on account' : laneGrandTotal === 0 ? 'Balance' : 'Balance remaining'}</td>
-        <td style="padding:8px 0 4px;font-size:16px;font-weight:bold;text-align:right;color:${laneGrandTotal <= 0 ? '#4ADE80' : '#FCD34D'};">${laneGrandTotal === 0 ? '✓ Paid in full' : money(Math.abs(laneGrandTotal))}</td>
+        <td style="padding:8px 0 4px;color:#ffffff;font-size:16px;font-weight:bold;">${balanceLine(laneGrandTotal).label}</td>
+        <td style="padding:8px 0 4px;font-size:16px;font-weight:bold;text-align:right;color:${balanceLine(laneGrandTotal).paid ? '#4ADE80' : '#FCD34D'};">${balanceLine(laneGrandTotal).value}</td>
       </tr>
     </table>
-  </div>
+  </div>`}
   <div style="padding:24px;text-align:center;">
     <p style="color:#6B7280;font-size:12px;margin:0;">Thank you!</p>
     <p style="color:#6B7280;font-size:12px;margin:8px 0 0;">${campgroundName}</p>
@@ -305,11 +328,13 @@ ${'─'.repeat(40)}
 ${laneSections.map(sec => `
 ${sec.label.toUpperCase()}
 ${sec.items.map((i: any) => `  ${i.description}: ${money(i.line_total)}`).join('\n')}
-${sec.pays.map((p: any) => `  ${p.method} ${new Date(p.paid_at).toLocaleDateString()}: -${money(p.amount - (p.surcharge_amount || 0))}`).join('\n')}
-  Subtotal: ${sec.subtotal < 0 ? 'Credit ' : ''}${money(Math.abs(sec.subtotal))}`).join('\n')}
+${sec.pays.flatMap((p: any) => paymentLines(p).map(l =>
+  l.kind === 'payment' ? `  ${l.label}: -${money(Math.abs(l.amount))}` : `    ${l.label}: ${money(l.amount)}`,
+)).join('\n')}
+  ${balanceLine(sec.subtotal, onlyLane ? 'balance' : 'subtotal').label}: ${balanceLine(sec.subtotal, onlyLane ? 'balance' : 'subtotal').value}`).join('\n')}
 ${(!onlyLane && unassignedTotal !== 0) ? `\nACCOUNT CREDIT (applies to any of the above): -${money(unassignedTotal)}\n` : ''}
-${'─'.repeat(40)}
-${laneGrandTotal < 0 ? 'Credit on account: ' + money(Math.abs(laneGrandTotal)) : laneGrandTotal === 0 ? 'PAID IN FULL' : 'Balance remaining: ' + money(laneGrandTotal)}
+${onlyLane ? '' : `${'─'.repeat(40)}
+${balanceLine(laneGrandTotal).label}: ${balanceLine(laneGrandTotal).value}`}
 ${'─'.repeat(40)}
 Thank you!
 ${campgroundName}`
