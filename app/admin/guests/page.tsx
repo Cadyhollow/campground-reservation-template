@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
+import { guestFormFrom, guestPatchFrom } from '@/lib/guest-record'
 
 // Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
 // Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
@@ -48,6 +49,12 @@ export default function GuestsPage() {
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState(blank())
+  // Whether the guest being edited was ALREADY seasonal when the form opened — so "became
+  // seasonal" means the flag was just switched on, not merely that it is on.
+  const [wasSeasonal, setWasSeasonal] = useState(false)
+  // A camper just flagged seasonal, held so the banner can offer the enrolment their flag did
+  // not perform. THE TWO DOORS FINALLY DO THE SAME THING.
+  const [justFlagged, setJustFlagged] = useState<{ id: string; name: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState<{ added: number; updated: number } | null>(null)
@@ -89,15 +96,37 @@ export default function GuestsPage() {
   async function save() {
     if (!form.name.trim()) return
     setSaving(true)
+    // ONE CANONICAL RECORD. The personal fields go through the SAME builder the camper record
+    // page uses (lib/guest-record.ts), so the two screens cannot drift about what a phone number
+    // or a rig length looks like in the database — they are editing the same `guests` row.
+    // The flags below are this screen's own and are not part of that shared shape.
+    const patch = {
+      ...guestPatchFrom(guestFormFrom(form as unknown as Record<string, unknown>)),
+      name: form.name.trim(),
+      is_seasonal: form.is_seasonal,
+      is_monthly: form.is_monthly,
+      electric_billing_enabled: form.electric_billing_enabled,
+      season_start: form.season_start,
+      season_end: form.season_end,
+      notes: form.notes,
+      last_visit: form.last_visit,
+    }
+    // Newly seasonal? Remember who, so the banner below can offer to enrol them. Flagging alone
+    // has never enrolled anybody, which is exactly how campers went missing.
+    const becameSeasonal = form.is_seasonal && !(editingId && wasSeasonal)
+    let savedId = editingId
     if (editingId) {
-      await supabase.from('guests').update(form).eq('id', editingId)
+      await supabase.from('guests').update(patch).eq('id', editingId)
     } else {
-      await supabase.from('guests').insert(form)
+      const { data } = await supabase.from('guests').insert(patch).select('id').single()
+      savedId = data?.id ?? null
     }
     setSaving(false)
     setShowForm(false)
     setEditingId(null)
+    setWasSeasonal(false)
     setForm(blank())
+    if (becameSeasonal && savedId) setJustFlagged({ id: savedId, name: patch.name as string })
     fetchGuests()
   }
 
@@ -108,6 +137,7 @@ export default function GuestsPage() {
   }
 
   function openEdit(g: Guest) {
+    setWasSeasonal(!!g.is_seasonal)
     setForm({
       name: g.name,
       email: g.email,
@@ -227,6 +257,25 @@ export default function GuestsPage() {
           {syncResult.added > 0 && syncResult.updated > 0 && ','}
           {syncResult.updated > 0 && <strong> {syncResult.updated} guest{syncResult.updated !== 1 ? 's' : ''} updated</strong>}
           {syncResult.added === 0 && syncResult.updated === 0 && <strong> already up to date</strong>}
+        </div>
+      )}
+
+      {/* THE SECOND DOOR. Flagging somebody seasonal here has never enrolled them in a season, so
+          they held no contract and appeared on no season's Contracts list — the camper who
+          vanished. The flag cannot enrol on its own (which season? this park may run two), so it
+          asks, once, right here. */}
+      {justFlagged && (
+        <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '12px 14px', marginBottom: 14, fontSize: 14, color: '#1e3a8a' }}>
+          <strong>{justFlagged.name} is now a seasonal camper.</strong> Being flagged seasonal does
+          not put them in a season — until they are added, they will not appear on the Contracts
+          list.{' '}
+          <a href={`/admin/seasonals/${justFlagged.id}`} style={{ fontWeight: 700, textDecoration: 'underline', color: '#1d4ed8' }}>
+            Open their record to add them →
+          </a>
+          <button onClick={() => setJustFlagged(null)}
+            style={{ marginLeft: 10, background: 'none', border: 'none', color: '#1e3a8a', cursor: 'pointer', fontSize: 13, textDecoration: 'underline' }}>
+            Dismiss
+          </button>
         </div>
       )}
 

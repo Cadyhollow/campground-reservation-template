@@ -61,6 +61,10 @@ const navGroups: NavGroup[] = [
     icon: '👥',
     items: [
       { name: 'Guest Folios', href: '/admin/folios', icon: '🗂️', minPlan: 'summit' as const },
+      // Two seasonal doors on purpose: Campers is the PEOPLE (everyone, in or out of a season),
+      // Seasonals is this season's PAPERWORK. A camper missing from the second is exactly what
+      // the first exists to show, so they are listed as peers rather than one nested in the other.
+      { name: 'Campers', href: '/admin/seasonals/campers', icon: '🧑\u200d🤝\u200d🧑', minPlan: 'summit' as const },
       { name: 'Seasonals', href: '/admin/seasonals', icon: '⛺', minPlan: 'summit' as const },
       { name: 'Guest Directory', href: '/admin/guests', icon: '📇' },
       { name: 'Send Email', href: '/admin/send-email', icon: '📣', minPlan: 'ridgeline' as const },
@@ -103,6 +107,26 @@ const navGroups: NavGroup[] = [
   },
 ]
 
+// WHICH NAV ITEM IS "HERE" — longest match wins, the same rule roleForPath uses.
+//
+// The old test was a bare `pathname.startsWith(item.href)`, which lights up EVERY item whose href
+// is a prefix of the current path. With Campers living at /admin/seasonals/campers that meant
+// Campers and Seasonals were both highlighted at once, and the reader cannot tell which page they
+// are on. Boundary-matching alone does not fix it (the campers path really is under the seasonals
+// one), so the most specific matching href wins and the others go quiet.
+const ALL_NAV_HREFS = navGroups.flatMap(g => g.items.map(i => i.href))
+
+function activeNavHref(pathname: string): string | null {
+  let best: string | null = null
+  for (const href of ALL_NAV_HREFS) {
+    const matches = href === '/admin'
+      ? pathname === '/admin'
+      : pathname === href || pathname.startsWith(href + '/')
+    if (matches && (best === null || href.length > best.length)) best = href
+  }
+  return best
+}
+
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -122,7 +146,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const getActiveGroup = () => {
     for (const group of navGroups) {
       if (group.items.some(item =>
-        item.href === pathname || (item.href !== '/admin' && pathname.startsWith(item.href))
+        item.href === activeNavHref(pathname)
       )) {
         return group.label
       }
@@ -240,7 +264,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   function isGroupActive(group: NavGroup) {
     return group.items.some(item =>
-      item.href === pathname || (item.href !== '/admin' && pathname.startsWith(item.href))
+      item.href === activeNavHref(pathname)
     )
   }
 
@@ -305,7 +329,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               {open && (
                 <div className="mt-0.5 space-y-0.5 pb-1">
                   {group.items.map((item) => {
-                    const itemActive = item.href === pathname || (item.href !== '/admin' && pathname.startsWith(item.href))
+                    const itemActive = item.href === activeNavHref(pathname)
                     return (
                       <Link key={item.name} href={item.href} onClick={() => setSidebarOpen(false)}
                         className="flex items-center px-4 ml-2 rounded-xl text-sm transition-all duration-150"
