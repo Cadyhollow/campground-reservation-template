@@ -72,6 +72,9 @@ type ContractLike = {
   total_due_cents?: number | null
   /** Phase 3 — DISPLAY ONLY, like total_due_cents. Prints; nothing is charged from it. */
   deposit_due_cents?: number | null
+  /** Phase 2b PR 2b — DISPLAY ONLY, like the two above. An optional list of instalments that
+   *  PRINTS on the agreement; nothing is charged from it. See lib/payment-schedule.ts. */
+  payment_schedule?: unknown
   total_due_by?: string | null
   deposit_due_by?: string | null
   charge_note?: string | null
@@ -121,6 +124,44 @@ const pick = (...vals: Array<string | null | undefined>): string =>
 
 /** Assemble the merge-field vars for a contract. Prefers the contract's own
  *  snapshot fields (frozen at send) and falls back to the live guest record. */
+/** One instalment as stored on the contract. Mirrored in lib/payment-schedule.ts. */
+export type ScheduleRow = {
+  label?: string | null
+  amount_cents?: number | null
+  due_by?: string | null
+}
+
+/**
+ * The block that prints on the agreement.
+ *
+ * Returns '' for an empty or missing schedule, which is what keeps every existing contract
+ * byte-identical: renderTemplate substitutes '' and the paragraph simply is not there.
+ *
+ * A row prints what it knows and nothing more — no "$0.00" standing in for an amount nobody
+ * stated, no "Invalid Date" for a date nobody chose.
+ */
+/** True when the contract body places the block itself, so it must not also be appended. */
+export const bodyPlacesSchedule = (body: string | null | undefined): boolean =>
+  (body || '').includes('{{payment_schedule}}')
+
+export function renderSchedule(stored: unknown): string {
+  if (!Array.isArray(stored) || stored.length === 0) return ''
+  const lines = stored.map(r => {
+    const row = (r ?? {}) as ScheduleRow
+    const label = (row.label ?? '').toString().trim()
+    const amount = row.amount_cents == null ? '' : formatCents(row.amount_cents)
+    const due = formatContractDate(row.due_by)
+    const parts: string[] = []
+    if (label) parts.push(label)
+    if (amount) parts.push(amount)
+    if (due) parts.push(`due by ${due}`)
+    return parts.length ? `  ${parts.join(' · ')}` : ''
+  }).filter(Boolean)
+  if (lines.length === 0) return ''
+  return `Payment Schedule\n${lines.join('\n')}`
+}
+
+
 export function buildContractVars(guest: GuestLike, contract: ContractLike, settings?: SettingsLike): ContractVars {
   const party_names = (contract.occupants || [])
     .map(o => (o?.name || '').trim())
@@ -164,6 +205,9 @@ export function buildContractVars(guest: GuestLike, contract: ContractLike, sett
     // stated deposit of nothing). A contract must not claim the second when the park meant the
     // first, which is why the columns are nullable with no default.
     deposit_due: formatCents(contract.deposit_due_cents),
+    // The instalment block. '' for an empty or absent schedule, which is what keeps every
+    // existing contract byte-identical — renderTemplate substitutes '' and nothing prints.
+    payment_schedule: renderSchedule(contract.payment_schedule),
     total_due_by: formatContractDate(contract.total_due_by),
     deposit_due_by: formatContractDate(contract.deposit_due_by),
     // The owner's CUSTOMER-FACING explanation of the total ("includes 2 extra family members,
@@ -278,9 +322,29 @@ export function renderPacketDocuments(
     season_closes: dates.closes,
     season_name: season?.name ?? contract.season_name ?? null,
   }, undefined)
+  // ⚠ THE SCHEDULE MUST NOT SILENTLY FAIL TO PRINT.
+  //
+  // {{payment_schedule}} is a normal merge token, so an owner places it wherever they want in the
+  // body. But every park's contract body was written BEFORE this token existed, so none of them
+  // contain it — and an owner who fills in three instalments and sends the packet would get an
+  // agreement with no schedule on it and no indication why. Typed data that quietly does not
+  // appear is the worst kind of bug on a document somebody signs.
+  //
+  // So: if the contract HAS a schedule and the body does NOT place the token, the block is
+  // appended. Placement stays under the owner's control the moment they add the token.
+  //
+  // A contract with NO schedule appends nothing, so every existing agreement renders byte for
+  // byte as it does today.
+  const body = settings?.contract_text || ''
+  const scheduleBlock = renderSchedule(contract.payment_schedule)
+  const rendered = renderTemplate(body, vars)
+  const contractText = scheduleBlock && !bodyPlacesSchedule(body)
+    ? `${rendered}\n\n${scheduleBlock}`
+    : rendered
+
   return {
     contractTitle: `${contract.season_year ?? ''} Seasonal Admission Agreement`,
-    contractText: renderTemplate(settings?.contract_text || '', vars),
+    contractText,
     waiverText: settings?.waiver_text || '',
   }
 }
