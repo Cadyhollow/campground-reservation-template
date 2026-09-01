@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   computeMeterUsage, computeElectricCharge, computeElectricBill,
   rateFromSettings, LEGACY_RATE_PER_KWH, LEGACY_MINIMUM_CHARGE_CENTS,
-  planElectricPost, postSkipLabel,
+  planElectricPost, postSkipLabel, allTimeBilled,
   type ElectricRate, type MeterUsage,
 } from './electric-billing.ts'
 
@@ -238,4 +238,49 @@ test('every skip reason has a plain-English label', () => {
   for (const r of ['already-posted', 'no-amount', 'skipped-by-owner'] as const) {
     assert.ok(postSkipLabel(r).length > 0, r)
   }
+})
+
+
+// ── The all-time billed total, in the camper's billing history ───────────────────────────────
+//
+// This row was dropped once by a redesign of the billing page. These tests are here so that it
+// cannot happen quietly a second time, and so the void rule stays pinned.
+
+test('the all-time total is what the camper has been billed', () => {
+  assert.equal(allTimeBilled([
+    { final_amount: 1500 },
+    { final_amount: 1728 },
+    { final_amount: 1500 },
+  ]), 4728)
+})
+
+test('⚠ A VOIDED BILL IS NOT MONEY THE CAMPER WAS CHARGED', () => {
+  // Voiding takes the charge off their balance. Counting it here would tell the owner a camper
+  // owed money they do not, on the one line of that table meant to be the plain truth.
+  assert.equal(allTimeBilled([
+    { final_amount: 1500 },
+    { final_amount: 11998, voided: true },
+    { final_amount: 1728 },
+  ]), 3228)
+})
+
+test('voided:false and a missing flag both count — only an explicit void is excluded', () => {
+  assert.equal(allTimeBilled([
+    { final_amount: 1000, voided: false },
+    { final_amount: 2000 },
+    { final_amount: 4000, voided: null },
+  ]), 7000)
+})
+
+test('a camper with no history totals zero, not NaN', () => {
+  assert.equal(allTimeBilled([]), 0)
+  assert.equal(allTimeBilled(null), 0)
+  assert.equal(allTimeBilled(undefined), 0)
+})
+
+test('every bill voided reads as zero rather than as the pre-void figure', () => {
+  assert.equal(allTimeBilled([
+    { final_amount: 11998, voided: true },
+    { final_amount: 3197, voided: true },
+  ]), 0)
 })

@@ -232,3 +232,23 @@ export function postSkipLabel(reason: 'already-posted' | 'no-amount' | 'skipped-
     case 'skipped-by-owner': return 'Skipped.'
   }
 }
+
+/**
+ * What a camper has actually been billed for electric, all time.
+ *
+ * ⚠ THIS EXISTS AS A FUNCTION BECAUSE THE INLINE VERSION WAS SILENTLY DELETED ONCE. It sat in
+ * the billing-history table as a bare expression, and a redesign of that page dropped the row
+ * without anyone noticing — there was nothing to fail. A named function with a test around it
+ * cannot go the same way.
+ *
+ * ⚠ VOIDED BILLS DO NOT COUNT. A voided bill has been taken off the camper's balance, so
+ * including it would tell the owner a camper has been charged money they no longer owe. This is
+ * the one line the caller must not get wrong, which is the other reason it lives here.
+ */
+export function allTimeBilled(
+  readings: { final_amount: number; voided?: boolean | null }[] | null | undefined,
+): number {
+  return (readings || [])
+    .filter(r => r.voided !== true)
+    .reduce((sum, r) => sum + (r.final_amount || 0), 0)
+}
