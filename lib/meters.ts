@@ -171,18 +171,31 @@ export function billableLabel(reason: BillableReason): string {
   }
 }
 
-/** Meters in the order the park is walked: site number ascending, numerically where it can be. */
+/**
+ * Meters in the order the park is walked: SITE NUMBER ASCENDING, numerically.
+ *
+ * ⚠ `sites.display_order` IS DELIBERATELY NOT USED, and this was a bug before it was a decision.
+ * An earlier version sorted by display_order first, on the theory that a park's own arrangement
+ * of its sites should win. It does not survive contact with real data: the column DEFAULTS TO 0
+ * and parks populate it partially or not at all. On the test tenant, sites 10-14 sat at 0 while
+ * 1-6 had 1-6, so the walk opened on meter 10 and ran 10, 11, 12, 13, 14, 1, 2, 3 — which is
+ * exactly the kind of order that makes somebody walk the park twice.
+ *
+ * Numeric site order is what was decided, it is what the numbers on the posts say, and it cannot
+ * be broken by a column nobody has filled in. A park whose physical walking route genuinely
+ * differs from its numbering would need a route of its own, deliberately entered — not a default
+ * of 0 quietly deciding it.
+ *
+ * A named meter ("Bathhouse") sorts AFTER the numbered ones, alphabetically, so the site walk is
+ * never interrupted by the odds and ends. And numerically, so it is 1, 2, 3, 10 — not 1, 10, 2.
+ */
 export function meterWalkOrder(meters: Meter[]): Meter[] {
   return [...meters].sort((a, b) => {
-    const ao = a.display_order ?? 0, bo = b.display_order ?? 0
-    if (ao !== bo) return ao - bo
     const an = parseInt(a.meter_number, 10), bn = parseInt(b.meter_number, 10)
     const aNum = Number.isFinite(an), bNum = Number.isFinite(bn)
-    // A numbered meter sorts numerically; a named one ("Bathhouse") sorts after, alphabetically,
-    // so the walk is 1,2,…,79 and then the odds and ends rather than 1,10,11,2.
     if (aNum && bNum && an !== bn) return an - bn
     if (aNum !== bNum) return aNum ? -1 : 1
-    return String(a.meter_number).localeCompare(String(b.meter_number))
+    return String(a.meter_number).localeCompare(String(b.meter_number), undefined, { numeric: true })
   })
 }
 

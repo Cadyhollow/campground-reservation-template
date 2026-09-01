@@ -138,11 +138,20 @@ test('named meters come after the numbered ones, so the site walk is not interru
   assert.deepEqual(order, ['1', '2', 'Bathhouse', 'Shop'])
 })
 
-test("a park's own display_order wins over the number", () => {
+test('⚠ display_order CANNOT reorder the walk — it defaults to 0 and parks half-fill it', () => {
+  // The regression this pins. On the test tenant sites 10-14 sat at display_order 0 while 1-6
+  // had 1-6, and an earlier version that honoured the column opened the walk on meter 10 and ran
+  // 10, 11, 12, 13, 14, 1, 2, 3 — the order that makes somebody walk the park twice.
   const order = meterWalkOrder([
-    m('1', { display_order: 2 }), m('2', { display_order: 1 }),
+    m('10', { display_order: 0 }), m('11', { display_order: 0 }),
+    m('1', { display_order: 1 }), m('2', { display_order: 2 }),
   ]).map(x => x.meter_number)
-  assert.deepEqual(order, ['2', '1'])
+  assert.deepEqual(order, ['1', '2', '10', '11'])
+})
+
+test('a meter number with a letter still sorts sensibly among its neighbours', () => {
+  const order = meterWalkOrder([m('A2'), m('2'), m('A10'), m('1')]).map(x => x.meter_number)
+  assert.deepEqual(order, ['1', '2', 'A2', 'A10'])
 })
 
 // ── READINGS -> DRAFT BILLS ──────────────────────────────────────────────────────────────────

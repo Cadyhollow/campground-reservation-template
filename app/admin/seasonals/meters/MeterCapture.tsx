@@ -132,7 +132,12 @@ export default function MeterCapture({
   }
 
   function press(key: string) {
-    if (!current) return
+    // ⚠ THE PAD IS DEAD WHILE A SAVE IS IN FLIGHT, and this was found on a real slow save rather
+    // than reasoned about. A save posts the reading AND re-derives the walk's draft bills, so on a
+    // poor signal in a field it can take seconds. Without this guard, digits tapped for the NEXT
+    // meter land on the CURRENT one: the screen showed "1300800" for a meter that had saved 1300,
+    // and the reader had no way to know which number went to the database.
+    if (!current || saving) return
     setError('')
     setEntry(current.meter.id, { value: nextValue(entry.value, key) }, entry)
   }
@@ -277,29 +282,6 @@ export default function MeterCapture({
           </div>
         </div>
 
-        {/* The live usage preview — the thing that catches a mistyped digit while still at the
-            meter. Only for a meter that bills; a record-only meter says so instead. */}
-        <div style={{ marginTop: 10, textAlign: 'center', minHeight: 44 }}>
-          {current.billable && preview ? (
-            <div style={{ background: 'var(--watch-bg)', border: '1px solid var(--watch)', borderRadius: 10, padding: '8px 12px' }}>
-              <span className="tnum" style={{ fontSize: 17, fontWeight: 700, color: 'var(--ink)' }}>{fmtNum(preview.kwh)} kWh</span>
-              <span style={{ color: 'var(--muted)', margin: '0 7px' }}>·</span>
-              <span className="tnum" style={{ fontSize: 17, fontWeight: 700, color: 'var(--watch)' }}>≈ {fmtMoney(preview.amount)}</span>
-              {current.camper && (current.camper.site_number || '').includes(',') ? (
-                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>
-                  This meter alone — {current.camper.name} has more than one, and the bill sums them.
-                </div>
-              ) : null}
-            </div>
-          ) : current.billable ? (
-            <div style={{ fontSize: 13, color: 'var(--muted)' }}>Enter the reading to see usage.</div>
-          ) : (
-            <div style={{ background: 'var(--card-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '8px 12px', fontSize: 13, color: 'var(--muted)' }}>
-              Record only · kept in history
-            </div>
-          )}
-        </div>
-
         {/* Meter replacement. Folded away, because it is rare and its controls must not compete
             with the number pad — but reachable in one tap when a meter has actually been swapped. */}
         <div style={{ marginTop: 12 }}>
@@ -349,15 +331,46 @@ export default function MeterCapture({
 
       {/* ── The pad, pinned to the bottom where a thumb is ── */}
       <div style={{ flexShrink: 0, borderTop: '1px solid var(--line)', background: 'var(--card)', padding: '8px 8px calc(8px + env(safe-area-inset-bottom))' }}>
+        {/* ── THE LIVE USAGE PREVIEW, PINNED ─────────────────────────────────────────────────
+            ⚠ THIS SITS IN THE FIXED FOOTER, NOT IN THE SCROLLING AREA ABOVE, and that placement
+            is the whole point of it. It is the figure that says "you typed a digit wrong" while
+            the reader is still standing at the meter. In the scrolling region it was pushed under
+            the pad on a short viewport and had to be scrolled to — which is the same as not being
+            there, because nobody scrolls to check a number they think they typed correctly.
+            Here it is directly above the keys, in view on every screen size. */}
+        <div style={{ minHeight: 40, marginBottom: 7, textAlign: 'center' }}>
+          {current.billable && preview ? (
+            <div style={{ background: 'var(--watch-bg)', border: '1px solid var(--watch)', borderRadius: 10, padding: '7px 12px' }}>
+              <span className="tnum" style={{ fontSize: 17, fontWeight: 700, color: 'var(--ink)' }}>{fmtNum(preview.kwh)} kWh</span>
+              <span style={{ color: 'var(--muted)', margin: '0 7px' }}>·</span>
+              <span className="tnum" style={{ fontSize: 17, fontWeight: 700, color: 'var(--watch)' }}>{'\u2248'} {fmtMoney(preview.amount)}</span>
+              {current.camper && (current.camper.site_number || '').includes(',') ? (
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, lineHeight: 1.35 }}>
+                  This meter alone — {current.camper.name} has more than one, and the bill sums them.
+                </div>
+              ) : null}
+            </div>
+          ) : current.billable ? (
+            <div style={{ fontSize: 13, color: 'var(--muted)', paddingTop: 10 }}>Enter the reading to see usage.</div>
+          ) : (
+            <div style={{ background: 'var(--card-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '7px 12px', fontSize: 13, color: 'var(--muted)' }}>
+              Record only · kept in history
+            </div>
+          )}
+        </div>
+
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7 }}>
           {['1','2','3','4','5','6','7','8','9','.','0','del'].map(k => (
-            <button key={k} type="button" onClick={() => press(k)}
+            <button key={k} type="button" onClick={() => press(k)} disabled={saving}
               aria-label={k === 'del' ? 'Delete last digit' : k}
               style={{
                 minHeight: 60, borderRadius: 12, border: '1px solid var(--line-strong)',
                 background: k === 'del' ? 'var(--card-2)' : 'var(--card)', color: 'var(--ink)',
-                fontSize: 24, fontWeight: 600, cursor: 'pointer', touchAction: 'manipulation',
-                fontVariantNumeric: 'tabular-nums',
+                fontSize: 24, fontWeight: 600, cursor: saving ? 'default' : 'pointer',
+                touchAction: 'manipulation', fontVariantNumeric: 'tabular-nums',
+                // Dimmed rather than merely inert, so a pad that ignores a tap looks busy
+                // rather than broken.
+                opacity: saving ? 0.45 : 1,
               }}>
               {k === 'del' ? '⌫' : k}
             </button>

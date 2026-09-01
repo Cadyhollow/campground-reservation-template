@@ -365,8 +365,12 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.meter_readings TO authenticated;
 -- that adds site 80 next year runs the same statement from the Meters screen's "Sync from sites"
 -- and gets exactly one new meter.
 --
--- `display_order` copies the site's, so the walk follows the order the park already arranges its
--- sites in rather than an order this migration invents.
+-- ⚠ `display_order` IS COPIED BUT DOES NOT DECIDE THE WALK ORDER. The walk runs in numeric site
+-- order — see meterWalkOrder() in lib/meters.ts for why. The column DEFAULTS TO 0 on sites and
+-- parks populate it partially: on the test tenant, sites 10-14 sat at 0 while 1-6 had 1-6, and an
+-- earlier build that honoured it opened the walk on meter 10 and ran 10, 11, 12, 13, 14, 1, 2, 3.
+-- It is carried here so a future, deliberately-entered walking route has somewhere to live, not
+-- because anything reads it today.
 --
 -- Sites with a blank site_number are skipped: a meter must have a number to be identified by, and
 -- there is nothing to call it.

@@ -49,6 +49,7 @@ export default function MetersHubPage() {
   const [activeMeters, setActiveMeters] = useState(0)
   const [meters, setMeters] = useState<MeterRow[]>([])
   const [conflicts, setConflicts] = useState<{ siteNumber: string; campers: { id: string; name: string }[] }[]>([])
+  const [remaining, setRemaining] = useState<Record<string, string[]>>({})
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [tab, setTab] = useState<'walks' | 'registry'>('walks')
@@ -68,6 +69,8 @@ export default function MetersHubPage() {
   type Loaded = {
     sessions: Session[]; activeMeters: number
     meters: MeterRow[]; conflicts: { siteNumber: string; campers: { id: string; name: string }[] }[]
+    /** Session id -> the meter numbers still unread on it. See the note at the fetch below. */
+    remaining: Record<string, string[]>
     error: string
   }
 
@@ -76,23 +79,41 @@ export default function MetersHubPage() {
       const [sRes, mRes] = await Promise.all([fetch('/api/meter-sessions'), fetch('/api/meters')])
       const [sData, mData] = await Promise.all([sRes.json(), mRes.json()])
       if (!sRes.ok) {
-        return { sessions: [], activeMeters: 0, meters: [], conflicts: [], error: sData.error || 'Could not load the walks.' }
+        return { sessions: [], activeMeters: 0, meters: [], conflicts: [], remaining: {}, error: sData.error || 'Could not load the walks.' }
       }
+      // WHICH METERS REMAIN, not just how many. "67 left" sends somebody back out to walk the
+      // whole park again; "sites 14, 15, 22 and 41 left" sends them to four posts. Only for walks
+      // still in progress — a finished one has nothing to go and find — so this is normally one
+      // extra request, and none at all once the month is done.
+      const open = (sData.sessions || []).filter((x: Session) => x.status === 'in_progress').slice(0, 3)
+      const remaining: Record<string, string[]> = {}
+      await Promise.all(open.map(async (x: Session) => {
+        try {
+          const r = await fetch(`/api/meter-sessions/${x.id}`)
+          if (!r.ok) return
+          const d = await r.json()
+          remaining[x.id] = (d.meters || [])
+            .filter((m: MeterRow & { reading: unknown }) => m.reading === null)
+            .map((m: MeterRow) => m.meter.meter_number)
+        } catch { /* a failed detail fetch just means no list; the counts still show */ }
+      }))
+
       return {
         sessions: sData.sessions || [],
         activeMeters: sData.activeMeters || 0,
         meters: mRes.ok ? (mData.meters || []) : [],
         conflicts: mRes.ok ? (mData.conflicts || []) : [],
+        remaining,
         error: '',
       }
     } catch {
-      return { sessions: [], activeMeters: 0, meters: [], conflicts: [], error: 'Could not reach the server.' }
+      return { sessions: [], activeMeters: 0, meters: [], conflicts: [], remaining: {}, error: 'Could not reach the server.' }
     }
   }, [])
 
   const apply = useCallback((d: Loaded) => {
     setSessions(d.sessions); setActiveMeters(d.activeMeters)
-    setMeters(d.meters); setConflicts(d.conflicts)
+    setMeters(d.meters); setConflicts(d.conflicts); setRemaining(d.remaining)
     setErr(d.error); setLoading(false)
   }, [])
 
@@ -204,6 +225,19 @@ export default function MetersHubPage() {
                       Bills to {s.billing_month} · read {fmtDate(s.read_date)} ·{' '}
                       <span className="tnum">{s.readings_taken} / {activeMeters}</span> done
                     </div>
+                    {remaining[s.id]?.length ? (
+                      <div style={{ fontSize: 12, color: 'var(--ink-soft)', marginTop: 4, maxWidth: 460, lineHeight: 1.5 }}>
+                        <strong style={{ color: 'var(--watch)' }}>Still to read:</strong>{' '}
+                        <span className="tnum">
+                          {remaining[s.id].slice(0, 14).join(', ')}
+                          {remaining[s.id].length > 14 ? ` and ${remaining[s.id].length - 14} more` : ''}
+                        </span>
+                      </div>
+                    ) : remaining[s.id] ? (
+                      <div style={{ fontSize: 12, color: 'var(--good)', fontWeight: 600, marginTop: 4 }}>
+                        Every meter has been read — mark it done to finish.
+                      </div>
+                    ) : null}
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <a href={`/admin/seasonals/meters/walk/${s.id}`} style={primaryLink}>Continue walking</a>

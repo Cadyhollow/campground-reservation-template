@@ -799,12 +799,17 @@ export default function ElectricBillingPage() {
                         <div>
                           <div style={{ fontWeight: 600, fontSize: 13, color: row.skip ? '#9ca3af' : '#111827' }}>
                             {row.guest.name}
-                            {row.draftId && !row.sent ? (
-                              <span style={{ marginLeft: 6, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 999, padding: '1px 7px', fontSize: 10, fontWeight: 700, verticalAlign: 'middle' }}>
+                          </div>
+                          {/* On its own line and non-wrapping: as an inline badge after the name it
+                              broke mid-phrase ("DRAFT ·" / "not charged"), and half a warning that
+                              nothing has been charged is worse than none. */}
+                          {row.draftId && !row.sent ? (
+                            <div style={{ marginTop: 3 }}>
+                              <span style={{ display: 'inline-block', whiteSpace: 'nowrap', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 999, padding: '1px 7px', fontSize: 10, fontWeight: 700 }}>
                                 DRAFT · not charged
                               </span>
-                            ) : null}
-                          </div>
+                            </div>
+                          ) : null}
                           <div style={{ fontSize: 11, color: '#9ca3af' }}>{row.guest.email || 'No email'}</div>
                         </div>
                         <div style={{ fontSize: 13, fontWeight: 600, color: '#6b7280' }}>{row.guest.site_number}</div>
