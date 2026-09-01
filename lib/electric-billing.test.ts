@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   computeMeterUsage, computeElectricCharge, computeElectricBill,
   rateFromSettings, LEGACY_RATE_PER_KWH, LEGACY_MINIMUM_CHARGE_CENTS,
+  planElectricPost, postSkipLabel,
   type ElectricRate, type MeterUsage,
 } from './electric-billing.ts'
 
@@ -162,4 +163,79 @@ test('a rate of ZERO is honoured — a park that bills nothing per kWh is not "u
 
 test('numeric columns arriving as strings from PostgREST are parsed, not dropped', () => {
   assert.equal(rateFromSettings({ electric_rate_per_kwh: '0.135' }).ratePerKwh, 0.135)
+})
+
+
+// ── POSTING CONSUMES ITS DRAFT ───────────────────────────────────────────────────────────────
+//
+// ⚠ FROM A LIVE INCIDENT. A park posted 49 correct September bills and was left with 47 orphaned
+// DRAFT rows for the same month — every one of them still postable. No money had moved (a draft
+// carries no folio line item), but reopening the month and pressing Send All would have billed
+// those campers a second time, some from readings the owner had corrected at posting.
+//
+// Two causes: the post path copied instead of consuming, and the cleanup that should have removed
+// the draft was a DELETE whose result nobody checked, against a table the browser role holds no
+// DELETE privilege on. PostgREST returned success having deleted nothing, for an entire run.
+
+test('posting CONSUMES the draft — it names the row to promote, never a copy', () => {
+  const plan = planElectricPost({
+    alreadyPostedThisMonth: false, draftId: 'draft-abc', finalAmountCents: 1500,
+  })
+  assert.deepEqual(plan, { action: 'post', consumesDraftId: 'draft-abc' })
+})
+
+test('⚠ A SECOND POST OF THE SAME MONTH IS A NO-OP — this is the double-bill guard', () => {
+  const plan = planElectricPost({
+    alreadyPostedThisMonth: true, draftId: 'orphan-xyz', finalAmountCents: 1500,
+  })
+  assert.deepEqual(plan, { action: 'skip', reason: 'already-posted' })
+  assert.match(postSkipLabel('already-posted'), /already billed/i)
+})
+
+test('a leftover orphan cannot bill, however tempting its amount', () => {
+  // The exact shape of the incident: a draft still sitting there after the real bill posted.
+  for (const cents of [1500, 18387, 156681]) {
+    assert.equal(
+      planElectricPost({ alreadyPostedThisMonth: true, draftId: 'orphan', finalAmountCents: cents }).action,
+      'skip')
+  }
+})
+
+test('a bill typed in by hand still posts — it just consumes no draft', () => {
+  // The pre-existing path: no meter walk, so no draft to promote. An insert, as before.
+  assert.deepEqual(
+    planElectricPost({ alreadyPostedThisMonth: false, draftId: null, finalAmountCents: 4200 }),
+    { action: 'post', consumesDraftId: null })
+  assert.deepEqual(
+    planElectricPost({ alreadyPostedThisMonth: false, finalAmountCents: 4200 }),
+    { action: 'post', consumesDraftId: null })
+})
+
+test('Skip and a zero amount are still honoured, and are distinguishable', () => {
+  assert.deepEqual(
+    planElectricPost({ alreadyPostedThisMonth: false, skipped: true, finalAmountCents: 1500 }),
+    { action: 'skip', reason: 'skipped-by-owner' })
+  assert.deepEqual(
+    planElectricPost({ alreadyPostedThisMonth: false, finalAmountCents: 0 }),
+    { action: 'skip', reason: 'no-amount' })
+})
+
+test('⚠ "already billed" is reported ahead of "no amount" — the more useful sentence wins', () => {
+  // A camper already billed AND showing no amount is the orphan case. Telling somebody "enter
+  // meter readings first" there would send them to type a reading for a bill already sent.
+  assert.deepEqual(
+    planElectricPost({ alreadyPostedThisMonth: true, finalAmountCents: 0 }),
+    { action: 'skip', reason: 'already-posted' })
+})
+
+test('the owner pressing Skip beats everything, including an unbilled month', () => {
+  assert.equal(
+    planElectricPost({ alreadyPostedThisMonth: false, skipped: true, draftId: 'd', finalAmountCents: 9999 }).reason,
+    'skipped-by-owner')
+})
+
+test('every skip reason has a plain-English label', () => {
+  for (const r of ['already-posted', 'no-amount', 'skipped-by-owner'] as const) {
+    assert.ok(postSkipLabel(r).length > 0, r)
+  }
 })
