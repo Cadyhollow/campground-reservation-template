@@ -190,6 +190,22 @@ const GATED: [string, string, string][] = [
   ['POST',  '/api/seasonal-contracts/00000000-0000-0000-0000-000000000000/resend', 'manager'],
   ['POST',  '/api/seasonal-contracts/00000000-0000-0000-0000-000000000000/send', 'manager'],
   ['POST',  '/api/seasonal-contracts/00000000-0000-0000-0000-000000000000/sign-now', 'manager'],
+  // The mobile meter walk. Reading meters and saving readings is STAFF — this is the first
+  // entry point in this codebase where recording a reading does NOT also issue a charge, which
+  // is the split lib/admin-pages.ts records as a follow-up. Changing the REGISTRY is owner: the
+  // active flag and the billable override decide who gets billed, so they sit with Sites.
+  //
+  // ⚠ The SCREEN is stricter than the table. app/admin/seasonals/** resolves to Manager, and the
+  // walk lives under it, so no staff member reaches it today. These are the route's own gates.
+  ['GET',   '/api/meters', 'staff'],
+  ['PATCH', '/api/meters', 'owner'],
+  ['POST',  '/api/meters', 'owner'],
+  ['GET',   '/api/meter-sessions', 'staff'],
+  ['POST',  '/api/meter-sessions', 'staff'],
+  ['PATCH', '/api/meter-sessions', 'staff'],
+  ['GET',   '/api/meter-sessions/00000000-0000-0000-0000-000000000000', 'staff'],
+  ['POST',  '/api/meter-readings', 'staff'],
+
   ['POST', '/api/receipt', 'staff'],
   ['POST', '/api/send-waiver', 'staff'],
   ['POST', '/api/sync-guests', 'staff'],

@@ -188,6 +188,12 @@ export default function SeasonalsPage() {
             style={{ background: 'var(--forest)' }}>
             + New Seasonal Camper
           </Link>
+          {/* The meter walk's second entry point. Deliberately not a new permanent sidebar item —
+              PR 4's Seasonal Dashboard hub is where this belongs. */}
+          <Link href="/admin/seasonals/meters"
+            className="px-3 py-2 text-xs font-bold rounded-lg border border-line-strong text-ink">
+            📱 Read electric meters
+          </Link>
           <SeasonPicker seasons={seasons} value={seasonId} onChange={setSeasonId} disabled={!seasonsLoaded} />
           <button onClick={() => setUnsignedOnly(v => !v)}
             className="px-3 py-2 text-xs font-medium rounded-lg border"
