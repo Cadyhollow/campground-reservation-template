@@ -3,8 +3,15 @@ import { svc } from '@/lib/contract-server'
 import { rateFromSettings, type ElectricRate } from '@/lib/electric-billing'
 import {
   campersBySite, camperForMeter, resolveBillable, meterWalkOrder, billableLabel, buildDraftBills,
+  meterSiteKey,
   type Meter, type MeterCamper, type BillableReason,
 } from '@/lib/meters'
+import { splitSiteNumbers } from '@/lib/occupancy-report'
+
+/** Meters that have no prior reading of their own — the ones needing a recovered baseline. */
+function out0Meters(meters: Meter[], priorByMeter: Map<string, unknown>): Meter[] {
+  return meters.filter(m => !priorByMeter.has(m.id))
+}
 
 // The server half of the meter walk. Everything that touches the database lives here so the
 // routes stay thin and the pure logic in lib/meters.ts stays testable without one.
@@ -25,6 +32,14 @@ export type MeterWithContext = {
   /** The last reading BEFORE this session — what the walk carries forward from. */
   previousValue: number | null
   previousReadAt: string | null
+  /** Where `previousValue` came from. 'meter' = a real prior meter reading; 'bill' = recovered
+   *  from the camper's last posted electric bill because the meter has none yet; 'none' = there
+   *  is genuinely no prior reading and usage will be measured from this walk onward. */
+  previousSource: 'meter' | 'bill' | 'none'
+  /** True when this meter shares its billing history with another meter (a camper on two sites
+   *  whose bills carry ONE reading pair). A per-meter baseline cannot be recovered from that —
+   *  see the note in loadMeterContext(). */
+  sharedHistory: boolean
   /** This session's reading, when one has already been taken. */
   reading: {
     id: string; reading_value: number; previous_value: number | null; read_at: string
@@ -118,6 +133,59 @@ export async function loadMeterContext(sessionId: string | null): Promise<{
     if (!priorByMeter.has(mid)) priorByMeter.set(mid, r)
   }
 
+  // ── ⚠ THE CARRY-FORWARD FALLBACK — THIS IS THE FIX FOR A REAL BILLING BUG ─────────────────
+  //
+  // The registry is seeded from `sites`, which carries no readings. So on a park's FIRST walk
+  // every meter had no prior `meter_readings` row, `previousValue` came back null, and the draft
+  // builder's `?? 0` turned that into "the meter read zero last month". A camper whose meter
+  // reads 5803 was billed for 5,803 kWh instead of the 43 they used — $1,566.81 instead of
+  // $15.00. Draft-first caught it before it reached anybody, which is exactly what it is for.
+  //
+  // A meter with no reading of its own is not a meter that read zero. When the meter has nothing,
+  // the camper's last POSTED, non-voided electric bill is the baseline — that is what the park
+  // billed them up to, so it is where the next bill must start.
+  //
+  // ⚠ NOT APPLIED TO A CAMPER ON MORE THAN ONE METER, DELIBERATELY. Those bills carry ONE reading
+  // pair for the whole camper (Cady's "67,68" is billed 4890 -> 5083), so there is no per-meter
+  // number in there to recover. Splitting it, or giving the same figure to both meters, would
+  // invent usage and over-bill — the very failure this fallback exists to prevent. Such meters
+  // keep a null baseline, are flagged `sharedHistory`, and the first walk sets their true
+  // starting numbers.
+  const needFallback = out0Meters(meters, priorByMeter)
+  const fallbackByMeter = new Map<string, { value: number; at: string | null }>()
+  const sharedByMeter = new Set<string>()
+  if (needFallback.length) {
+    const guestIds = [...new Set(needFallback
+      .map(m => camperForMeter(m, bySite, siteNumberById)?.id).filter(Boolean) as string[])]
+    // How many metered numbers does each camper hold? More than one => shared history.
+    const meterNumbers = new Set(meters.map(m => meterSiteKey(m, siteNumberById)).filter(Boolean))
+    if (guestIds.length) {
+      const { data: bills } = await svc.from('electric_readings')
+        .select('guest_id, current_reading, created_at, billing_month, status, voided')
+        .in('guest_id', guestIds).eq('status', 'posted')
+        .order('created_at', { ascending: false })
+      const lastByGuest = new Map<string, { current_reading: number; created_at: string }>()
+      for (const b of bills || []) {
+        if (b.voided === true) continue
+        if (!lastByGuest.has(b.guest_id as string)) {
+          lastByGuest.set(b.guest_id as string, {
+            current_reading: Number(b.current_reading), created_at: String(b.created_at),
+          })
+        }
+      }
+      for (const m of needFallback) {
+        const camper = camperForMeter(m, bySite, siteNumberById)
+        if (!camper) continue
+        const held = splitSiteNumbers(camper.site_number).filter(n => meterNumbers.has(n))
+        if (held.length > 1) { sharedByMeter.add(m.id); continue }   // ambiguous — see above
+        const last = lastByGuest.get(camper.id)
+        if (last && Number.isFinite(last.current_reading)) {
+          fallbackByMeter.set(m.id, { value: last.current_reading, at: last.created_at.slice(0, 10) })
+        }
+      }
+    }
+  }
+
   const out: MeterWithContext[] = meters.map(meter => {
     const camper = camperForMeter(meter, bySite, siteNumberById)
     const { billable, reason } = resolveBillable(meter, camper)
@@ -130,8 +198,12 @@ export async function loadMeterContext(sessionId: string | null): Promise<{
       billable,
       reason,
       reasonLabel: billableLabel(reason),
-      previousValue: prior ? Number(prior.reading_value) : null,
-      previousReadAt: prior ? String(prior.read_at) : null,
+      previousValue: prior ? Number(prior.reading_value)
+                   : (fallbackByMeter.get(meter.id)?.value ?? null),
+      previousReadAt: prior ? String(prior.read_at)
+                    : (fallbackByMeter.get(meter.id)?.at ?? null),
+      previousSource: prior ? 'meter' : (fallbackByMeter.has(meter.id) ? 'bill' : 'none'),
+      sharedHistory: sharedByMeter.has(meter.id),
       reading: mine ? {
         id: String(mine.id),
         reading_value: Number(mine.reading_value),
