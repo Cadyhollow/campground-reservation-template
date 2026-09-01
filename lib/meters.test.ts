@@ -172,7 +172,8 @@ test('the per-meter lines carry their own previous and current readings for veri
     reading('m44', 500, 700, 'g1'), reading('m43', 1000, 1300, 'g1'),
   ], metersById, RATE)
   assert.deepEqual(draft.meters[0], {
-    meterId: 'm43', meterNumber: '43', previousReading: 1000, currentReading: 1300, kwh: 300, isReset: false,
+    meterId: 'm43', meterNumber: '43', previousReading: 1000, currentReading: 1300, kwh: 300,
+    isReset: false, replacedMeterFinal: null,
   })
 })
 
@@ -195,6 +196,30 @@ test('a meter swapped mid-month does not put a wild jump into the draft bill', (
   ], metersById, RATE)
   assert.equal(drafts[0].kwhUsed, 412)
   assert.equal(drafts[0].meters[0].isReset, true, 'the bill records that this was a replacement')
+  assert.equal(drafts[0].meters[0].replacedMeterFinal, 48210, "the old meter's last number is kept")
+})
+
+test('every bill line adds up: current - previous === kwh, resets included', () => {
+  // The invariant an owner checks by hand. Without the reset-aware `previousReading` this line
+  // would read "48210 -> 412 = 412 kWh", which is the kind of nonsense that makes a camper
+  // distrust the whole statement.
+  const drafts = buildDraftBills([
+    reading('m43', 1000, 1300, 'g1'),
+    reading('m44', 90000, 250, 'g1', { is_meter_reset: true, reset_start_value: 0 }),
+  ], metersById, RATE)
+  for (const line of drafts[0].meters) {
+    assert.equal(line.currentReading - line.previousReading, line.kwh,
+      `line ${line.meterNumber} does not add up`)
+  }
+  assert.equal(drafts[0].meters.reduce((s, l) => s + l.kwh, 0), drafts[0].kwhUsed)
+})
+
+test('a replacement that did not start at zero shows the start it did have', () => {
+  const drafts = buildDraftBills([
+    reading('m12', 48210, 900, 'g2', { is_meter_reset: true, reset_start_value: 500 }),
+  ], metersById, RATE)
+  assert.equal(drafts[0].meters[0].previousReading, 500)
+  assert.equal(drafts[0].kwhUsed, 400)
 })
 
 test('one replaced meter on a double site still sums correctly with its healthy neighbour', () => {

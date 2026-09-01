@@ -38,11 +38,22 @@ export type ElectricRate = {
 export type MeterUsage = {
   meterId: string
   meterNumber: string
+  /**
+   * The value the usage was measured FROM — which on a meter replacement is the NEW meter's
+   * starting value, not the old meter's final number.
+   *
+   * ⚠ THAT DEFINITION IS WHAT KEEPS THE BILL'S ARITHMETIC HONEST. It makes
+   * `currentReading - previousReading === kwh` true on every line, resets included, so a bill
+   * whose columns are added up by hand agrees with its own total. The old meter's last number is
+   * not lost — it travels as `replacedMeterFinal`, and the record of it stays in meter_readings.
+   */
   previousReading: number
   currentReading: number
   kwh: number
   /** True when the physical meter was swapped in this period. See computeMeterUsage(). */
   isReset: boolean
+  /** On a reset only: what the OLD meter last read, kept for context on the bill. */
+  replacedMeterFinal?: number | null
 }
 
 /**

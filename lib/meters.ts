@@ -230,13 +230,17 @@ export function buildDraftBills(
       isReset: r.is_meter_reset === true,
       resetStartValue: r.reset_start_value ?? 0,
     })
+    const isReset = r.is_meter_reset === true
     const usage: MeterUsage = {
       meterId: r.meter_id,
       meterNumber: meter?.meter_number || '',
-      previousReading: r.previous_value ?? 0,
+      // See MeterUsage.previousReading: on a reset this is the NEW meter's start, so that
+      // current - previous == kwh holds on every line of every bill.
+      previousReading: isReset ? (r.reset_start_value ?? 0) : (r.previous_value ?? 0),
       currentReading: r.reading_value,
       kwh,
-      isReset: r.is_meter_reset === true,
+      isReset,
+      replacedMeterFinal: isReset ? (r.previous_value ?? null) : null,
     }
     const list = byGuest.get(r.guest_id)
     if (list) list.push(usage); else byGuest.set(r.guest_id, [usage])
