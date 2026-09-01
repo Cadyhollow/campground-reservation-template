@@ -54,6 +54,9 @@ export type MeterUsage = {
   isReset: boolean
   /** On a reset only: what the OLD meter last read, kept for context on the bill. */
   replacedMeterFinal?: number | null
+  /** True when this meter had NO prior reading to measure from, so nothing is charged this
+   *  cycle. See buildDraftBills() — a missing baseline is not a baseline of zero. */
+  baselineMissing?: boolean
 }
 
 /**

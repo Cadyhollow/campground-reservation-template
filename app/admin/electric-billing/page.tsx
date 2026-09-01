@@ -12,6 +12,7 @@ import {
   computeElectricCharge, rateFromSettings, LEGACY_RATE_PER_KWH, LEGACY_MINIMUM_CHARGE_CENTS,
   type ElectricRate,
 } from '@/lib/electric-billing'
+import { detectReadingAnomaly } from '@/lib/meters'
 
 // Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
 // Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
@@ -99,6 +100,11 @@ type CamperRow = {
   // ── Filled in by a meter walk (Part B). All absent on a park that never walks the meters. ──
   /** The id of the DRAFT electric_readings row this camper's figures came from, if any. */
   draftId: string
+  /** The owner has looked at a flagged reading and chosen to bill it anyway. */
+  anomalyAcknowledged: boolean
+  /** True when this camper has been billed for electric before — so a zero baseline means a
+   *  missing carry-forward rather than a genuinely new meter. */
+  hadPriorBill: boolean
   /** One line per meter the camper holds. Empty for a bill typed in by hand, which is the
    *  pre-existing behaviour and still fully supported. */
   meterBreakdown: MeterLine[]
@@ -393,6 +399,7 @@ export default function ElectricBillingPage() {
         lastPaymentRecorded: mostRecentPayment, showReceiptConfirm: false, sendingReceipt: false, receiptSent: receiptAlreadySent,
         readings: [], historyLoaded: false,
         draftId: '', meterBreakdown: [], draftReadDate: '',
+        anomalyAcknowledged: false, hadPriorBill: false,
       }
     }))
 
@@ -706,6 +713,27 @@ export default function ElectricBillingPage() {
     setSendingAll(false)
   }
 
+  // The guard, per row. Reads the meter lines when a walk staged them, otherwise the row's own
+  // typed figures — so a hand-entered bill is checked too.
+  function anomalyFor(row: CamperRow) {
+    if (row.sent) return null
+    const prev = parseFloat(row.previousReading)
+    const curr = parseFloat(row.currentReading)
+    if (!Number.isFinite(curr)) return null
+    // "Has history" = this camper has been billed before, which is exactly when a zero baseline
+    // means something went missing rather than the meter genuinely starting at zero.
+    const hasPriorHistory = row.readings.length > 0 || row.folioPayments.length > 0 || row.hadPriorBill
+    const recentKwh = row.readings.slice(0, 4).map(r => Number(r.kwh_used)).filter(n => Number.isFinite(n))
+    const line = row.meterBreakdown.length === 1 ? row.meterBreakdown[0] : null
+    return detectReadingAnomaly(
+      line
+        ? { previousReading: Number(line.previous_reading), currentReading: Number(line.current_reading), kwh: Number(line.kwh), isReset: line.is_reset }
+        : { previousReading: Number.isFinite(prev) ? prev : 0, currentReading: curr, kwh: row.kwhUsed },
+      { hasPriorHistory, recentKwh },
+    )
+  }
+  const blockedByAnomaly = (row: CamperRow) => !!anomalyFor(row) && !row.anomalyAcknowledged
+
   const readyToSend = campers.filter(c => !c.skip && !c.sent && c.finalAmount).length
   const draftCount = campers.filter(c => c.draftId && !c.sent).length
 
@@ -877,13 +905,33 @@ export default function ElectricBillingPage() {
                         </div>
                       )}
 
+                      {/* ── ⚠ THE READING-LOOKS-OFF GUARD ─────────────────────────────────────
+                          Defence in depth for a bill that already happened once: a meter with no
+                          baseline was measured from zero, so 43 kWh of usage staged as 5,803 kWh
+                          — $1,566.81 instead of $15.00. It was a draft and draft-first caught it.
+                          This is the second net. It does not just warn: it WITHHOLDS the one-click
+                          Bill Electric, so a bill of this shape cannot be posted without somebody
+                          deliberately looking at it first. */}
+                      {!row.skip && anomalyFor(row) && (
+                        <div style={{ padding: '0 14px 10px' }}>
+                          <div style={{ background: '#fffbeb', border: '1px solid #f59e0b', borderRadius: 9, padding: '10px 13px', fontSize: 13, color: '#92400e' }}>
+                            <strong>This reading looks off — check it before billing.</strong>
+                            <div style={{ marginTop: 3, lineHeight: 1.5 }}>{anomalyFor(row)!.message}</div>
+                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], anomalyAcknowledged: true }; return u })}
+                              style={{ marginTop: 8, background: '#fff', border: '1px solid #f59e0b', color: '#92400e', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                              I&rsquo;ve checked it — let me bill this
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
                       {!row.skip && (
                         <div style={{ padding: '0 14px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                           {/* Bill Electric — the ONLY charge-creating action; once a month, with confirm */}
                           {!row.sent ? (
                             <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: true }; return u })}
-                              disabled={row.sending || !row.finalAmount}
-                              style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: !row.finalAmount ? 'default' : 'pointer', opacity: !row.finalAmount ? 0.5 : 1 }}>
+                              disabled={row.sending || !row.finalAmount || blockedByAnomaly(row)}
+                              style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: (!row.finalAmount || blockedByAnomaly(row)) ? 'default' : 'pointer', opacity: (!row.finalAmount || blockedByAnomaly(row)) ? 0.5 : 1 }}>
                               {row.sending ? 'Billing...' : '⚡ Bill Electric'}
                             </button>
                           ) : (

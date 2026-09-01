@@ -260,6 +260,66 @@ export type ReadingRow = {
   guest_id?: string | null
 }
 
+/**
+ * Something about a staged bill that a person should look at before it is posted.
+ *
+ * ⚠ THIS EXISTS BECAUSE OF A REAL BILL. A meter with no baseline was read as having read ZERO
+ * last month, so a camper's 43 kWh was billed as 5,803 kWh — $1,566.81 instead of $15.00. It was
+ * a draft, and draft-first caught it. This is the second net: an anomaly is surfaced and the
+ * one-click post is withheld, so the same shape of mistake cannot pass quietly even if a baseline
+ * goes missing again.
+ */
+export type ReadingAnomaly =
+  | { kind: 'from-zero'; message: string }
+  | { kind: 'implausible'; message: string }
+  | { kind: 'backwards'; message: string }
+
+/**
+ * Does this staged line look wrong enough to stop and check?
+ *
+ * `recentKwh` is that meter's own recent usage — the only fair yardstick, because 400 kWh is
+ * ordinary for one camper and absurd for another.
+ */
+export function detectReadingAnomaly(
+  line: { previousReading: number; currentReading: number; kwh: number; isReset?: boolean },
+  opts: { hasPriorHistory: boolean; recentKwh?: number[] }
+): ReadingAnomaly | null {
+  // A meter replacement legitimately starts from a new number — not an anomaly.
+  if (line.isReset) return null
+
+  // 1. THE BUG THAT PROMPTED THIS. A zero baseline on a meter that HAS history means the
+  //    carry-forward failed, and the whole current reading is about to be billed as usage.
+  if (opts.hasPriorHistory && (!line.previousReading || line.previousReading === 0) && line.currentReading > 0) {
+    return {
+      kind: 'from-zero',
+      message: `This is measured from zero, so the whole reading (${line.currentReading.toLocaleString()}) is being charged as usage. This meter has earlier readings, so its previous number is missing rather than genuinely zero.`,
+    }
+  }
+
+  // 2. A reading BELOW the last one. Floored to zero usage elsewhere, but worth saying out loud:
+  //    it is a mistyped digit or a meter that rolled over, not a month of no power.
+  if (!opts.hasPriorHistory ? false : line.currentReading < line.previousReading) {
+    return {
+      kind: 'backwards',
+      message: `The new reading (${line.currentReading.toLocaleString()}) is lower than the previous one (${line.previousReading.toLocaleString()}). Usage is being counted as zero — check the digits, or mark it as a replaced meter.`,
+    }
+  }
+
+  // 3. Wildly more than this meter's own recent months. Ten times the largest recent month, and
+  //    only once there is enough history to say what "recent" means.
+  const recent = (opts.recentKwh || []).filter(n => Number.isFinite(n) && n > 0)
+  if (recent.length >= 2) {
+    const worst = Math.max(...recent)
+    if (worst > 0 && line.kwh > worst * 10) {
+      return {
+        kind: 'implausible',
+        message: `${line.kwh.toLocaleString()} kWh is more than ten times this meter's biggest recent month (${worst.toLocaleString()} kWh). Worth checking the reading before billing it.`,
+      }
+    }
+  }
+  return null
+}
+
 export type DraftBill = {
   guestId: string
   kwhUsed: number
@@ -288,21 +348,40 @@ export function buildDraftBills(
   for (const r of readings) {
     if (!r.guest_id) continue
     const meter = metersById.get(r.meter_id)
-    const kwh = computeMeterUsage(r.previous_value ?? 0, r.reading_value, {
-      isReset: r.is_meter_reset === true,
-      resetStartValue: r.reset_start_value ?? 0,
-    })
     const isReset = r.is_meter_reset === true
+
+    // ⚠ A MISSING BASELINE IS NOT A BASELINE OF ZERO, AND THAT `?? 0` COST $1,551.81 ONCE.
+    //
+    // This line used to read `computeMeterUsage(r.previous_value ?? 0, ...)`. On a freshly seeded
+    // registry every meter had `previous_value` NULL, so the whole current reading became usage:
+    // a camper who used 43 kWh was staged at 5,803 kWh, $1,566.81 instead of $15.00.
+    //
+    // Null now means "no baseline known", and a meter with no baseline measures NOTHING this
+    // cycle — usage 0 — rather than everything. The reading is still recorded, the walk still
+    // shows it, and the next cycle measures against it properly. Under-measuring once is a
+    // correctable annoyance; over-charging a camper by a hundredfold is not, and between the two
+    // this picks the one that cannot take money by mistake.
+    const baselineKnown = isReset || (r.previous_value !== null && r.previous_value !== undefined)
+    const kwh = baselineKnown
+      ? computeMeterUsage(r.previous_value ?? 0, r.reading_value, {
+          isReset, resetStartValue: r.reset_start_value ?? 0,
+        })
+      : 0
     const usage: MeterUsage = {
       meterId: r.meter_id,
       meterNumber: meter?.meter_number || '',
       // See MeterUsage.previousReading: on a reset this is the NEW meter's start, so that
       // current - previous == kwh holds on every line of every bill.
-      previousReading: isReset ? (r.reset_start_value ?? 0) : (r.previous_value ?? 0),
+      // With no baseline this equals the current reading, so the line reads "5803 -> 5803, 0 kWh"
+      // — visibly "nothing measured yet" rather than a silent zero that charges for everything.
+      previousReading: isReset ? (r.reset_start_value ?? 0)
+                     : (baselineKnown ? (r.previous_value as number) : r.reading_value),
       currentReading: r.reading_value,
       kwh,
       isReset,
       replacedMeterFinal: isReset ? (r.previous_value ?? null) : null,
+      /** True when this line had no prior reading to measure from. */
+      baselineMissing: !baselineKnown,
     }
     const list = byGuest.get(r.guest_id)
     if (list) list.push(usage); else byGuest.set(r.guest_id, [usage])

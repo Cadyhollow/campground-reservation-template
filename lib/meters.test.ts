@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   isSiteMeter, meterSiteKey, campersBySite, camperForMeter, resolveBillable, isMeteredTenure,
-  meterWalkOrder, buildDraftBills, billableLabel,
+  meterWalkOrder, buildDraftBills, billableLabel, detectReadingAnomaly,
   type Meter, type MeterCamper, type ReadingRow,
 } from './meters.ts'
 import type { ElectricRate } from './electric-billing.ts'
@@ -300,7 +300,7 @@ test('the per-meter lines carry their own previous and current readings for veri
   ], metersById, RATE)
   assert.deepEqual(draft.meters[0], {
     meterId: 'm43', meterNumber: '43', previousReading: 1000, currentReading: 1300, kwh: 300,
-    isReset: false, replacedMeterFinal: null,
+    isReset: false, replacedMeterFinal: null, baselineMissing: false,
   })
 })
 
@@ -361,4 +361,107 @@ test('the order of the readings does not change the bill', () => {
   const a = buildDraftBills([reading('m43', 1000, 1300, 'g1'), reading('m44', 500, 700, 'g1')], metersById, RATE)
   const b = buildDraftBills([reading('m44', 500, 700, 'g1'), reading('m43', 1000, 1300, 'g1')], metersById, RATE)
   assert.deepEqual(a, b)
+})
+
+
+// ── ⚠ THE CARRY-FORWARD BUG, PINNED ──────────────────────────────────────────────────────────
+//
+// A real bill on a live park. The registry is seeded from `sites`, which carries no readings, so
+// on the first walk every meter had no prior reading. `previous_value` came through NULL, the
+// draft builder did `?? 0`, and the whole current reading became usage: a camper who used 43 kWh
+// (5760 -> 5803) was staged at 5,803 kWh — $1,566.81 instead of $15.00.
+//
+// It never reached anybody: it was a DRAFT, and draft-first is what caught it. These tests are so
+// it cannot come back.
+
+test('⚠ A MISSING BASELINE MEASURES NOTHING — it never charges for the whole reading', () => {
+  // previous_value NULL = "no baseline known", NOT "the meter read zero".
+  const drafts = buildDraftBills(
+    [{ meter_id: 'm12', reading_value: 5803, previous_value: null, guest_id: 'g1' }],
+    metersById, RATE)
+  assert.equal(drafts[0].kwhUsed, 0, 'nothing measured, rather than 5,803 kWh invented')
+  assert.equal(drafts[0].meters[0].baselineMissing, true)
+  // The line reads "5803 -> 5803, 0 kWh": visibly nothing-measured-yet, not a silent zero.
+  assert.equal(drafts[0].meters[0].previousReading, 5803)
+  assert.equal(drafts[0].meters[0].currentReading, 5803)
+  // The minimum charge still applies — that is the park's floor, not usage this fix invented.
+  assert.equal(drafts[0].calculatedAmountCents, RATE.minimumChargeCents)
+})
+
+test('⚠ THE EXACT LIVE CASE: 5760 -> 5803 is 43 kWh and the $15 minimum, not $1,566.81', () => {
+  const drafts = buildDraftBills(
+    [{ meter_id: 'm12', reading_value: 5803, previous_value: 5760, guest_id: 'g1' }],
+    metersById, RATE)
+  assert.equal(drafts[0].kwhUsed, 43)
+  assert.equal(drafts[0].meters[0].baselineMissing, false)
+  // 43 x $0.27 = $11.61, under the $15.00 floor.
+  assert.equal(drafts[0].calculatedAmountCents, 1500)
+  // What the bug produced, for contrast — never let this be the answer again.
+  const fromZero = buildDraftBills(
+    [{ meter_id: 'm12', reading_value: 5803, previous_value: 0, guest_id: 'g1' }],
+    metersById, RATE)
+  assert.equal(fromZero[0].calculatedAmountCents, 156681, 'the shape of the bad bill')
+  assert.notEqual(drafts[0].calculatedAmountCents, fromZero[0].calculatedAmountCents)
+})
+
+test('a baseline of a genuine zero still measures normally', () => {
+  // A brand-new meter really can start at 0. That is previous_value = 0, not NULL, and it is a
+  // measurement — distinguishing the two is the whole point.
+  const drafts = buildDraftBills(
+    [{ meter_id: 'm12', reading_value: 120, previous_value: 0, guest_id: 'g1' }],
+    metersById, RATE)
+  assert.equal(drafts[0].kwhUsed, 120)
+  assert.equal(drafts[0].meters[0].baselineMissing, false)
+})
+
+// ── THE GUARD ────────────────────────────────────────────────────────────────────────────────
+
+test('the guard catches a from-zero reading on a meter that has history', () => {
+  const a = detectReadingAnomaly(
+    { previousReading: 0, currentReading: 5803, kwh: 5803 },
+    { hasPriorHistory: true })
+  assert.equal(a?.kind, 'from-zero')
+  assert.match(a!.message, /5,803/)
+})
+
+test('the guard does NOT cry wolf on a genuinely new meter', () => {
+  assert.equal(
+    detectReadingAnomaly({ previousReading: 0, currentReading: 120, kwh: 120 },
+      { hasPriorHistory: false }),
+    null, 'no history means starting from zero is simply the truth')
+})
+
+test('the guard catches a reading that went backwards', () => {
+  const a = detectReadingAnomaly(
+    { previousReading: 5803, currentReading: 5760, kwh: 0 },
+    { hasPriorHistory: true })
+  assert.equal(a?.kind, 'backwards')
+})
+
+test('the guard catches usage wildly out of line with this meter\'s own months', () => {
+  const a = detectReadingAnomaly(
+    { previousReading: 100, currentReading: 9000, kwh: 8900 },
+    { hasPriorHistory: true, recentKwh: [28, 64, 43] })
+  assert.equal(a?.kind, 'implausible')
+  assert.match(a!.message, /ten times/)
+})
+
+test('the guard stays quiet on ordinary usage, and on a meter replacement', () => {
+  assert.equal(
+    detectReadingAnomaly({ previousReading: 5760, currentReading: 5803, kwh: 43 },
+      { hasPriorHistory: true, recentKwh: [28, 64] }),
+    null)
+  // A swap legitimately starts from a new number — flagging it would train the eye to ignore
+  // the banner, which is how a real anomaly gets waved through.
+  assert.equal(
+    detectReadingAnomaly({ previousReading: 0, currentReading: 412, kwh: 412, isReset: true },
+      { hasPriorHistory: true }),
+    null)
+})
+
+test('the guard needs two months before it calls anything implausible', () => {
+  assert.equal(
+    detectReadingAnomaly({ previousReading: 100, currentReading: 9000, kwh: 8900 },
+      { hasPriorHistory: true, recentKwh: [28] }),
+    null, 'one month is not a pattern to judge against')
 })
