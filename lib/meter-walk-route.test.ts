@@ -260,9 +260,24 @@ test('a camper on TWO sites gets ONE bill summing both meters', { skip }, async 
   if (!doubled) return // a tenant with no double-site camper: lib/meters.test.ts covers the maths
 
   const [guestId, list] = doubled
-  // 300 kWh on the first meter, 200 on the second.
-  await api('/api/meter-readings', { method: 'POST', body: JSON.stringify({ meter_id: list[0].meterId, session_id: sessionId, reading_value: 300 }) })
-  await api('/api/meter-readings', { method: 'POST', body: JSON.stringify({ meter_id: list[1].meterId, session_id: sessionId, reading_value: 200 }) })
+
+  // ⚠ THE READINGS ARE DERIVED FROM EACH METER'S OWN PREVIOUS VALUE, NOT HARDCODED.
+  //
+  // An earlier version wrote a flat 300 and 200 and asserted 500 kWh. It passed alone and FAILED
+  // in the full suite, because the tenant is shared: a meter that already read 1,300 turned a
+  // reading of 300 into zero usage (floored, correctly — a reading below the previous one is a
+  // typo, not a credit). The test was assuming a clean tenant, which nothing guarantees.
+  //
+  // Reading "previous + N" asserts the delta the feature actually promises, whatever the meters
+  // happen to hold when the suite runs.
+  const prevOf = (meterId: string) => {
+    const m = q.meters.find((x: { meter: { id: string } }) => x.meter.id === meterId)
+    return Number(m?.previousValue ?? 0)
+  }
+  const first = prevOf(list[0].meterId) + 300
+  const second = prevOf(list[1].meterId) + 200
+  await api('/api/meter-readings', { method: 'POST', body: JSON.stringify({ meter_id: list[0].meterId, session_id: sessionId, reading_value: first }) })
+  await api('/api/meter-readings', { method: 'POST', body: JSON.stringify({ meter_id: list[1].meterId, session_id: sessionId, reading_value: second }) })
 
   const { data: bills } = await svc!.from('electric_readings')
     .select('*').eq('billing_month', BILLING_MONTH).eq('guest_id', guestId)
