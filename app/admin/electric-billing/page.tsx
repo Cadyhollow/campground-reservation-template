@@ -1,8 +1,17 @@
 'use client'
 import { allPaymentMethods, methodLabel } from '@/lib/transactions'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
+// ⚠ ONE ELECTRIC CALCULATION, SHARED. This page, the meter walk and the draft staging all price a
+// reading through lib/electric-billing.ts. The arithmetic is byte-identical to the expression
+// that used to live in updateReading() below — see the transcription test in
+// lib/electric-billing.test.ts, which pins it.
+import {
+  computeElectricCharge, rateFromSettings, LEGACY_RATE_PER_KWH, LEGACY_MINIMUM_CHARGE_CENTS,
+  type ElectricRate,
+} from '@/lib/electric-billing'
 
 // Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
 // Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
@@ -30,6 +39,24 @@ type ElectricReading = {
   final_amount: number
   created_at: string
   notes: string
+}
+
+/**
+ * One meter's contribution to a bill, as staged by a meter walk.
+ *
+ * ⚠ A SNAPSHOT OF WHAT WAS BILLED, not a live join to meter_readings. The reading is the record
+ * of what the meter SAID in the field; this is the record of what the camper was CHARGED for. An
+ * owner correcting an amount here has not changed what the meter read, and next month still
+ * carries forward from the meter.
+ */
+type MeterLine = {
+  meter_id: string
+  meter_number: string
+  previous_reading: number
+  current_reading: number
+  kwh: number
+  is_reset?: boolean
+  replaced_meter_final?: number | null
 }
 
 type FolioPayment = {
@@ -69,6 +96,14 @@ type CamperRow = {
   receiptSent: boolean
   readings: ElectricReading[]
   historyLoaded: boolean
+  // ── Filled in by a meter walk (Part B). All absent on a park that never walks the meters. ──
+  /** The id of the DRAFT electric_readings row this camper's figures came from, if any. */
+  draftId: string
+  /** One line per meter the camper holds. Empty for a bill typed in by hand, which is the
+   *  pre-existing behaviour and still fully supported. */
+  meterBreakdown: MeterLine[]
+  /** The walk that produced the draft, for the "from the September walk" note. */
+  draftReadDate: string
   editEmailMode: boolean
   editEmailValue: string
   showBillConfirm: boolean
@@ -139,6 +174,85 @@ function periodLabel(billingMonth: string): string {
   return p ? `${fmtMDY(p.start)}\u2013${fmtMDY(p.end)}` : ''
 }
 
+// ── PRE-FILLING A MONTH: posted, draft, or carry-forward ─────────────────────────────────────
+//
+// This used to be copy-pasted between fetchCampers() and handleMonthChange(). It is one function
+// now because the meter walk gives it a THIRD case to handle, and two copies of a three-branch
+// rule is how one of them silently keeps only two.
+//
+// The three cases, in the order they are tested:
+//
+//   1. A POSTED bill for this month  -> show it and mark the row ✓ Billed. Unchanged behaviour:
+//      before drafts existed, the mere existence of a row meant exactly this.
+//   2. A DRAFT for this month        -> pre-fill readings AND the amount, and leave the row
+//      BILLABLE. This is the meter walk's output: reviewed here, posted here, never sooner.
+//   3. Neither                       -> carry the most recent prior month's current reading into
+//      "previous", exactly as before.
+//
+// ⚠ CASE 2 MUST NOT SET `sent`. A draft that marked itself billed would disable its own Bill
+// Electric button, and a whole month of walked meters would sit on the screen looking finished
+// while nothing had been charged and nothing had been sent.
+async function applyMonthReadings(row: CamperRow, month: string, rate: ElectricRate): Promise<CamperRow> {
+  const { data: readings } = await supabase
+    .from('electric_readings')
+    .select('id, billing_month, previous_reading, current_reading, kwh_used, calculated_amount, final_amount, status, meter_breakdown, reading_session_id, created_at')
+    .eq('guest_id', row.guest.id)
+    .order('created_at', { ascending: false })
+
+  const cleared: CamperRow = {
+    ...row, previousReading: '', currentReading: '', kwhUsed: 0, calculatedAmount: 0,
+    finalAmount: '', sent: false, draftId: '', meterBreakdown: [], draftReadDate: '',
+  }
+  if (!readings || readings.length === 0) return cleared
+
+  const thisMonth = readings.filter(r => r.billing_month === month)
+  const posted = thisMonth.find(r => r.status !== 'draft')
+  if (posted) {
+    return {
+      ...cleared,
+      previousReading: String(posted.previous_reading),
+      currentReading: String(posted.current_reading),
+      kwhUsed: Number(posted.kwh_used) || 0,
+      calculatedAmount: Number(posted.calculated_amount) || 0,
+      finalAmount: ((Number(posted.final_amount) || 0) / 100).toFixed(2),
+      meterBreakdown: Array.isArray(posted.meter_breakdown) ? posted.meter_breakdown as MeterLine[] : [],
+      sent: true,
+    }
+  }
+
+  const draft = thisMonth.find(r => r.status === 'draft')
+  if (draft) {
+    const kwh = Number(draft.kwh_used) || 0
+    // Recomputed from the CURRENT rate rather than trusted from the draft, so an owner who
+    // corrects the rate before reviewing sees the corrected money — the readings are the fact,
+    // the price is a setting.
+    const recalculated = computeElectricCharge(kwh, rate).calculatedAmountCents
+    const stored = Number(draft.calculated_amount) || 0
+    const storedFinal = Number(draft.final_amount) || 0
+    // An owner's edit survives; an untouched draft follows the calculation.
+    const edited = storedFinal !== stored
+    return {
+      ...cleared,
+      previousReading: String(draft.previous_reading),
+      currentReading: String(draft.current_reading),
+      kwhUsed: kwh,
+      calculatedAmount: recalculated,
+      finalAmount: ((edited ? storedFinal : recalculated) / 100).toFixed(2),
+      meterBreakdown: Array.isArray(draft.meter_breakdown) ? draft.meter_breakdown as MeterLine[] : [],
+      draftId: String(draft.id),
+      draftReadDate: String(draft.created_at || ''),
+      sent: false,
+    }
+  }
+
+  // ⚠ CARRY-FORWARD IGNORES DRAFTS FROM OTHER MONTHS. A draft is a proposal; taking its current
+  // reading as this month's "previous" would carry a number nobody has confirmed.
+  const selectedVal = parseMonthValue(month)
+  const prior = readings.filter(r => r.status !== 'draft' && parseMonthValue(r.billing_month) < selectedVal)
+  if (prior.length === 0) return cleared
+  return { ...cleared, previousReading: String(prior[0].current_reading) }
+}
+
 // The one fact a busy person must not be able to skate past: WHICH MONTH is being billed.
 // Deliberately the largest thing in either confirmation, above the amount and the recipient.
 function MonthHeadline({ lead, billingMonth }: { lead: string; billingMonth: string }) {
@@ -175,8 +289,27 @@ export default function ElectricBillingPage() {
   // same limit rather than being the one door with no check on it.
   const [maxCreditAmount, setMaxCreditAmount] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [ratePerKwh, setRatePerKwh] = useState('0.27')
-  const [minimumCharge, setMinimumCharge] = useState('15.00')
+  // ── THE PARK'S RATE ────────────────────────────────────────────────────────────────────────
+  //
+  // These two boxes used to be page-local state seeded with '0.27' / '15.00' and never saved
+  // anywhere: the owner retyped their rate every visit, and one park's rates were hard-coded into
+  // the blueprint every park is cloned from. They now load from settings and save with the
+  // message, and the meter walk reads the same stored values — which is what lets the live "≈ $"
+  // on the phone agree with the bill on this screen.
+  //
+  // ⚠ THE BOXES STILL OPEN AT 0.27 / 15.00 FOR A PARK THAT HAS NEVER SAVED ONE, so nothing about
+  // this screen changes for a park that ignores the new setting. See rateFromSettings().
+  const [ratePerKwh, setRatePerKwh] = useState(String(LEGACY_RATE_PER_KWH))
+  const [minimumCharge, setMinimumCharge] = useState((LEGACY_MINIMUM_CHARGE_CENTS / 100).toFixed(2))
+  const [savingRate, setSavingRate] = useState(false)
+  const [rateSaved, setRateSaved] = useState('')
+
+  // The single source of truth for pricing on this page. Derived from the boxes so an unsaved
+  // edit previews immediately, exactly as it did before.
+  const rate: ElectricRate = {
+    ratePerKwh: parseFloat(ratePerKwh) || LEGACY_RATE_PER_KWH,
+    minimumChargeCents: Math.round((parseFloat(minimumCharge) || LEGACY_MINIMUM_CHARGE_CENTS / 100) * 100),
+  }
   const [activeTab, setActiveTab] = useState<'billing' | 'history'>('billing')
   const [billingMonth, setBillingMonth] = useState(getPreviousMonthOption)
   const [emailMessage, setEmailMessage] = useState("Please find your monthly electric statement below. If you have any questions, please don't hesitate to reach out.")
@@ -190,8 +323,30 @@ export default function ElectricBillingPage() {
   useEffect(() => { fetchCampers(); fetchMessage() }, [])
 
   async function fetchMessage() {
-    const { data } = await supabase.from('settings').select('electric_bill_message').single()
+    const { data } = await supabase.from('settings')
+      .select('electric_bill_message, electric_rate_per_kwh, electric_minimum_charge').single()
     if (data?.electric_bill_message) setEmailMessage(data.electric_bill_message)
+    // A park that has never saved a rate keeps the boxes it has always seen.
+    const stored = rateFromSettings(data)
+    if (data?.electric_rate_per_kwh !== null && data?.electric_rate_per_kwh !== undefined) {
+      setRatePerKwh(String(stored.ratePerKwh))
+    }
+    if (data?.electric_minimum_charge !== null && data?.electric_minimum_charge !== undefined) {
+      setMinimumCharge((stored.minimumChargeCents / 100).toFixed(2))
+    }
+  }
+
+  // Saving the rate is what makes it reach the phone. Without it the walk's live usage preview
+  // would price at the fallback while this screen priced at whatever was typed here.
+  async function saveRate() {
+    setSavingRate(true); setRateSaved('')
+    const { data: row } = await supabase.from('settings').select('id').single()
+    const { error } = await supabase.from('settings').update({
+      electric_rate_per_kwh: rate.ratePerKwh,
+      electric_minimum_charge: rate.minimumChargeCents,
+    }).eq('id', row?.id)
+    setSavingRate(false)
+    setRateSaved(error ? 'Could not save the rate.' : 'Rate saved — the meter-reading screen will use it too.')
   }
 
   async function saveMessage() {
@@ -237,28 +392,11 @@ export default function ElectricBillingPage() {
         showHistory: false, showPayment: false, paymentAmount: '', paymentMethod: 'cash', paymentNote: '', savingPayment: false, editEmailMode: false, editEmailValue: '', showBillConfirm: false,
         lastPaymentRecorded: mostRecentPayment, showReceiptConfirm: false, sendingReceipt: false, receiptSent: receiptAlreadySent,
         readings: [], historyLoaded: false,
+        draftId: '', meterBreakdown: [], draftReadDate: '',
       }
     }))
 
-    // Auto-populate previous readings for the current billing month
-    const currentMonth = billingMonth
-    const selectedVal = parseMonthValue(currentMonth)
-    const populatedRows = await Promise.all(rows.map(async (row) => {
-      const { data: readings } = await supabase
-        .from('electric_readings')
-        .select('billing_month, previous_reading, current_reading, created_at')
-        .eq('guest_id', row.guest.id)
-        .order('created_at', { ascending: false })
-      if (!readings || readings.length === 0) return row
-      const thisMonthReading = readings.find(r => r.billing_month === currentMonth)
-      if (thisMonthReading) {
-        return { ...row, previousReading: String(thisMonthReading.previous_reading), currentReading: String(thisMonthReading.current_reading), sent: true }
-      }
-      const priorReadings = readings.filter(r => parseMonthValue(r.billing_month) < selectedVal)
-      if (priorReadings.length === 0) return row
-      return { ...row, previousReading: String(priorReadings[0].current_reading) }
-    }))
-
+    const populatedRows = await Promise.all(rows.map(row => applyMonthReadings(row, billingMonth, rate)))
     setCampers(populatedRows)
     setLoading(false)
   }
@@ -268,42 +406,8 @@ export default function ElectricBillingPage() {
     setShowSendAllConfirm(false) // never leave a confirmation open across a month change
     if (campers.length === 0) return
     setAutoPopulating(true)
-    const selectedVal = parseMonthValue(newMonth)
 
-    const updatedCampers = await Promise.all(campers.map(async (row) => {
-      const { data: readings } = await supabase
-        .from('electric_readings')
-        .select('billing_month, previous_reading, current_reading, created_at')
-        .eq('guest_id', row.guest.id)
-        .order('created_at', { ascending: false })
-
-      if (!readings || readings.length === 0) return row
-
-      // If this month already has a recorded reading, show that exact data
-      const thisMonthReading = readings.find(r => r.billing_month === newMonth)
-      if (thisMonthReading) {
-        return {
-          ...row,
-          previousReading: String(thisMonthReading.previous_reading),
-          currentReading: String(thisMonthReading.current_reading),
-          sent: true,
-        }
-      }
-
-      // Otherwise find the most recent reading before this month and pre-fill prev reading
-      const priorReadings = readings.filter(r => parseMonthValue(r.billing_month) < selectedVal)
-      if (priorReadings.length === 0) return row
-      return {
-        ...row,
-        previousReading: String(priorReadings[0].current_reading),
-        currentReading: '',
-        kwhUsed: 0,
-        calculatedAmount: 0,
-        finalAmount: '',
-        sent: false,
-      }
-    }))
-
+    const updatedCampers = await Promise.all(campers.map(row => applyMonthReadings(row, newMonth, rate)))
     setCampers(updatedCampers)
     setAutoPopulating(false)
   }
@@ -314,7 +418,8 @@ export default function ElectricBillingPage() {
       setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], showHistory: !u[index].showHistory }; return u })
       return
     }
-    const { data } = await supabase.from('electric_readings').select('*').eq('guest_id', row.guest.id).order('created_at', { ascending: false })
+    // Posted only: this is the record of what this camper has been BILLED. A draft is a proposal.
+    const { data } = await supabase.from('electric_readings').select('*').eq('guest_id', row.guest.id).eq('status', 'posted').order('created_at', { ascending: false })
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], readings: data || [], historyLoaded: true, showHistory: true }; return u })
   }
 
@@ -403,10 +508,13 @@ export default function ElectricBillingPage() {
       updated[index] = { ...updated[index], [field]: value }
       const prev_r = parseFloat(field === 'previousReading' ? value : updated[index].previousReading) || 0
       const curr_r = parseFloat(field === 'currentReading' ? value : updated[index].currentReading) || 0
-      const kwh = Math.max(0, curr_r - prev_r)
-      const rate = parseFloat(ratePerKwh) || 0.27
-      const minCharge = Math.round((parseFloat(minimumCharge) || 15) * 100)
-      const calculated = Math.max(minCharge, Math.round(kwh * rate * 100))
+      // ⚠ EDITING A READING BY HAND DROPS THE PER-METER LINES. Those lines describe a specific
+      // pair of meter numbers; once the totals are typed over, they no longer describe the bill,
+      // and showing stale lines under a corrected total is worse than showing none. The readings
+      // themselves are untouched in meter_readings.
+      if (updated[index].meterBreakdown.length) updated[index].meterBreakdown = []
+      const { kwhUsed: kwh, calculatedAmountCents: calculated } =
+        computeElectricCharge(Math.max(0, curr_r - prev_r), rate)
       updated[index].kwhUsed = kwh
       updated[index].calculatedAmount = calculated
       if (updated[index].finalAmount === '' || updated[index].finalAmount === (updated[index].calculatedAmount / 100).toFixed(2)) {
@@ -445,8 +553,11 @@ export default function ElectricBillingPage() {
     const electricItem = (allItems || []).find((i: any) => i.description === thisElectricDesc)
     const electricAmount = electricItem?.line_total || row.calculatedAmount
 
+    // ⚠ POSTED ONLY. A draft has never been sent to anybody, so letting one answer "when was the
+    // last bill sent" would date the balance-forward split from a walk nobody has reviewed and
+    // silently move charges between "brought forward" and "new this month" on a real statement.
     const { data: prevBills } = await supabase.from('electric_readings').select('created_at')
-      .eq('guest_id', row.guest.id).neq('billing_month', billingMonth)
+      .eq('guest_id', row.guest.id).neq('billing_month', billingMonth).eq('status', 'posted')
       .order('created_at', { ascending: false }).limit(1)
     const previousBillSentAt = prevBills && prevBills.length > 0 ? prevBills[0].created_at : null
 
@@ -507,15 +618,28 @@ export default function ElectricBillingPage() {
       quantity: 1, unit_price: finalAmountCents, tax_amount: 0, line_total: finalAmountCents, category: 'Fees',
     }).select().single()
 
-    await supabase.from('electric_readings').insert({
+    // ⚠ THIS IS THE ONE PLACE A CHARGE IS CREATED, AND IT IS UNCHANGED. The folio_line_items
+    // insert above is the money; what follows only records the reading against it.
+    //
+    // The one thing that IS new: when a meter walk staged a draft for this camper and month, the
+    // draft is PROMOTED to posted rather than a second row being inserted beside it. Two rows for
+    // one month would double-count the camper in every history and total on this page, and leave
+    // a draft behind that the next walk would try to update.
+    const readingRow = {
       guest_id: row.guest.id, billing_month: billingMonth,
       previous_reading: parseFloat(row.previousReading) || 0,
       current_reading: parseFloat(row.currentReading) || 0,
-      kwh_used: row.kwhUsed, rate_per_kwh: parseFloat(ratePerKwh) || 0.27,
-      minimum_charge: Math.round((parseFloat(minimumCharge) || 15) * 100),
+      kwh_used: row.kwhUsed, rate_per_kwh: rate.ratePerKwh,
+      minimum_charge: rate.minimumChargeCents,
       calculated_amount: row.calculatedAmount, final_amount: finalAmountCents,
       folio_line_item_id: lineItem?.id || null,
-    })
+      status: 'posted',
+    }
+    if (row.draftId) {
+      await supabase.from('electric_readings').update(readingRow).eq('id', row.draftId).eq('status', 'draft')
+    } else {
+      await supabase.from('electric_readings').insert(readingRow)
+    }
 
     const { data: allItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at')
     const { data: allPayments } = await supabase.from('folio_payments').select('*').eq('folio_id', folioId).eq('status', 'completed').order('paid_at')
@@ -525,11 +649,13 @@ export default function ElectricBillingPage() {
     const liveBalance = itemsTotal - paymentsTotal
 
     // Find the date the previous electric bill was sent for this camper
+    // ⚠ POSTED ONLY — same reason as in resendBill() above.
     const { data: prevBills } = await supabase
       .from('electric_readings')
       .select('created_at')
       .eq('guest_id', row.guest.id)
       .neq('billing_month', billingMonth)
+      .eq('status', 'posted')
       .order('created_at', { ascending: false })
       .limit(1)
     const previousBillSentAt = prevBills && prevBills.length > 0 ? prevBills[0].created_at : null
@@ -569,7 +695,7 @@ export default function ElectricBillingPage() {
       }),
     })
     const data = await res.json()
-    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, sent: data.success, folioId, folioBalance: liveBalance, historyLoaded: false, error: data.success ? '' : (data.error || 'Failed to send') }; return u })
+    setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, sent: data.success, folioId, folioBalance: liveBalance, historyLoaded: false, draftId: data.success ? '' : u[index].draftId, error: data.success ? '' : (data.error || 'Failed to send') }; return u })
   }
 
   async function sendAllBills() {
@@ -581,15 +707,37 @@ export default function ElectricBillingPage() {
   }
 
   const readyToSend = campers.filter(c => !c.skip && !c.sent && c.finalAmount).length
+  const draftCount = campers.filter(c => c.draftId && !c.sent).length
 
   if (loading) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Loading seasonal campers...</div>
 
   return (
     <div style={{ padding: '2rem', maxWidth: 1200, margin: '0 auto', fontFamily: 'sans-serif' }}>
-      <div style={{ marginBottom: '1.5rem' }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Electric Billing</h1>
-        <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: 14 }}>Generate and send monthly electric bills to seasonal campers</p>
+      <div style={{ marginBottom: '1.5rem', display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Electric Billing</h1>
+          <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: 14 }}>Generate and send monthly electric bills to seasonal campers</p>
+        </div>
+        {/* THE ENTRY POINT to the meter walk. Here and in the seasonals area rather than as a new
+            permanent sidebar item — PR 4's Seasonal Dashboard hub is its intended home. */}
+        <Link href="/admin/seasonals/meters" style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 44, padding: '0 18px',
+          borderRadius: 9, background: '#2E6B8A', color: '#fff', textDecoration: 'none',
+          fontSize: 14, fontWeight: 600, flexShrink: 0,
+        }}>
+          📱 Read electric meters
+        </Link>
       </div>
+
+      {/* Drafts waiting for review. Deliberately loud and deliberately explicit that nothing has
+          been charged — a walked month that LOOKS billed is the failure this whole status column
+          exists to prevent. */}
+      {draftCount > 0 && (
+        <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '11px 15px', marginBottom: 16, fontSize: 14, color: '#1e3a8a' }}>
+          <strong>{draftCount} reading{draftCount === 1 ? '' : 's'} from a meter walk {draftCount === 1 ? 'is' : 'are'} filled in below for {billingMonth}.</strong>
+          {' '}Nothing has been charged or sent. Check the amounts, then use Bill Electric as usual.
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid #e5e7eb' }}>
         {(['billing', 'history'] as const).map(tab => (
@@ -613,12 +761,20 @@ export default function ElectricBillingPage() {
               </div>
               <div>
                 <label style={lbl}>Rate per kWh ($)</label>
-                <input style={inp} type='number' step='0.01' value={ratePerKwh} onChange={e => setRatePerKwh(e.target.value)} />
+                <input style={inp} type='number' step='0.01' value={ratePerKwh} onChange={e => { setRatePerKwh(e.target.value); setRateSaved('') }} />
               </div>
               <div>
                 <label style={lbl}>Minimum charge ($)</label>
-                <input style={inp} type='number' step='0.01' value={minimumCharge} onChange={e => setMinimumCharge(e.target.value)} />
+                <input style={inp} type='number' step='0.01' value={minimumCharge} onChange={e => { setMinimumCharge(e.target.value); setRateSaved('') }} />
               </div>
+            </div>
+            {/* Saving is what carries the rate to the phone. Without it the walk's live "≈ $"
+                would price at the fallback while this screen priced at whatever was typed here. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+              <button onClick={saveRate} disabled={savingRate} style={{ background: '#fff', color: '#2E6B8A', border: '1px solid #2E6B8A', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', minHeight: 38 }}>
+                {savingRate ? 'Saving…' : 'Save rate for the meter-reading screen'}
+              </button>
+              {rateSaved ? <span style={{ fontSize: 12, fontWeight: 600, color: rateSaved.startsWith('Could not') ? '#b91c1c' : '#15803d' }}>{rateSaved}</span> : null}
             </div>
             <div>
               <label style={lbl}>Custom email message</label>
@@ -641,7 +797,14 @@ export default function ElectricBillingPage() {
                     <div key={row.guest.id} style={{ borderBottom: i < campers.length - 1 ? '1px solid #f3f4f6' : 'none', background: row.skip ? '#f9fafb' : row.sent ? '#f0fdf4' : '#fff' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 60px 100px 100px 60px 90px 100px 110px 80px', gap: 6, padding: '10px 14px', alignItems: 'center' }}>
                         <div>
-                          <div style={{ fontWeight: 600, fontSize: 13, color: row.skip ? '#9ca3af' : '#111827' }}>{row.guest.name}</div>
+                          <div style={{ fontWeight: 600, fontSize: 13, color: row.skip ? '#9ca3af' : '#111827' }}>
+                            {row.guest.name}
+                            {row.draftId && !row.sent ? (
+                              <span style={{ marginLeft: 6, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 999, padding: '1px 7px', fontSize: 10, fontWeight: 700, verticalAlign: 'middle' }}>
+                                DRAFT · not charged
+                              </span>
+                            ) : null}
+                          </div>
                           <div style={{ fontSize: 11, color: '#9ca3af' }}>{row.guest.email || 'No email'}</div>
                         </div>
                         <div style={{ fontSize: 13, fontWeight: 600, color: '#6b7280' }}>{row.guest.site_number}</div>
@@ -664,6 +827,50 @@ export default function ElectricBillingPage() {
                           {row.skip ? 'Skipped' : 'Skip'}
                         </button>
                       </div>
+
+                      {/* ── THE PER-METER LINES ────────────────────────────────────────────
+                          A camper on more than one site has more than one meter, and this is the
+                          whole double-site answer: they appear ONCE, under their own name, with a
+                          reading line per meter and a single summed total. Never two camper rows,
+                          never two bills, never two statements.
+
+                          Each line stays individually visible so the readings can be checked
+                          against the meters. Editing the totals above clears these lines rather
+                          than leaving them describing a bill they no longer describe. */}
+                      {!row.skip && row.meterBreakdown.length > 0 && (
+                        <div style={{ padding: '0 14px 10px' }}>
+                          <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 9, overflow: 'hidden' }}>
+                            <div style={{ padding: '6px 12px', fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b7280', borderBottom: '1px solid #e5e7eb' }}>
+                              {row.meterBreakdown.length > 1
+                                ? `${row.meterBreakdown.length} meters on this camper's sites — one bill, summed`
+                                : 'Meter reading'}
+                            </div>
+                            {row.meterBreakdown.map(line => (
+                              <div key={line.meter_id} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', justifyContent: 'space-between', padding: '7px 12px', borderTop: '1px solid #f3f4f6', fontSize: 12 }}>
+                                <span style={{ fontWeight: 700, color: '#374151', minWidth: 74 }}>Meter {line.meter_number}</span>
+                                <span style={{ color: '#6b7280', fontVariantNumeric: 'tabular-nums' }}>
+                                  {Number(line.previous_reading).toLocaleString()} → {Number(line.current_reading).toLocaleString()}
+                                </span>
+                                <span style={{ fontWeight: 600, color: '#374151', fontVariantNumeric: 'tabular-nums' }}>
+                                  {Number(line.kwh).toLocaleString()} kWh
+                                </span>
+                                {line.is_reset ? (
+                                  <span title={line.replaced_meter_final != null ? `The old meter last read ${Number(line.replaced_meter_final).toLocaleString()}. Power used on it since its previous reading is not included — add it to the amount if you noted it down.` : undefined}
+                                    style={{ background: '#fffbeb', border: '1px solid #f59e0b', color: '#92400e', borderRadius: 999, padding: '1px 8px', fontSize: 11, fontWeight: 700 }}>
+                                    meter replaced
+                                  </span>
+                                ) : null}
+                              </div>
+                            ))}
+                            {row.meterBreakdown.length > 1 && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 12px', borderTop: '1px solid #e5e7eb', background: '#fff', fontSize: 12, fontWeight: 700, color: '#111827' }}>
+                                <span>Total</span>
+                                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{row.kwhUsed.toLocaleString()} kWh</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
 
                       {!row.skip && (
                         <div style={{ padding: '0 14px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -967,7 +1174,8 @@ function GuestAccountCard({ guest, folioBalance }: { guest: Guest; folioBalance:
   async function load() {
     if (loaded) { setOpen(!open); return }
     const [{ data: r }, { data: folio }] = await Promise.all([
-      supabase.from('electric_readings').select('*').eq('guest_id', guest.id).order('created_at', { ascending: false }),
+      // Posted only — `totalBilled` below sums final_amount, and a draft is not billed.
+      supabase.from('electric_readings').select('*').eq('guest_id', guest.id).eq('status', 'posted').order('created_at', { ascending: false }),
       supabase.from('folios').select('id').eq('guest_id', guest.id).eq('folio_type', 'guest_account').single(),
     ])
     let pmts: any[] = []
