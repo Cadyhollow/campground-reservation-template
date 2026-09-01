@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   computeMeterUsage, computeElectricCharge, computeElectricBill,
   rateFromSettings, LEGACY_RATE_PER_KWH, LEGACY_MINIMUM_CHARGE_CENTS,
-  planElectricPost, postSkipLabel, allTimeBilled,
+  planElectricPost, postSkipLabel, allTimeBilled, describeVoid,
   type ElectricRate, type MeterUsage,
 } from './electric-billing.ts'
 
@@ -283,4 +283,61 @@ test('every bill voided reads as zero rather than as the pre-void figure', () =>
     { final_amount: 11998, voided: true },
     { final_amount: 3197, voided: true },
   ]), 0)
+})
+
+
+// ── Marking a voided bill in the billing history ─────────────────────────────────────────────
+//
+// ⚠ THESE TWO FACTS BELONG TOGETHER. allTimeBilled() leaves a voided bill out of the total;
+// describeVoid() is what puts the reason on screen. Ship one without the other and the rows
+// visibly fail to add up to the figure beneath them with nothing explaining why. Each test below
+// therefore checks the marking AND the total on the same data.
+
+const LIVE = { final_amount: 1500, voided: false }
+const VOID = {
+  final_amount: 11998, voided: true,
+  voided_at: '2026-07-08T14:30:00Z', voided_by: 'CC', reason: 'wrong month',
+}
+
+test('⚠ a voided reading is marked, and is not in the total', () => {
+  const note = describeVoid(VOID)
+  assert.ok(note, 'a voided reading must describe itself')
+  assert.equal(note.tag, 'Voided')
+  assert.match(note.detail, /Jul 8, 26/)
+  assert.match(note.detail, /by CC/)
+  assert.match(note.detail, /wrong month/)
+  // ...and the same row is excluded from the figure beneath it.
+  assert.equal(allTimeBilled([LIVE, VOID]), 1500)
+})
+
+test('a live reading is left completely alone', () => {
+  assert.equal(describeVoid(LIVE), null)
+  assert.equal(describeVoid({ final_amount: 1500 }), null)
+  // Nothing is struck through and nothing is excluded.
+  assert.equal(allTimeBilled([LIVE]), 1500)
+})
+
+test('a void with nothing recorded still reads as voided, never as a half-sentence', () => {
+  // Older rows, or a void taken before these columns existed.
+  const bare = describeVoid({ voided: true })
+  assert.equal(bare?.detail, 'Voided')
+  assert.doesNotMatch(bare!.detail, /by\s*$/, 'never a dangling "by"')
+})
+
+test('a partly-recorded void names what it knows and drops what it does not', () => {
+  assert.equal(describeVoid({ voided: true, voided_by: 'CC' })?.detail, 'Voided by CC')
+  assert.equal(describeVoid({ voided: true, reason: 'misread meter' })?.detail, 'Voided · misread meter')
+})
+
+test('an unparseable void date is dropped, not printed as "Invalid Date"', () => {
+  const n = describeVoid({ voided: true, voided_at: 'not a date', voided_by: 'CC' })
+  assert.equal(n?.detail, 'Voided by CC')
+  assert.doesNotMatch(n!.detail, /Invalid/)
+})
+
+test('the rows a camper can see reconcile to the total they are shown', () => {
+  // The whole point, stated once as arithmetic: what is NOT struck through is what adds up.
+  const readings = [LIVE, VOID, { final_amount: 1728 }, { final_amount: 3197, voided: true }]
+  const shownAsLive = readings.filter(r => describeVoid(r) === null)
+  assert.equal(shownAsLive.reduce((s, r) => s + r.final_amount, 0), allTimeBilled(readings))
 })
