@@ -59,6 +59,10 @@ export default function MetersHubPage() {
   const [starting, setStarting] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState('')
+  // Adding a read point that is not a bookable site — see addStandalone().
+  const [newMeterNo, setNewMeterNo] = useState('')
+  const [newMeterLabel, setNewMeterLabel] = useState('')
+  const [addingMeter, setAddingMeter] = useState(false)
 
   // ── FETCH AND APPLY ARE SEPARATE, DELIBERATELY ──────────────────────────────────────────
   //
@@ -161,6 +165,26 @@ export default function MetersHubPage() {
     })
     if (res.ok) load()
     else setErr((await res.json()).error || 'Could not change that meter.')
+  }
+
+  // ⚠ ADDS A METER WITHOUT ADDING A SITE. A `sites` row is bookable inventory; creating one just
+  // to hang a meter on it risks that pitch reappearing in what guests can book. This creates the
+  // meter with no site link at all, which is what the nullable link exists for.
+  async function addStandalone() {
+    if (!newMeterNo.trim()) return
+    setAddingMeter(true); setErr(''); setSyncMsg('')
+    const res = await fetch('/api/meters', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ meter_number: newMeterNo.trim(), label: newMeterLabel.trim() }),
+    })
+    const data = await res.json()
+    setAddingMeter(false)
+    if (!res.ok) { setErr(data.error || 'Could not add that meter.'); return }
+    setSyncMsg(data.already
+      ? `Meter ${newMeterNo.trim()} is already on the list.`
+      : `Added meter ${newMeterNo.trim()}. It will be read like any other; with nobody on that number it is record-only.`)
+    setNewMeterNo(''); setNewMeterLabel('')
+    load()
   }
 
   async function syncFromSites() {
@@ -307,6 +331,31 @@ export default function MetersHubPage() {
             <button onClick={syncFromSites} disabled={syncing} style={ghostBtn}>
               {syncing ? 'Checking…' : 'Add meters for any new sites'}
             </button>
+
+            {/* A meter that is not a bookable site: a bathhouse, a shop, or a pitch taken out of
+                the booking list while it is repaired but still wired and still read. */}
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--line-soft)' }}>
+              <label style={lbl}>Add a meter that isn&rsquo;t a bookable site</label>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <div style={{ flex: '0 1 130px' }}>
+                  <input value={newMeterNo} onChange={e => setNewMeterNo(e.target.value)}
+                    placeholder="Meter number" style={input} />
+                </div>
+                <div style={{ flex: '1 1 200px' }}>
+                  <input value={newMeterLabel} onChange={e => setNewMeterLabel(e.target.value)}
+                    placeholder="What it is (optional) — e.g. Cabin 1, Bathhouse" style={input} />
+                </div>
+                <button onClick={addStandalone} disabled={addingMeter || !newMeterNo.trim()}
+                  style={{ ...ghostBtn, opacity: !newMeterNo.trim() ? 0.5 : 1 }}>
+                  {addingMeter ? 'Adding…' : 'Add meter'}
+                </button>
+              </div>
+              <p style={hint}>
+                It joins the walk in number order and is read like any other. With no seasonal or
+                monthly camper on that number it is <strong>record only</strong> — the reading is kept, nothing is billed.
+                No site is created, so nothing becomes bookable.
+              </p>
+            </div>
             {syncMsg ? <div style={{ fontSize: 13, color: 'var(--good)', fontWeight: 600, marginTop: 8 }}>{syncMsg}</div> : null}
           </div>
 
