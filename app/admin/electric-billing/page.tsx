@@ -2,7 +2,7 @@
 import { allPaymentMethods, methodLabel } from '@/lib/transactions'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 // ⚠ ONE ELECTRIC CALCULATION, SHARED. This page, the meter walk and the draft staging all price a
 // reading through lib/electric-billing.ts. The arithmetic is byte-identical to the expression
@@ -20,7 +20,7 @@ import {
 import {
   ELECTRIC_TOKENS, tokenText, insertAtCursor, unknownTokensIn,
 } from '@/lib/electric-bill-tokens'
-import { planElectricPost, postSkipLabel, allTimeBilled } from '@/lib/electric-billing'
+import { planElectricPost, postSkipLabel, allTimeBilled, describeVoid } from '@/lib/electric-billing'
 
 // Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
 // Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
@@ -51,6 +51,10 @@ type ElectricReading = {
   /** A voided bill is off the camper's balance. The column exists in the schema and is already
    *  filtered when checking whether this month is billed; the history total honours it too. */
   voided?: boolean | null
+  /** Who voided it, when, and why. Recorded at void time; displayed, never recomputed. */
+  voided_by?: string | null
+  voided_at?: string | null
+  reason?: string | null
 }
 
 /**
@@ -1294,15 +1298,31 @@ export default function ElectricBillingPage() {
                                 <tr>{['Month', 'Prev', 'Curr', 'kWh', 'Billed'].map(h => <th key={h}>{h}</th>)}</tr>
                               </thead>
                               <tbody>
-                                {row.readings.map(r => (
-                                  <tr key={r.id}>
-                                    <td>{r.billing_month}</td>
-                                    <td className="tnum">{fmtNum(r.previous_reading)}</td>
-                                    <td className="tnum">{fmtNum(r.current_reading)}</td>
-                                    <td className="tnum">{fmtNum(r.kwh_used)}</td>
-                                    <td className="tnum">{fmtUsd(r.final_amount)}</td>
-                                  </tr>
-                                ))}
+                                {row.readings.map(r => {
+                                  // ⚠ A VOIDED BILL MUST NEVER LOOK LIVE. It is left out of the
+                                  // total below, so an unmarked voided row makes the rows visibly
+                                  // fail to add up with nothing on screen explaining the gap.
+                                  const v = describeVoid(r)
+                                  return (
+                                  <Fragment key={r.id}>
+                                    <tr className={v ? 'voided' : undefined}>
+                                      <td>
+                                        <span className="mo">{r.billing_month}</span>
+                                        {v && <span className="eb-tag void">{v.tag}</span>}
+                                      </td>
+                                      <td className="tnum">{fmtNum(r.previous_reading)}</td>
+                                      <td className="tnum">{fmtNum(r.current_reading)}</td>
+                                      <td className="tnum">{fmtNum(r.kwh_used)}</td>
+                                      <td className="tnum amt">{fmtUsd(r.final_amount)}</td>
+                                    </tr>
+                                    {v && (
+                                      <tr className="eb-voidnote">
+                                        <td colSpan={5}>{v.detail}</td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
+                                  )
+                                })}
                               </tbody>
                               {/* ⚠ RESTORED. The Seasonal redesign dropped this row, which had been
                                   here since the page was built — the only place a camper's all-time
@@ -1311,7 +1331,12 @@ export default function ElectricBillingPage() {
                                   actually been charged. */}
                               <tfoot>
                                 <tr>
-                                  <td colSpan={4}>Total billed (all time)</td>
+                                  <td colSpan={4}>
+                                    Total billed (all time)
+                                    {row.readings.some(r => r.voided) && (
+                                      <span className="eb-foot-note">voided bills excluded</span>
+                                    )}
+                                  </td>
                                   <td className="tnum">{fmtUsd(allTimeBilled(row.readings))}</td>
                                 </tr>
                               </tfoot>
@@ -1632,6 +1657,13 @@ const EB_CSS = `
 .eb-balrow.due{color:var(--watch)}
 .eb-empty{text-align:center;color:var(--muted);padding:3rem 0}
 .eb-table tfoot td{border-bottom:none;border-top:1px solid var(--line);padding-top:9px;font-weight:700;color:var(--forest)}
+/* ── A voided bill, marked. Quiet on purpose: this is a record, not a warning. The strike and
+   the dimming do the work; the tag names it, and the note underneath says who and why. ── */
+.eb-table tr.voided td{opacity:.55;border-bottom:none}
+.eb-table tr.voided .mo,.eb-table tr.voided .amt{text-decoration:line-through}
+.eb-tag.void{margin-left:7px;background:var(--card-2);color:var(--muted);font-weight:600}
+.eb-table tr.eb-voidnote td{padding-top:0;padding-left:10px;font-size:11.5px;color:var(--muted);font-style:italic}
+.eb-foot-note{margin-left:8px;font-size:10.5px;font-weight:600;font-style:italic;color:var(--muted);text-transform:none;letter-spacing:0}
 .eb-gear{font-family:inherit;font-weight:600;font-size:14px;color:var(--ink-soft);background:var(--card);border:1px solid var(--line);border-radius:999px;padding:7px 14px;cursor:pointer;white-space:nowrap}
 .eb-gear:hover{border-color:var(--line-strong);color:var(--forest)}
 
