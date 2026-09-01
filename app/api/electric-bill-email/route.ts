@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { renderElectricMessageFor } from '@/lib/electric-bill-tokens'
 import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
 import { buildLedger, buildStatement } from '@/lib/ledger'
@@ -31,12 +32,32 @@ export async function POST(request: NextRequest) {
       paymentsReceived,
       totalBalance,
       balanceForward,
+      // Additive: the walk knows the usage, and the owner's message can now mention it.
+      // Absent on an older caller, in which case {{kwh}} simply renders empty.
+      kwhUsed,
     } = body
 
     const { data: settings } = await supabase
       .from('settings')
       .select('park_name, park_location, park_email')
       .single()
+
+    // ⚠ THE OWNER'S MESSAGE IS NOW RENDERED, NOT INSERTED RAW.
+    //
+    // It used to go straight into the email with only newlines converted. The billing screen now
+    // offers click-to-insert merge fields for it, and chips without substitution would put a
+    // literal "Hi {{first_name}}," in a camper's bill — so the two ship together.
+    //
+    // ⚠ AN UNKNOWN TOKEN IS LEFT VISIBLE RATHER THAN BLANKED. See renderElectricMessage(): this
+    // input is free text a park may have written long before tokens existed, and silently
+    // deleting a stretch of it would be worse than leaving something odd on screen. A park whose
+    // message contains no braces — which is every park today — gets a byte-identical email.
+    const renderedMessage = renderElectricMessageFor(String(emailMessage ?? ''), {
+      guestName, siteNumber, billingMonth,
+      kwhUsed: typeof kwhUsed === 'number' ? kwhUsed : null,
+      amountCents: typeof electricAmount === 'number' ? electricAmount : null,
+      balanceCents: typeof totalBalance === 'number' ? totalBalance : null,
+    })
 
     const campgroundName = settings?.park_name || 'Our Campground'
     const campgroundLocation = settings?.park_location || ''
@@ -225,7 +246,7 @@ export async function POST(request: NextRequest) {
   </div>
 
   <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
-    <p style="color:#D1D5DB;font-size:15px;margin:0;line-height:1.6;">${emailMessage.replace(/\n/g, "<br>")}</p>
+    <p style="color:#D1D5DB;font-size:15px;margin:0;line-height:1.6;">${renderedMessage.replace(/\n/g, "<br>")}</p>
   </div>
 
 ${statementHtml}

@@ -2,7 +2,7 @@
 import { allPaymentMethods, methodLabel } from '@/lib/transactions'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 // ⚠ ONE ELECTRIC CALCULATION, SHARED. This page, the meter walk and the draft staging all price a
 // reading through lib/electric-billing.ts. The arithmetic is byte-identical to the expression
@@ -13,6 +13,13 @@ import {
   type ElectricRate,
 } from '@/lib/electric-billing'
 import { detectReadingAnomaly } from '@/lib/meters'
+import {
+  cardStatus, primaryLabel, menuFor, tallyCards, matchesFilter, owesBalance,
+  type CardRow, type CardFilter, type MenuActionId,
+} from '@/lib/electric-billing-cards'
+import {
+  ELECTRIC_TOKENS, tokenText, insertAtCursor, unknownTokensIn,
+} from '@/lib/electric-bill-tokens'
 import { planElectricPost, postSkipLabel } from '@/lib/electric-billing'
 
 // Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
@@ -323,6 +330,17 @@ export default function ElectricBillingPage() {
   const [sendingAll, setSendingAll] = useState(false)
   // The bulk action now asks first, and the ask leads with the month (see MonthHeadline).
   const [showSendAllConfirm, setShowSendAllConfirm] = useState(false)
+  // ── Redesign UI state. Presentation only: none of these change what is billed. ──
+  /** Which card's "⋯" menu is open. One at a time, closed on outside click. */
+  const [openMenu, setOpenMenu] = useState<number | null>(null)
+  /** Which card has its inline edit panel open. */
+  const [editing, setEditing] = useState<number | null>(null)
+  /** The gentle filter tabs. A VIEW filter — Send All still walks the whole list. */
+  const [filter, setFilter] = useState<CardFilter>('ready')
+  /** The billing settings (rate, minimum, email message) start folded away. */
+  const [showSettings, setShowSettings] = useState(false)
+  /** The bill-email box, so a clicked merge field lands at the cursor rather than at the end. */
+  const emailBoxRef = useRef<HTMLTextAreaElement | null>(null)
   const [autoPopulating, setAutoPopulating] = useState(false)
 
   const monthOptions = generateMonthOptions()
@@ -598,6 +616,7 @@ export default function ElectricBillingPage() {
         billingMonth, emailMessage, electricAmount,
         newCharges: newLineItems, paymentsReceived: paymentsReceivedAmt,
         totalBalance: liveBalanceResend, balanceForward: balanceForwardResend,
+        kwhUsed: row.kwhUsed,
       }),
     })
     const data = await res.json()
@@ -731,6 +750,7 @@ export default function ElectricBillingPage() {
         billingMonth, emailMessage, electricAmount: finalAmountCents,
         newCharges, paymentsReceived: paymentsReceivedAmount,
         totalBalance: liveBalance, balanceForward,
+        kwhUsed: row.kwhUsed,
       }),
     })
     const data = await res.json()
@@ -770,467 +790,554 @@ export default function ElectricBillingPage() {
   }
   const blockedByAnomaly = (row: CamperRow) => !!anomalyFor(row) && !row.anomalyAcknowledged
 
+  // ── CARD DERIVATIONS ───────────────────────────────────────────────────────────────────────
+  // The card's status and menu come from lib/electric-billing-cards.ts, which is pure and tested.
+  // This adapter is the only place the page's CamperRow meets that module's smaller CardRow.
+  const asCardRow = (row: CamperRow): CardRow => ({
+    sent: row.sent,
+    skip: row.skip,
+    hasEmail: !!row.guest.email,
+    hasRecordedPayment: !!row.lastPaymentRecorded,
+    anomaly: !!anomalyFor(row),
+    anomalyAcknowledged: row.anomalyAcknowledged,
+    meterLines: row.meterBreakdown.length,
+    finalAmount: row.finalAmount,
+    // ⚠ SURFACED, NOT RECOMPUTED. row.folioBalance is what fetchCampers() read off the folio.
+    balanceCents: row.folioBalance,
+  })
+
+  /** Every menu item dispatches to a handler that already existed. Nothing is reimplemented. */
+  function runMenuAction(id: MenuActionId, i: number) {
+    const row = campers[i]
+    setOpenMenu(null)
+    switch (id) {
+      case 'folio-receipt':      router.push(`/admin/folio/guest/${row.guest.id}`); break
+      case 'resend':             resendBill(i); break
+      case 'resend-other-email': setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailMode: true, editEmailValue: row.guest.email }; return u }); break
+      case 'adjust':             setEditing(i); break
+      case 'payment':
+        updatePaymentField(i, 'showPayment', 'true')
+        updatePaymentField(i, 'paymentAmount', (Math.max(0, row.folioBalance) / 100).toFixed(2))
+        break
+      case 'history':            loadHistory(i); break
+      case 'dont-bill':
+      case 'do-bill':            toggleSkip(i); break
+    }
+  }
+
+  /**
+   * Insert a merge field at the cursor. Same pure helper the packet-email editor uses, so both
+   * boxes behave identically under the owner's hands.
+   */
+  function insertEmailToken(key: string) {
+    const el = emailBoxRef.current
+    const at = el ? el.selectionStart ?? emailMessage.length : emailMessage.length
+    const to = el ? el.selectionEnd ?? at : at
+    const { value, cursor } = insertAtCursor(emailMessage, at, to, tokenText(key))
+    setEmailMessage(value)
+    // Put the caret back after what was inserted, so typing continues where it left off.
+    requestAnimationFrame(() => { if (el) { el.focus(); el.setSelectionRange(cursor, cursor) } })
+  }
+  const unknownEmailTokens = unknownTokensIn(emailMessage)
+
+  const counts = tallyCards(campers.map(asCardRow))
+  const visible = campers
+    .map((row, i) => ({ row, i }))
+    .filter(({ row }) => matchesFilter(asCardRow(row), filter))
+  /** The money the ready pile would bill. Display only — Send All computes its own set. */
+  const readyTotalCents = campers
+    .filter(c => !c.skip && !c.sent && c.finalAmount)
+    .reduce((sum, c) => sum + (Math.round(parseFloat(c.finalAmount) * 100) || 0), 0)
+  const fmtUsd = (cents: number) => '$' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const fmtNum = (n: number) => Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 })
+
   const readyToSend = campers.filter(c => !c.skip && !c.sent && c.finalAmount).length
   const draftCount = campers.filter(c => c.draftId && !c.sent).length
-
-  if (loading) return <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>Loading seasonal campers...</div>
+  if (loading) return <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--muted)' }}>Loading seasonal campers…</div>
 
   return (
-    <div style={{ padding: '2rem', maxWidth: 1200, margin: '0 auto', fontFamily: 'sans-serif' }}>
-      <div style={{ marginBottom: '1.5rem', display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start', justifyContent: 'space-between' }}>
-        <div>
-          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Electric Billing</h1>
-          <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: 14 }}>Generate and send monthly electric bills to seasonal campers</p>
+    <div className="eb-wrap" onClick={() => setOpenMenu(null)}>
+      <style>{EB_CSS}</style>
+
+      {/* ── Page head: title + the month this screen is about ─────────────────────────────── */}
+      <div className="eb-pagehead">
+        <h1 className="eb-title">Electric Billing</h1>
+        <div className="eb-monthwrap">
+          <button className="eb-gear" onClick={e => { e.stopPropagation(); setShowSettings(v => !v) }}
+            aria-expanded={showSettings}>⚙ Settings</button>
+          <select className="eb-month" value={billingMonth} onChange={e => handleMonthChange(e.target.value)} disabled={autoPopulating} aria-label="Billing month">
+            {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+          {autoPopulating && <span className="eb-loadingnote">⟳ loading readings…</span>}
         </div>
-        {/* THE ENTRY POINT to the meter walk. Here and in the seasonals area rather than as a new
-            permanent sidebar item — PR 4's Seasonal Dashboard hub is its intended home. */}
-        <Link href="/admin/seasonals/meters" style={{
-          display: 'inline-flex', alignItems: 'center', gap: 8, minHeight: 44, padding: '0 18px',
-          borderRadius: 9, background: '#2E6B8A', color: '#fff', textDecoration: 'none',
-          fontSize: 14, fontWeight: 600, flexShrink: 0,
-        }}>
-          📱 Read electric meters
-        </Link>
       </div>
 
-      {/* Drafts waiting for review. Deliberately loud and deliberately explicit that nothing has
-          been charged — a walked month that LOOKS billed is the failure this whole status column
-          exists to prevent. */}
-      {draftCount > 0 && (
-        <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '11px 15px', marginBottom: 16, fontSize: 14, color: '#1e3a8a' }}>
-          <strong>{draftCount} reading{draftCount === 1 ? '' : 's'} from a meter walk {draftCount === 1 ? 'is' : 'are'} filled in below for {billingMonth}.</strong>
-          {' '}Nothing has been charged or sent. Check the amounts, then use Bill Electric as usual.
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid #e5e7eb' }}>
+      {/* Top-level view switch — the Account History tab the old page had, kept. */}
+      <div className="eb-viewtabs">
         {(['billing', 'history'] as const).map(tab => (
-          <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '10px 20px', fontSize: 14, fontWeight: 600, border: 'none', background: 'none', cursor: 'pointer', borderBottom: activeTab === tab ? '2px solid #2E6B8A' : '2px solid transparent', color: activeTab === tab ? '#2E6B8A' : '#6b7280', marginBottom: -1 }}>
-            {tab === 'billing' ? 'Monthly Billing' : 'Account History'}
+          <button key={tab} onClick={() => setActiveTab(tab)} className={`eb-viewtab${activeTab === tab ? ' on' : ''}`}>
+            {tab === 'billing' ? 'Monthly billing' : 'Account history'}
           </button>
         ))}
       </div>
 
       {activeTab === 'billing' && (
         <>
-          <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '1.5rem', marginBottom: 20 }}>
-            <h3 style={{ margin: '0 0 1rem', fontSize: 15, fontWeight: 700 }}>Billing Settings</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
-              <div>
-                <label style={lbl}>Billing month</label>
-                <select style={inp} value={billingMonth} onChange={e => handleMonthChange(e.target.value)} disabled={autoPopulating}>
-                  {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-                {autoPopulating && <div style={{ fontSize: 11, color: '#2E6B8A', marginTop: 4 }}>⟳ Loading previous readings...</div>}
-              </div>
-              <div>
-                <label style={lbl}>Rate per kWh ($)</label>
-                <input style={inp} type='number' step='0.01' value={ratePerKwh} onChange={e => { setRatePerKwh(e.target.value); setRateSaved('') }} />
-              </div>
-              <div>
-                <label style={lbl}>Minimum charge ($)</label>
-                <input style={inp} type='number' step='0.01' value={minimumCharge} onChange={e => { setMinimumCharge(e.target.value); setRateSaved('') }} />
-              </div>
+          {/* The walk's own reassurance, kept from the old page: a month that LOOKS billed when
+              nothing has been charged is the failure the draft state exists to prevent. */}
+          {draftCount > 0 && (
+            <div className="eb-draftnote">
+              <strong>{draftCount} reading{draftCount === 1 ? '' : 's'} from a meter walk {draftCount === 1 ? 'is' : 'are'} filled in for {billingMonth}.</strong>{' '}
+              Nothing has been charged or sent yet.
             </div>
-            {/* Saving is what carries the rate to the phone. Without it the walk's live "≈ $"
-                would price at the fallback while this screen priced at whatever was typed here. */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-              <button onClick={saveRate} disabled={savingRate} style={{ background: '#fff', color: '#2E6B8A', border: '1px solid #2E6B8A', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', minHeight: 38 }}>
-                {savingRate ? 'Saving…' : 'Save rate for the meter-reading screen'}
-              </button>
-              {rateSaved ? <span style={{ fontSize: 12, fontWeight: 600, color: rateSaved.startsWith('Could not') ? '#b91c1c' : '#15803d' }}>{rateSaved}</span> : null}
-            </div>
+          )}
+
+          {/* ── Summary: reassurance first, then the one bulk action ─────────────────────── */}
+          <div className="eb-summary">
             <div>
-              <label style={lbl}>Custom email message</label>
-              <textarea style={{ ...inp, height: 80, resize: 'vertical' }} value={emailMessage} onChange={e => setEmailMessage(e.target.value)} />
-              <button onClick={saveMessage} style={{ marginTop: 8, background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Save Message</button>
+              <p className="eb-headline">
+                {counts.ready === 0
+                  ? 'Nothing is waiting to be sent.'
+                  : `${counts.ready} reading${counts.ready === 1 ? ' is' : 's are'} ready to send.`}
+              </p>
+              <div className="eb-sub">
+                {counts.billed} already billed this month
+                {counts.attention > 0 && <> · {counts.attention} worth a look before you send</>}
+              </div>
+            </div>
+            <div className="eb-total">
+              <div className="eb-amt tnum">{fmtUsd(readyTotalCents)}</div>
+              <div className="eb-lbl">ready to bill</div>
             </div>
           </div>
 
+          <div className="eb-sendall">
+            <button className="eb-primary" onClick={e => { e.stopPropagation(); setShowSendAllConfirm(true) }}
+              disabled={sendingAll || readyToSend === 0}>
+              {sendingAll ? 'Sending…' : 'Review & send all ready'}
+            </button>
+            <Link className="eb-ghost" href="/admin/seasonals/meters">Read meters</Link>
+          </div>
+
+          {/* The batch confirm, unchanged in behaviour — it still leads with the month. */}
+          {showSendAllConfirm && (
+            <div className="eb-panel" onClick={e => e.stopPropagation()}>
+              <MonthHeadline lead="Billing everyone for" billingMonth={billingMonth} />
+              <div className="eb-paneltext">
+                This creates a <strong>{billingMonth} electric charge</strong> on <strong>{readyToSend} camper account{readyToSend !== 1 ? 's' : ''}</strong> and emails each of them a statement. Campers already billed for this month, and any set to not bill, are left alone.
+              </div>
+              <div className="eb-panelactions">
+                <button className="eb-primary sm" onClick={() => { setShowSendAllConfirm(false); sendAllBills() }}>Yes, bill {billingMonth}</button>
+                <button className="eb-ghost sm" onClick={() => setShowSendAllConfirm(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {/* ── ⚙ SETTINGS DRAWER ─────────────────────────────────────────────────────────
+              The same rate, minimum and bill-email settings the old page carried, and the same
+              save paths — restyled and tucked behind the gear so they stop competing with the
+              month's work. Nothing new is stored. */}
+          {showSettings && (
+            <div className="eb-drawer" onClick={e => e.stopPropagation()}>
+              <div className="eb-dh">
+                <span className="t">Electric settings</span>
+                <button className="x" aria-label="Close settings" onClick={() => setShowSettings(false)}>✕</button>
+              </div>
+              <div className="eb-dnote">Sets how every electric bill is calculated and worded.</div>
+
+              <div className="eb-srow">
+                <div className="eb-field">
+                  <label>Rate per kWh ($)</label>
+                  <input type="number" step="0.01" value={ratePerKwh}
+                    onChange={e => { setRatePerKwh(e.target.value); setRateSaved('') }} />
+                </div>
+                <div className="eb-field">
+                  <label>Minimum charge ($)</label>
+                  <input type="number" step="0.01" value={minimumCharge}
+                    onChange={e => { setMinimumCharge(e.target.value); setRateSaved('') }} />
+                </div>
+                <div className="eb-field">
+                  <label>&nbsp;</label>
+                  <button className="eb-ghost sm" onClick={saveRate} disabled={savingRate}>
+                    {savingRate ? 'Saving…' : 'Save rate'}
+                  </button>
+                </div>
+                {rateSaved ? <span className={`eb-note${rateSaved.startsWith('Could not') ? ' bad' : ' good'}`}>{rateSaved}</span> : null}
+              </div>
+              <div className="eb-dnote sm">
+                The rate and minimum feed the same calculation as before, here and on the
+                meter-reading screen.
+              </div>
+
+              <div className="eb-srow">
+                <div className="eb-field email">
+                  <label>Bill email to the camper</label>
+                  <textarea ref={emailBoxRef} value={emailMessage}
+                    onChange={e => setEmailMessage(e.target.value)} />
+                  {/* ⚠ CLICKING, NOT TYPING. A hand-typed token that this catalog does not know
+                      is left visible rather than blanked (see renderElectricMessage), but a
+                      button cannot misspell in the first place. */}
+                  <div className="eb-chips">
+                    <span className="cl">Insert a field:</span>
+                    {ELECTRIC_TOKENS.map(t => (
+                      <button key={t.key} type="button" className="eb-chip" title={tokenText(t.key)}
+                        onClick={() => insertEmailToken(t.key)}>+ {t.label}</button>
+                    ))}
+                  </div>
+                  {unknownEmailTokens.length > 0 && (
+                    <div className="eb-note bad">
+                      {unknownEmailTokens.map(k => `{{${k}}}`).join(', ')} {unknownEmailTokens.length === 1 ? 'is not a field' : 'are not fields'} this email knows — it will be sent exactly as written.
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="eb-editactions">
+                <button className="eb-primary sm" onClick={saveMessage}>Save message</button>
+                <button className="eb-ghost sm" onClick={() => setShowSettings(false)}>Close</button>
+              </div>
+            </div>
+          )}
+
           {campers.length === 0 ? (
-            <div style={{ textAlign: 'center', color: '#9ca3af', padding: '3rem 0' }}>No seasonal campers found.</div>
+            <div className="eb-empty">No seasonal campers found.</div>
           ) : (
             <>
-              <div style={{ overflowX: 'auto', marginBottom: 20 }}>
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: '#fff', minWidth: 960 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 60px 100px 100px 60px 90px 100px 110px 80px', gap: 6, padding: '10px 14px', background: '#f9fafb', borderBottom: '1px solid #e5e7eb', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#6b7280' }}>
-                    <div>Guest</div><div>Site</div><div>Prev reading</div><div>Curr reading</div><div>kWh</div><div>Calculated</div><div>Final amount</div><div>Balance</div><div>Skip</div>
-                  </div>
+              {/* ── Gentle filter tabs. A VIEW filter only — Send All still walks every row. ── */}
+              <div className="eb-tabs">
+                {([['ready', 'Ready', counts.ready], ['attention', 'Worth a look', counts.attention],
+                   ['billed', 'Billed', counts.billed], ['owing', 'Owes a balance', counts.owing],
+                   ['everyone', 'Everyone', counts.everyone]] as const).map(([id, label, n]) => (
+                  <button key={id} className={`eb-tab${filter === id ? ' active' : ''}`}
+                    onClick={e => { e.stopPropagation(); setFilter(id as CardFilter) }}>
+                    {label} <span className="n tnum">{n}</span>
+                  </button>
+                ))}
+              </div>
 
-                  {campers.map((row, i) => (
-                    <div key={row.guest.id} style={{ borderBottom: i < campers.length - 1 ? '1px solid #f3f4f6' : 'none', background: row.skip ? '#f9fafb' : row.sent ? '#f0fdf4' : '#fff' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 60px 100px 100px 60px 90px 100px 110px 80px', gap: 6, padding: '10px 14px', alignItems: 'center' }}>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: 13, color: row.skip ? '#9ca3af' : '#111827' }}>
-                            {row.guest.name}
+              <div className="eb-cards">
+                {visible.length === 0 && (
+                  <div className="eb-empty">Nothing in this view.</div>
+                )}
+
+                {visible.map(({ row, i }) => {
+                  const cr = asCardRow(row)
+                  const status = cardStatus(cr)
+                  const anomaly = anomalyFor(row)
+                  const blocked = blockedByAnomaly(row)
+                  const sites = (row.guest.site_number || '—').split(',').map(x => x.trim()).filter(Boolean)
+                  const isEditing = editing === i
+                  const lines = row.meterBreakdown
+
+                  return (
+                    <div key={row.guest.id}
+                      className={`eb-card ${status}${isEditing ? ' editing' : ''}${row.skip ? ' skipped' : ''}`}>
+                      <div className="eb-row">
+                        {/* Site tile */}
+                        <div className={`eb-site${sites.length > 1 ? ' dbl' : ''}`}>
+                          <span className="num tnum">{sites.join('·')}</span>
+                          <span className="cap">{sites.length > 1 ? 'sites' : 'site'}</span>
+                        </div>
+
+                        {/* Who + the meter line(s) */}
+                        <div className="eb-who">
+                          <div className="eb-name">{row.guest.name}</div>
+
+                          {lines.length > 0 ? (
+                            <div className={`eb-meter tnum${lines.length > 1 ? ' two' : ''}`} style={isEditing ? { opacity: .55 } : undefined}>
+                              {lines.map(l => (
+                                <span key={l.meter_id}>
+                                  {lines.length > 1 && <span className="mlabel">Meter {l.meter_number}</span>}
+                                  {fmtNum(l.previous_reading)} <span className="arrow">→</span> {fmtNum(l.current_reading)} · <span className="kwh">{fmtNum(l.kwh)} kWh</span>
+                                  {l.is_reset ? <span className="eb-tag warn">meter replaced</span> : null}
+                                </span>
+                              ))}
+                            </div>
+                          ) : status === 'manual' ? (
+                            <div className="eb-meter">Entered by hand · no meter reading</div>
+                          ) : (
+                            <div className={`eb-meter tnum`} style={isEditing ? { opacity: .55 } : undefined}>
+                              {row.previousReading || '—'} <span className="arrow">→</span> {row.currentReading || '—'}
+                              {row.kwhUsed > 0 && <> · <span className="kwh">{fmtNum(row.kwhUsed)} kWh</span></>}
+                            </div>
+                          )}
+
+                          {!isEditing && !row.sent && (
+                            <button className="eb-pencil" onClick={e => { e.stopPropagation(); setEditing(i) }}>✎ edit</button>
+                          )}
+
+                          <div className="eb-tags">
+                            {row.draftId && !row.sent && <span className="eb-tag draft">Draft · not charged</span>}
+                            {lines.length > 1 && <span className="eb-tag">Two meters · summed</span>}
+                            {status === 'manual' && <span className="eb-tag manual">Manual amount</span>}
+                            {row.skip && <span className="eb-tag">Not billing this month</span>}
+                            {row.sent && <span className="eb-tag done">Billed · on their folio</span>}
+                            {row.receiptSent && <span className="eb-tag good">Receipt sent</span>}
+                            {/* ⚠ WHAT THEY OWE, WHICH IS NOT THIS MONTH'S CHARGE. The big number
+                                on the right is what this bill adds; this is what is outstanding on
+                                their folio right now, read straight off it and never recomputed. A
+                                camper can owe nothing this month and still carry a balance. */}
+                            {cr.balanceCents < 0
+                              ? <span className="eb-bal paid">Credit <span className="bd tnum">{fmtUsd(Math.abs(cr.balanceCents))}</span></span>
+                              : owesBalance(cr)
+                                ? <span className="eb-bal owe">Balance <span className="bd tnum">{fmtUsd(cr.balanceCents)}</span></span>
+                                : <span className="eb-bal paid">Paid up</span>}
                           </div>
-                          {/* On its own line and non-wrapping: as an inline badge after the name it
-                              broke mid-phrase ("DRAFT ·" / "not charged"), and half a warning that
-                              nothing has been charged is worse than none. */}
-                          {row.draftId && !row.sent ? (
-                            <div style={{ marginTop: 3 }}>
-                              <span style={{ display: 'inline-block', whiteSpace: 'nowrap', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 999, padding: '1px 7px', fontSize: 10, fontWeight: 700 }}>
-                                DRAFT · not charged
+
+                          {/* The existing anomaly guard, presented kindly rather than as an alarm. */}
+                          {anomaly && !row.anomalyAcknowledged && (
+                            <div className="eb-attn">
+                              <span className="dot">!</span>
+                              <span>{anomaly.message}{' '}
+                                <button className="eb-inlinelink" onClick={e => { e.stopPropagation(); setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], anomalyAcknowledged: true }; return u }) }}>
+                                  I&rsquo;ve checked it
+                                </button>
                               </span>
                             </div>
-                          ) : null}
-                          <div style={{ fontSize: 11, color: '#9ca3af' }}>{row.guest.email || 'No email'}</div>
+                          )}
+
+                          {row.error && <div className="eb-err">{row.error}</div>}
+                          {!row.guest.email && <div className="eb-muted">No email on file</div>}
                         </div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: '#6b7280' }}>{row.guest.site_number}</div>
-                        <input style={{ ...si, opacity: row.skip ? 0.4 : 1 }} type='number' placeholder='0' value={row.previousReading} disabled={row.skip || row.sent} onChange={e => updateReading(i, 'previousReading', e.target.value)} />
-                        <input style={{ ...si, opacity: row.skip ? 0.4 : 1 }} type='number' placeholder='0' value={row.currentReading} disabled={row.skip || row.sent} onChange={e => updateReading(i, 'currentReading', e.target.value)} />
-                        <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>{row.kwhUsed > 0 ? row.kwhUsed.toFixed(1) : '—'}</div>
-                        <div style={{ fontSize: 13, color: '#6b7280' }}>{row.calculatedAmount > 0 ? '$' + (row.calculatedAmount / 100).toFixed(2) : '—'}</div>
-                        <div style={{ position: 'relative' }}>
-                          <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 13 }}>$</span>
-                          <input style={{ ...si, paddingLeft: 20, opacity: row.skip ? 0.4 : 1 }} type='number' step='0.01' placeholder='0.00' value={row.finalAmount} disabled={row.skip || row.sent} onChange={e => updateFinalAmount(i, e.target.value)} />
+
+                        {/* Amount + the one primary action + the ⋯ menu */}
+                        <div className="eb-act">
+                          <div className={`eb-amtwrap${row.sent ? ' dim' : ''}`}>
+                            <div className="eb-big tnum">{row.finalAmount ? '$' + row.finalAmount : '—'}</div>
+                            <div className="eb-foot">
+                              {row.sent ? 'billed'
+                                : isEditing ? 'editing…'
+                                : status === 'manual' ? <>you set this <button className="eb-pencil sm" onClick={e => { e.stopPropagation(); setEditing(i) }}>✎</button></>
+                                : row.kwhUsed > 0 ? `${fmtNum(row.kwhUsed)} × $${rate.ratePerKwh}` : ''}
+                            </div>
+                          </div>
+
+                          {row.sent ? (
+                            <span className="eb-billed"><span className="ck">✓</span> Billed</span>
+                          ) : row.skip ? (
+                            <span className="eb-skipped">Not billing</span>
+                          ) : (
+                            <button
+                              className={`eb-bill${status === 'attention' ? ' gold' : ''}`}
+                              onClick={e => {
+                                e.stopPropagation()
+                                // "Review" opens the editor; "Bill" opens the existing confirm.
+                                if (status === 'attention') { setEditing(i); return }
+                                setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: true }; return u })
+                              }}
+                              disabled={row.sending || !row.finalAmount || (status !== 'attention' && blocked)}>
+                              {row.sending ? 'Billing…' : primaryLabel(status)}
+                            </button>
+                          )}
+
+                          <div className="eb-menuwrap" onClick={e => e.stopPropagation()}>
+                            <button className={`eb-more${openMenu === i ? ' open' : ''}`}
+                              aria-label={`More actions for ${row.guest.name}`} aria-expanded={openMenu === i}
+                              onClick={() => setOpenMenu(openMenu === i ? null : i)}>⋯</button>
+                            {openMenu === i && (
+                              <div className="eb-menu" role="menu">
+                                {menuFor(cr).map(a => (
+                                  <div key={a.id}>
+                                    {a.dividerBefore && <div className="div" />}
+                                    <button role="menuitem" className={a.tone === 'warn' ? 'warn' : undefined}
+                                      onClick={() => runMenuAction(a.id, i)}>
+                                      <span className="mi">{a.icon}</span> {a.label}
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: row.folioBalance > 0 ? '#dc2626' : '#15803d' }}>
-                          {row.folioBalance > 0
-                            ? '$' + (row.folioBalance / 100).toFixed(2)
-                            : row.folioBalance < 0
-                            ? 'Credit $' + (Math.abs(row.folioBalance) / 100).toFixed(2)
-                            : '✓ Current'}
-                        </div>
-                        <button onClick={() => toggleSkip(i)} disabled={row.sent} style={{ fontSize: 11, fontWeight: 600, border: '1px solid', borderColor: row.skip ? '#d1d5db' : '#fca5a5', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', background: row.skip ? '#f3f4f6' : '#fef2f2', color: row.skip ? '#6b7280' : '#dc2626' }}>
-                          {row.skip ? 'Skipped' : 'Skip'}
-                        </button>
                       </div>
 
-                      {/* ── THE PER-METER LINES ────────────────────────────────────────────
-                          A camper on more than one site has more than one meter, and this is the
-                          whole double-site answer: they appear ONCE, under their own name, with a
-                          reading line per meter and a single summed total. Never two camper rows,
-                          never two bills, never two statements.
-
-                          Each line stays individually visible so the readings can be checked
-                          against the meters. Editing the totals above clears these lines rather
-                          than leaving them describing a bill they no longer describe. */}
-                      {!row.skip && row.meterBreakdown.length > 0 && (
-                        <div style={{ padding: '0 14px 10px' }}>
-                          <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 9, overflow: 'hidden' }}>
-                            <div style={{ padding: '6px 12px', fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b7280', borderBottom: '1px solid #e5e7eb' }}>
-                              {row.meterBreakdown.length > 1
-                                ? `${row.meterBreakdown.length} meters on this camper's sites — one bill, summed`
-                                : 'Meter reading'}
+                      {/* ── Inline edit: readings and the amount, exactly as before ────────── */}
+                      {isEditing && (
+                        <div className="eb-editpanel" onClick={e => e.stopPropagation()}>
+                          <div className="eb-eh">{row.sent ? 'Adjust this bill' : 'Edit this bill'}</div>
+                          <div className="eb-fields">
+                            <div className="eb-field">
+                              <label>Previous reading</label>
+                              <input type="number" value={row.previousReading} disabled={row.skip}
+                                onChange={e => updateReading(i, 'previousReading', e.target.value)} />
                             </div>
-                            {row.meterBreakdown.map(line => (
-                              <div key={line.meter_id} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', justifyContent: 'space-between', padding: '7px 12px', borderTop: '1px solid #f3f4f6', fontSize: 12 }}>
-                                <span style={{ fontWeight: 700, color: '#374151', minWidth: 74 }}>Meter {line.meter_number}</span>
-                                <span style={{ color: '#6b7280', fontVariantNumeric: 'tabular-nums' }}>
-                                  {Number(line.previous_reading).toLocaleString()} → {Number(line.current_reading).toLocaleString()}
-                                </span>
-                                <span style={{ fontWeight: 600, color: '#374151', fontVariantNumeric: 'tabular-nums' }}>
-                                  {Number(line.kwh).toLocaleString()} kWh
-                                </span>
-                                {line.is_reset ? (
-                                  <span title={line.replaced_meter_final != null ? `The old meter last read ${Number(line.replaced_meter_final).toLocaleString()}. Power used on it since its previous reading is not included — add it to the amount if you noted it down.` : undefined}
-                                    style={{ background: '#fffbeb', border: '1px solid #f59e0b', color: '#92400e', borderRadius: 999, padding: '1px 8px', fontSize: 11, fontWeight: 700 }}>
-                                    meter replaced
-                                  </span>
-                                ) : null}
-                              </div>
-                            ))}
-                            {row.meterBreakdown.length > 1 && (
-                              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 12px', borderTop: '1px solid #e5e7eb', background: '#fff', fontSize: 12, fontWeight: 700, color: '#111827' }}>
-                                <span>Total</span>
-                                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{row.kwhUsed.toLocaleString()} kWh</span>
-                              </div>
+                            <div className="eb-field">
+                              <label>Current reading</label>
+                              <input type="number" value={row.currentReading} disabled={row.skip}
+                                onChange={e => updateReading(i, 'currentReading', e.target.value)} />
+                            </div>
+                            <div className="eb-live tnum">= {fmtNum(row.kwhUsed)} kWh</div>
+                            <div className="eb-field amt">
+                              <label>Amount due</label>
+                              <input type="number" step="0.01" value={row.finalAmount} disabled={row.skip}
+                                onChange={e => updateFinalAmount(i, e.target.value)} />
+                              <span className="hint">Auto from reading — type to override</span>
+                            </div>
+                          </div>
+                          <div className="eb-editactions">
+                            <button className="eb-primary sm" onClick={() => setEditing(null)}>Done</button>
+                            {row.calculatedAmount > 0 && (
+                              <button className="eb-ghost sm" onClick={() => updateFinalAmount(i, (row.calculatedAmount / 100).toFixed(2))}>
+                                Reset to {fmtUsd(row.calculatedAmount)}
+                              </button>
                             )}
                           </div>
                         </div>
                       )}
 
-                      {/* ── ⚠ THE READING-LOOKS-OFF GUARD ─────────────────────────────────────
-                          Defence in depth for a bill that already happened once: a meter with no
-                          baseline was measured from zero, so 43 kWh of usage staged as 5,803 kWh
-                          — $1,566.81 instead of $15.00. It was a draft and draft-first caught it.
-                          This is the second net. It does not just warn: it WITHHOLDS the one-click
-                          Bill Electric, so a bill of this shape cannot be posted without somebody
-                          deliberately looking at it first. */}
-                      {!row.skip && anomalyFor(row) && (
-                        <div style={{ padding: '0 14px 10px' }}>
-                          <div style={{ background: '#fffbeb', border: '1px solid #f59e0b', borderRadius: 9, padding: '10px 13px', fontSize: 13, color: '#92400e' }}>
-                            <strong>This reading looks off — check it before billing.</strong>
-                            <div style={{ marginTop: 3, lineHeight: 1.5 }}>{anomalyFor(row)!.message}</div>
-                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], anomalyAcknowledged: true }; return u })}
-                              style={{ marginTop: 8, background: '#fff', border: '1px solid #f59e0b', color: '#92400e', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
-                              I&rsquo;ve checked it — let me bill this
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {!row.skip && (
-                        <div style={{ padding: '0 14px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                          {/* Bill Electric — the ONLY charge-creating action; once a month, with confirm */}
-                          {!row.sent ? (
-                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: true }; return u })}
-                              disabled={row.sending || !row.finalAmount || blockedByAnomaly(row)}
-                              style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: (!row.finalAmount || blockedByAnomaly(row)) ? 'default' : 'pointer', opacity: (!row.finalAmount || blockedByAnomaly(row)) ? 0.5 : 1 }}>
-                              {row.sending ? 'Billing...' : '⚡ Bill Electric'}
-                            </button>
-                          ) : (
-                            <span style={{ fontSize: 13, color: '#15803d', fontWeight: 600 }}>✓ Billed</span>
-                          )}
-
-                          {/* Send Statement — always available, emails the live ledger, NEVER creates a charge */}
-                          {!row.editEmailMode ? (
-                            <button onClick={() => resendBill(i)}
-                              disabled={row.sending || !row.guest.email}
-                              style={{ background: '#e8f2f7', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: (row.sending || !row.guest.email) ? 'default' : 'pointer', opacity: (row.sending || !row.guest.email) ? 0.6 : 1 }}>
-                              {row.sending ? 'Sending...' : '✉ Send Statement'}
-                            </button>
-                          ) : (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <input type='email' value={row.editEmailValue}
-                                onChange={e => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailValue: e.target.value }; return u })}
-                                style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '5px 10px', fontSize: 13, width: 200 }}
-                                placeholder='Email address' />
-                              <button onClick={() => resendBill(i, row.editEmailValue)}
-                                style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                                Send
-                              </button>
-                              <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailMode: false }; return u })}
-                                style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 7, padding: '5px 10px', fontSize: 12, color: '#6b7280', cursor: 'pointer' }}>
-                                Cancel
-                              </button>
+                      {/* Send to a corrected address — the old "wrong email?" path. */}
+                      {row.editEmailMode && (
+                        <div className="eb-editpanel" onClick={e => e.stopPropagation()}>
+                          <div className="eb-eh">Send this statement to a different email</div>
+                          <div className="eb-fields">
+                            <div className="eb-field wide">
+                              <label>Email address</label>
+                              <input type="email" value={row.editEmailValue} placeholder="name@example.com"
+                                onChange={e => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailValue: e.target.value }; return u })} />
                             </div>
-                          )}
-
-                          {/* Secondary: send the statement to a corrected address */}
-                          {!row.editEmailMode && (
-                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailMode: true, editEmailValue: row.guest.email }; return u })}
-                              style={{ background: 'none', border: 'none', color: '#9ca3af', fontSize: 12, textDecoration: 'underline', cursor: 'pointer', padding: '0 2px' }}>
-                              wrong email?
-                            </button>
-                          )}
-
-                          {/* Opens on a settled or already-credited account too, so a camper can
-                              pay ahead. It used to require a positive balance, which meant a
-                              prepayment had nowhere to go on this screen. */}
-                          {!row.showPayment && (
-                            <button onClick={() => { updatePaymentField(i, 'showPayment', 'true'); updatePaymentField(i, 'paymentAmount', (Math.max(0, row.folioBalance) / 100).toFixed(2)) }}
-                              style={{ background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                              💵 {row.folioBalance > 0 ? 'Record Payment' : 'Record Payment / Prepay'}
-                            </button>
-                          )}
-
-                          {row.lastPaymentRecorded && !row.receiptSent && !row.showReceiptConfirm && (
-                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showReceiptConfirm: true }; return u })}
-                              style={{ background: '#fffbeb', color: '#92400e', border: '1px solid #fde68a', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                              🧾 Send Receipt
-                            </button>
-                          )}
-                          {row.receiptSent && <span style={{ fontSize: 12, color: '#15803d', fontWeight: 600 }}>✓ Receipt sent!</span>}
-
-                          <button onClick={() => loadHistory(i)}
-                            style={{ background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                            {row.showHistory ? 'Hide History' : '📋 View History'}
-                          </button>
-
-                          {row.error && <span style={{ fontSize: 12, color: '#dc2626' }}>{row.error}</span>}
-                          {!row.guest.email && <span style={{ fontSize: 12, color: '#9ca3af' }}>No email on file</span>}
+                          </div>
+                          <div className="eb-editactions">
+                            <button className="eb-primary sm" onClick={() => resendBill(i, row.editEmailValue)}>Send</button>
+                            <button className="eb-ghost sm" onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], editEmailMode: false }; return u })}>Cancel</button>
+                          </div>
                         </div>
                       )}
 
+                      {/* ── The existing bill confirmation, unchanged ──────────────────────── */}
                       {row.showBillConfirm && (
-                        <div style={{ margin: '0 14px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '14px' }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: '#1e40af', marginBottom: 8 }}>
-                            Bill electric to {row.guest.name}?
-                          </div>
+                        <div className="eb-panel" onClick={e => e.stopPropagation()}>
                           <MonthHeadline lead={'Billing ' + row.guest.name + ' for'} billingMonth={billingMonth} />
-                          <div style={{ fontSize: 13, color: '#1e3a8a', marginBottom: 12 }}>
+                          <div className="eb-paneltext">
                             This creates a <strong>{billingMonth} electric charge of ${row.finalAmount}</strong> on their account and emails their statement to <strong>{row.guest.email}</strong>.
                           </div>
-                          <div style={{ display: 'flex', gap: 10 }}>
-                            <button onClick={() => { setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false }; return u }); sendBill(i) }}
-                              style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                              Yes, Bill Electric
+                          <div className="eb-panelactions">
+                            <button className="eb-primary sm" onClick={() => { setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false }; return u }); sendBill(i) }}>
+                              Yes, bill electric
                             </button>
-                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false }; return u })}
-                              style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600, color: '#6b7280', cursor: 'pointer' }}>
-                              Cancel
-                            </button>
+                            <button className="eb-ghost sm" onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showBillConfirm: false }; return u })}>Cancel</button>
                           </div>
                         </div>
                       )}
 
+                      {/* ── The existing receipt confirmation, unchanged ───────────────────── */}
                       {row.showReceiptConfirm && row.lastPaymentRecorded && (
-                        <div style={{ margin: '0 14px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '14px' }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>Send payment receipt to {row.guest.name}?</div>
-                          <div style={{ fontSize: 13, color: '#78350f', marginBottom: 12 }}>
-                            A receipt for <strong>${(row.lastPaymentRecorded.amount / 100).toFixed(2)}</strong> will be sent to <strong>{row.guest.email}</strong>
+                        <div className="eb-panel warm" onClick={e => e.stopPropagation()}>
+                          <div className="eb-paneltext">
+                            Email a receipt for <strong>{fmtUsd(row.lastPaymentRecorded.amount)}</strong> to <strong>{row.guest.email}</strong>?
                           </div>
-                          <div style={{ display: 'flex', gap: 10 }}>
-                            <button onClick={() => sendReceipt(i)} disabled={row.sendingReceipt}
-                              style={{ background: '#d97706', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                              {row.sendingReceipt ? 'Sending...' : 'Yes, Send Receipt'}
+                          <div className="eb-panelactions">
+                            <button className="eb-primary sm" onClick={() => sendReceipt(i)} disabled={row.sendingReceipt}>
+                              {row.sendingReceipt ? 'Sending…' : 'Yes, send receipt'}
                             </button>
-                            <button onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showReceiptConfirm: false }; return u })}
-                              style={{ background: 'none', border: '1px solid #d1d5db', borderRadius: 7, padding: '7px 14px', fontSize: 13, cursor: 'pointer' }}>
-                              Cancel
-                            </button>
+                            <button className="eb-ghost sm" onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], showReceiptConfirm: false }; return u })}>Cancel</button>
                           </div>
                         </div>
                       )}
 
+                      {/* ── The existing payment panel, unchanged ──────────────────────────── */}
                       {row.showPayment && (
-                        <div style={{ margin: '0 14px 14px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '14px' }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: '#15803d', marginBottom: 10 }}>Record Payment — {row.guest.name}</div>
-                          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                            <div>
-                              <label style={{ ...lbl, marginTop: 0 }}>Amount ($)</label>
-                              <input style={{ ...si, width: 110 }} type='number' step='0.01' value={row.paymentAmount} onChange={e => updatePaymentField(i, 'paymentAmount', e.target.value)} />
+                        <div className="eb-editpanel" onClick={e => e.stopPropagation()}>
+                          <div className="eb-eh">
+                            Take a payment — {row.guest.name}
+                            {row.folioBalance !== 0 && (
+                              <span className={`eb-balance${row.folioBalance < 0 ? ' credit' : ''}`}>
+                                {row.folioBalance < 0
+                                  ? `Credit on account ${fmtUsd(Math.abs(row.folioBalance))}`
+                                  : `Balance due ${fmtUsd(row.folioBalance)}`}
+                              </span>
+                            )}
+                          </div>
+                          <div className="eb-fields">
+                            <div className="eb-field">
+                              <label>Amount ($)</label>
+                              <input type="number" step="0.01" value={row.paymentAmount}
+                                onChange={e => updatePaymentField(i, 'paymentAmount', e.target.value)} />
                             </div>
-                            <div>
-                              <label style={{ ...lbl, marginTop: 0 }}>Method</label>
-                              <select style={{ ...si, width: 120 }} value={row.paymentMethod} onChange={e => updatePaymentField(i, 'paymentMethod', e.target.value)}>
+                            <div className="eb-field">
+                              <label>Method</label>
+                              <select value={row.paymentMethod} onChange={e => updatePaymentField(i, 'paymentMethod', e.target.value)}>
                                 {allPaymentMethods(customMethods).map(m => <option key={m} value={m}>{methodLabel(m)}</option>)}
-                                <option value='other'>Other</option>
+                                <option value="other">Other</option>
                               </select>
-                              {row.paymentMethod === 'card' && (
-                                <div style={{ fontSize: 11, color: '#15803d', marginTop: 4, fontStyle: 'italic' }}>
-                                  → Will open guest folio to charge terminal
-                                </div>
-                              )}
+                              {row.paymentMethod === 'card' && <span className="hint">→ opens the folio to charge the terminal</span>}
                             </div>
-                            <div style={{ flex: 1, minWidth: 120 }}>
-                              <label style={{ ...lbl, marginTop: 0 }}>Note (optional)</label>
-                              <input style={si} placeholder='e.g. Check #1042' value={row.paymentNote} onChange={e => updatePaymentField(i, 'paymentNote', e.target.value)} />
+                            <div className="eb-field wide">
+                              <label>Note (optional)</label>
+                              <input placeholder="e.g. Check #1042" value={row.paymentNote}
+                                onChange={e => updatePaymentField(i, 'paymentNote', e.target.value)} />
                             </div>
-                            <button onClick={() => {
-                              if (row.paymentMethod === 'card') {
-                                window.location.href = `/admin/folio/guest/${row.guest.id}`;
-                              } else {
-                                recordPayment(i);
-                              }
-                            }} disabled={row.savingPayment || !row.paymentAmount}
-                              style={{ background: '#15803d', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer', height: 34 }}>
-                              {row.savingPayment ? 'Saving...' : 'Save Payment'}
+                          </div>
+                          <div className="eb-editactions">
+                            <button className="eb-primary sm" disabled={row.savingPayment || !row.paymentAmount}
+                              onClick={() => {
+                                if (row.paymentMethod === 'card') { router.push(`/admin/folio/guest/${row.guest.id}`) }
+                                else { recordPayment(i) }
+                              }}>
+                              {row.savingPayment ? 'Saving…' : 'Save payment'}
                             </button>
-                            <button onClick={() => updatePaymentField(i, 'showPayment', false as unknown as string)}
-                              style={{ background: 'none', border: '1px solid #d1d5db', borderRadius: 7, padding: '7px 14px', fontSize: 13, cursor: 'pointer', height: 34 }}>
-                              Cancel
-                            </button>
+                            <button className="eb-ghost sm" onClick={() => updatePaymentField(i, 'showPayment', false as unknown as string)}>Cancel</button>
                           </div>
                         </div>
                       )}
 
+                      {/* ── The existing per-camper history, unchanged ─────────────────────── */}
                       {row.showHistory && (
-                        <div style={{ margin: '0 14px 14px', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-                          <div style={{ padding: '10px 14px', fontSize: 12, fontWeight: 700, color: '#374151', background: '#f1f5f9', borderBottom: '1px solid #e5e7eb' }}>
-                            Billing History — {row.guest.name} · Site {row.guest.site_number}
-                          </div>
+                        <div className="eb-history" onClick={e => e.stopPropagation()}>
+                          <div className="eb-eh">Billing history — {row.guest.name}</div>
                           {row.readings.length === 0 ? (
-                            <div style={{ padding: '1rem', fontSize: 13, color: '#9ca3af' }}>No billing history yet.</div>
+                            <div className="eb-muted">No billing history yet.</div>
                           ) : (
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                            <table className="eb-table">
                               <thead>
-                                <tr style={{ background: '#f9fafb' }}>
-                                  {['Month', 'Prev', 'Curr', 'kWh', 'Rate', 'Billed', 'Date'].map(h => (
-                                    <th key={h} style={{ padding: '7px 12px', textAlign: 'left', color: '#6b7280', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid #e5e7eb' }}>{h}</th>
-                                  ))}
-                                </tr>
+                                <tr>{['Month', 'Prev', 'Curr', 'kWh', 'Billed'].map(h => <th key={h}>{h}</th>)}</tr>
                               </thead>
                               <tbody>
-                                {row.readings.map((r, ri) => (
-                                  <tr key={r.id} style={{ borderBottom: ri < row.readings.length - 1 ? '1px solid #f3f4f6' : 'none', background: ri % 2 === 0 ? '#fff' : '#fafafa' }}>
-                                    <td style={{ padding: '8px 12px', fontWeight: 600, color: '#111827' }}>{r.billing_month}</td>
-                                    <td style={{ padding: '8px 12px', color: '#6b7280' }}>{Number(r.previous_reading).toLocaleString()}</td>
-                                    <td style={{ padding: '8px 12px', color: '#6b7280' }}>{Number(r.current_reading).toLocaleString()}</td>
-                                    <td style={{ padding: '8px 12px', color: '#374151', fontWeight: 600 }}>{Number(r.kwh_used).toFixed(1)}</td>
-                                    <td style={{ padding: '8px 12px', color: '#6b7280' }}>${Number(r.rate_per_kwh).toFixed(3)}</td>
-                                    <td style={{ padding: '8px 12px', fontWeight: 700, color: '#15803d' }}>${(r.final_amount / 100).toFixed(2)}</td>
-                                    <td style={{ padding: '8px 12px', color: '#9ca3af' }}>{new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</td>
+                                {row.readings.map(r => (
+                                  <tr key={r.id}>
+                                    <td>{r.billing_month}</td>
+                                    <td className="tnum">{fmtNum(r.previous_reading)}</td>
+                                    <td className="tnum">{fmtNum(r.current_reading)}</td>
+                                    <td className="tnum">{fmtNum(r.kwh_used)}</td>
+                                    <td className="tnum">{fmtUsd(r.final_amount)}</td>
                                   </tr>
                                 ))}
                               </tbody>
-                              <tfoot>
-                                <tr style={{ background: '#f0fdf4', borderTop: '2px solid #bbf7d0' }}>
-                                  <td colSpan={5} style={{ padding: '8px 12px', fontWeight: 700, fontSize: 12, color: '#15803d' }}>Total billed (all time)</td>
-                                  <td style={{ padding: '8px 12px', fontWeight: 800, color: '#15803d' }}>${(row.readings.reduce((s, r) => s + r.final_amount, 0) / 100).toFixed(2)}</td>
-                                  <td />
-                                </tr>
-                              </tfoot>
                             </table>
                           )}
                           {row.folioPayments.length > 0 && (
-                            <div style={{ borderTop: '1px solid #e5e7eb' }}>
-                              <div style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', background: '#f9fafb' }}>Payments received</div>
-                              {row.folioPayments.map((p, pi) => (
-                                <div key={p.id} style={{ borderBottom: pi < row.folioPayments.length - 1 ? '1px solid #f3f4f6' : 'none' }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 14px', fontSize: 12, alignItems: 'center' }}>
-                                    <div>
-                                      <span style={{ fontWeight: 600, color: '#374151', textTransform: 'capitalize' }}>{p.method}</span>
-                                      {p.note && <span style={{ color: '#9ca3af', marginLeft: 8 }}>{p.note}</span>}
-                                      <span style={{ color: '#9ca3af', marginLeft: 8 }}>{new Date(p.paid_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
-                                      {p.receipt_sent_at
-                                        ? <span style={{ marginLeft: 10, fontSize: 11, color: '#15803d' }}>🧾 Receipt sent {new Date(p.receipt_sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
-                                        : <span style={{ marginLeft: 10, fontSize: 11, color: '#9ca3af' }}>No receipt sent</span>
-                                      }
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                      <span style={{ fontWeight: 700, color: '#15803d' }}>-${((p.amount - (p.surcharge_amount || 0)) / 100).toFixed(2)}</span>
-                                      <button
-                                        onClick={() => setCampers(prev => {
-                                          const u = [...prev]
-                                          u[i] = { ...u[i], lastPaymentRecorded: p, showReceiptConfirm: true, receiptSent: false }
-                                          return u
-                                        })}
-                                        style={{ fontSize: 11, background: '#fffbeb', color: '#92400e', border: '1px solid #fde68a', borderRadius: 5, padding: '3px 8px', cursor: 'pointer', fontWeight: 600 }}>
-                                        {p.receipt_sent_at ? '↩ Re-send' : '🧾 Send'}
-                                      </button>
-                                    </div>
-                                  </div>
+                            <>
+                              <div className="eb-eh sub">Payments received</div>
+                              {row.folioPayments.map(pm => (
+                                <div key={pm.id} className="eb-payrow">
+                                  <span>
+                                    <strong>{methodLabel(pm.method)}</strong>
+                                    {pm.note ? <span className="eb-muted"> {pm.note}</span> : null}
+                                    <span className="eb-muted"> {new Date(pm.paid_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
+                                    {pm.receipt_sent_at
+                                      ? <span className="eb-tag good">receipt sent</span>
+                                      : <span className="eb-tag">no receipt</span>}
+                                  </span>
+                                  <span className="eb-payright">
+                                    <span className="tnum">−{fmtUsd(pm.amount - (pm.surcharge_amount || 0))}</span>
+                                    <button className="eb-ghost xs" onClick={() => setCampers(prev => { const u = [...prev]; u[i] = { ...u[i], lastPaymentRecorded: pm, showReceiptConfirm: true, receiptSent: false }; return u })}>
+                                      {pm.receipt_sent_at ? 'Re-send' : 'Send receipt'}
+                                    </button>
+                                  </span>
                                 </div>
                               ))}
-                            </div>
+                            </>
                           )}
-                          {/* Balance due summary */}
-                          <div style={{ padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '2px solid #e5e7eb', background: row.folioBalance < 0 ? '#f0fdf4' : row.folioBalance === 0 ? '#f0fdf4' : '#fef2f2' }}>
-                            <span style={{ fontSize: 13, fontWeight: 700, color: row.folioBalance < 0 ? '#15803d' : row.folioBalance === 0 ? '#15803d' : '#dc2626' }}>
-                              {row.folioBalance < 0 ? 'Credit on Account' : row.folioBalance === 0 ? '✓ Paid in Full' : 'Balance Due'}
-                            </span>
-                            <span style={{ fontSize: 15, fontWeight: 800, color: row.folioBalance < 0 ? '#15803d' : row.folioBalance === 0 ? '#15803d' : '#dc2626' }}>
-                              {row.folioBalance < 0 ? '-$' + (Math.abs(row.folioBalance) / 100).toFixed(2) : '$' + (row.folioBalance / 100).toFixed(2)}
-                            </span>
+                          <div className={`eb-balrow${row.folioBalance > 0 ? ' due' : ''}`}>
+                            <span>{row.folioBalance < 0 ? 'Credit on account' : row.folioBalance === 0 ? 'Paid in full' : 'Balance due'}</span>
+                            <span className="tnum">{fmtUsd(Math.abs(row.folioBalance))}</span>
+                          </div>
+                          <div className="eb-editactions">
+                            <button className="eb-ghost sm" onClick={() => loadHistory(i)}>Hide history</button>
                           </div>
                         </div>
                       )}
                     </div>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 12 }}>
-                {/* The batch used to fire on one click. It now asks, and the ask leads with the
-                    month, because this is the action that can mislabel every camper at once. */}
-                {showSendAllConfirm && (
-                  <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: 16, maxWidth: 520, textAlign: 'left', alignSelf: 'flex-end' }}>
-                    <MonthHeadline lead='Billing everyone for' billingMonth={billingMonth} />
-                    <div style={{ fontSize: 13, color: '#1e3a8a', marginBottom: 12 }}>
-                      This creates a <strong>{billingMonth} electric charge</strong> on <strong>{readyToSend} camper account{readyToSend !== 1 ? 's' : ''}</strong> and emails each of them a statement. Campers already billed for this month, and any marked Skip, are left alone.
-                    </div>
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <button onClick={() => { setShowSendAllConfirm(false); sendAllBills() }}
-                        style={{ background: '#2E6B8A', color: '#fff', border: 'none', borderRadius: 7, padding: '8px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
-                        Yes, Bill {billingMonth}
-                      </button>
-                      <button onClick={() => setShowSendAllConfirm(false)}
-                        style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 7, padding: '8px 16px', fontSize: 13, fontWeight: 600, color: '#6b7280', cursor: 'pointer' }}>
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                )}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16 }}>
-                  <span style={{ fontSize: 14, color: '#6b7280' }}>{readyToSend} bill{readyToSend !== 1 ? 's' : ''} ready to send</span>
-                  <button onClick={() => setShowSendAllConfirm(true)} disabled={sendingAll || readyToSend === 0}
-                    style={{ background: readyToSend > 0 ? '#2E6B8A' : '#d1d5db', color: '#fff', border: 'none', borderRadius: 8, padding: '11px 28px', fontWeight: 700, fontSize: 15, cursor: readyToSend > 0 ? 'pointer' : 'default' }}>
-                    {sendingAll ? 'Sending all...' : 'Send All Bills'}
-                  </button>
-                </div>
+                  )
+                })}
               </div>
             </>
           )}
@@ -1238,21 +1345,16 @@ export default function ElectricBillingPage() {
       )}
 
       {activeTab === 'history' && (
-        <div>
-          {campers.length === 0 ? (
-            <div style={{ textAlign: 'center', color: '#9ca3af', padding: '3rem 0' }}>No seasonal campers found.</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {campers.map((row) => (
-                <GuestAccountCard key={row.guest.id} guest={row.guest} folioBalance={row.folioBalance} />
-              ))}
+        campers.length === 0
+          ? <div className="eb-empty">No seasonal campers found.</div>
+          : <div className="eb-cards">
+              {campers.map(row => <GuestAccountCard key={row.guest.id} guest={row.guest} folioBalance={row.folioBalance} />)}
             </div>
-          )}
-        </div>
       )}
     </div>
   )
 }
+
 
 function GuestAccountCard({ guest, folioBalance }: { guest: Guest; folioBalance: number }) {
   const [readings, setReadings] = useState<any[]>([])
@@ -1360,6 +1462,189 @@ function GuestAccountCard({ guest, folioBalance }: { guest: Guest; folioBalance:
   )
 }
 
-const lbl: React.CSSProperties = { display: 'block', fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 4, marginTop: 8 }
-const inp: React.CSSProperties = { width: '100%', border: '1px solid #d1d5db', borderRadius: 7, padding: '8px 10px', fontSize: 14, boxSizing: 'border-box' }
-const si: React.CSSProperties = { width: '100%', border: '1px solid #d1d5db', borderRadius: 6, padding: '6px 8px', fontSize: 13, boxSizing: 'border-box' }
+
+// ── THE LOOK ─────────────────────────────────────────────────────────────────────────────────
+//
+// Spacing, radii and hierarchy come from the approved mock-up; every COLOUR and FACE comes from
+// the `.seasonal-theme` tokens in globals.css, which app/admin/electric-billing/layout.tsx puts
+// on this page. That split is deliberate: the mock-up is the spec for the shape, the tokens are
+// the single source of truth for the palette, so a later change to the theme carries here for
+// free and there is no second copy of the cream to drift.
+//
+// It is a <style> element rather than inline styles because the design needs three things inline
+// styles cannot express: the ::before status spine, hover/focus states, and the ≤560px reflow.
+// Every selector is prefixed `eb-` so it cannot reach anything else in the admin.
+const EB_CSS = `
+.eb-wrap{max-width:820px;margin:0 auto;padding:28px 20px 80px;font-family:var(--font-manrope),ui-sans-serif,system-ui,sans-serif;color:var(--ink);font-size:15px;line-height:1.5}
+.eb-wrap *{box-sizing:border-box}
+.tnum{font-family:var(--font-jetbrains-mono),ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+
+.eb-pagehead{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.eb-title{font-family:var(--font-newsreader),ui-serif,Georgia,serif;font-weight:500;font-size:30px;letter-spacing:-.01em;color:var(--forest);margin:0}
+.eb-monthwrap{display:flex;align-items:center;gap:10px}
+.eb-month{font-family:inherit;font-weight:600;font-size:14px;color:var(--forest);background:var(--card);border:1px solid var(--line);border-radius:999px;padding:7px 14px;cursor:pointer}
+.eb-month:focus-visible{outline:2px solid var(--forest);outline-offset:2px}
+.eb-loadingnote{font-size:12px;color:var(--muted)}
+
+.eb-viewtabs{display:flex;gap:4px;margin:18px 0 4px;border-bottom:1px solid var(--line)}
+.eb-viewtab{font-family:inherit;font-size:14px;font-weight:600;color:var(--muted);background:none;border:none;border-bottom:2px solid transparent;padding:10px 16px;margin-bottom:-1px;cursor:pointer}
+.eb-viewtab.on{color:var(--forest);border-bottom-color:var(--forest)}
+
+.eb-summary{margin:18px 0 6px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px;display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}
+.eb-headline{font-family:var(--font-newsreader),ui-serif,Georgia,serif;font-size:19px;color:var(--forest);font-weight:500;margin:0 0 3px}
+.eb-sub{color:var(--ink-soft);font-size:13.5px}
+.eb-total{text-align:right}
+.eb-amt{font-size:26px;font-weight:600;color:var(--forest);letter-spacing:-.02em}
+.eb-lbl{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+
+.eb-sendall{margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.eb-primary{appearance:none;border:none;cursor:pointer;font-family:inherit;font-weight:600;font-size:14.5px;background:var(--forest);color:var(--on-forest);border-radius:11px;padding:11px 20px}
+.eb-primary:hover:not(:disabled){background:var(--forest-deep)}
+.eb-primary:disabled{opacity:.45;cursor:default}
+.eb-primary.sm{font-size:13.5px;padding:9px 16px;border-radius:9px}
+.eb-ghost{appearance:none;cursor:pointer;font-family:inherit;font-weight:600;font-size:14px;background:transparent;color:var(--forest);border:1px solid var(--line-strong);border-radius:11px;padding:10px 16px;text-decoration:none;display:inline-flex;align-items:center}
+.eb-ghost:hover:not(:disabled){background:var(--card)}
+.eb-ghost:disabled{opacity:.45;cursor:default}
+.eb-ghost.sm{font-size:13px;padding:8px 14px;border-radius:9px}
+.eb-ghost.xs{font-size:11.5px;padding:4px 9px;border-radius:7px}
+
+.eb-tabs{display:flex;gap:6px;margin:26px 0 12px;flex-wrap:wrap}
+.eb-tab{font-family:inherit;font-size:13.5px;font-weight:600;color:var(--ink-soft);background:transparent;border:1px solid transparent;border-radius:999px;padding:6px 14px;cursor:pointer}
+.eb-tab .n{color:var(--muted);font-weight:600;margin-left:5px;font-size:12.5px}
+.eb-tab.active{background:var(--forest);color:var(--on-forest);border-color:var(--forest)}
+.eb-tab.active .n{color:var(--gold)}
+.eb-tab:not(.active):hover{background:var(--card);border-color:var(--line)}
+
+.eb-cards{display:flex;flex-direction:column;gap:12px}
+.eb-card{position:relative;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px 18px 22px}
+.eb-card::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:4px;border-radius:4px;background:var(--good)}
+.eb-card.billed::before{background:var(--muted)}
+.eb-card.attention::before{background:var(--gold)}
+.eb-card.manual::before{background:var(--line-strong)}
+.eb-card.editing::before{background:var(--forest)}
+.eb-card.editing{outline:2px solid var(--card-2);outline-offset:-2px}
+.eb-card.skipped{opacity:.72}
+.eb-row{display:flex;align-items:flex-start;gap:18px}
+
+.eb-site{flex:0 0 auto;width:56px;height:56px;border-radius:13px;background:var(--card-2);border:1px solid var(--line);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
+.eb-site .num{font-family:var(--font-jetbrains-mono),ui-monospace,monospace;font-weight:600;font-size:19px;color:var(--forest);line-height:1}
+.eb-site.dbl .num{font-size:13px}
+.eb-site .cap{font-size:9.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
+
+.eb-who{flex:1 1 auto;min-width:0}
+.eb-name{font-family:var(--font-newsreader),ui-serif,Georgia,serif;font-size:18px;font-weight:500;color:var(--ink);letter-spacing:-.01em}
+.eb-meter{margin-top:3px;font-size:12.5px;color:var(--ink-soft);letter-spacing:-.01em}
+.eb-meter.two{display:flex;flex-direction:column;gap:2px}
+.eb-meter .mlabel{color:var(--muted);margin-right:6px}
+.eb-meter .arrow{color:var(--muted);margin:0 5px}
+.eb-meter .kwh{color:var(--forest);font-weight:500}
+.eb-pencil{background:none;border:none;cursor:pointer;color:var(--muted);font-size:11px;margin-left:7px;font-family:inherit;padding:2px 4px}
+.eb-pencil:hover{color:var(--gold-ink)}
+.eb-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.eb-tag{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;border-radius:999px;padding:3px 9px;background:var(--card-2);color:var(--ink-soft)}
+.eb-tag.draft{background:var(--draft-bg);color:var(--draft)}
+.eb-tag.done{background:var(--good-bg);color:var(--good)}
+.eb-tag.good{background:var(--good-bg);color:var(--good)}
+.eb-tag.warn{background:var(--watch-bg);color:var(--watch)}
+.eb-tag.manual{background:var(--card-2);color:var(--ink-soft)}
+
+.eb-attn{margin-top:9px;font-size:12.5px;color:var(--gold-ink);display:flex;align-items:flex-start;gap:7px;line-height:1.45}
+.eb-attn .dot{flex:0 0 auto;width:15px;height:15px;margin-top:2px;border-radius:50%;background:var(--watch-bg);color:var(--gold-ink);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700}
+.eb-inlinelink{background:none;border:none;padding:0;font-family:inherit;font-size:12.5px;font-weight:700;color:var(--gold-ink);text-decoration:underline;cursor:pointer}
+.eb-err{margin-top:7px;font-size:12.5px;color:var(--danger);font-weight:600}
+.eb-muted{font-size:12px;color:var(--muted)}
+
+.eb-act{flex:0 0 auto;display:flex;align-items:center;gap:10px}
+.eb-amtwrap{text-align:right;min-width:88px}
+.eb-big{font-size:19px;font-weight:600;color:var(--forest);letter-spacing:-.02em}
+.eb-amtwrap.dim .eb-big{color:var(--muted)}
+.eb-foot{font-size:11px;color:var(--muted);margin-top:1px}
+.eb-bill{appearance:none;border:none;cursor:pointer;font-family:inherit;font-weight:600;font-size:14px;background:var(--forest);color:var(--on-forest);border-radius:10px;padding:10px 16px;white-space:nowrap}
+.eb-bill:hover:not(:disabled){background:var(--forest-deep)}
+.eb-bill:disabled{opacity:.45;cursor:default}
+.eb-bill.gold{background:var(--gold);color:var(--on-watch)}
+.eb-billed{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:14px;color:var(--good);white-space:nowrap}
+.eb-billed .ck{width:19px;height:19px;border-radius:50%;background:var(--good-bg);display:flex;align-items:center;justify-content:center;font-size:12px}
+.eb-skipped{font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap}
+.eb-more{width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:transparent;cursor:pointer;color:var(--muted);font-size:18px;line-height:1;display:flex;align-items:center;justify-content:center}
+.eb-more:hover,.eb-more.open{background:var(--card-2);color:var(--forest);border-color:var(--line-strong)}
+
+.eb-menuwrap{position:relative}
+.eb-menu{position:absolute;right:0;top:40px;z-index:20;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 30px rgba(34,64,45,.14);padding:6px;width:236px;
+  /* ⚠ max-width:none IS LOAD-BEARING. A global \`* { max-width:100% }\` in the app stylesheet
+     clamps an absolutely-positioned child to its containing block — here the 34px "⋯" button —
+     which squeezed every menu item into a four-line column. The global rule is right (it is what
+     keeps pages from scrolling sideways) so it stays; this is the one element that must opt out.
+     The menu opens leftward from the button, well inside the card, so nothing overflows. */
+  max-width:none}
+.eb-menu button{display:flex;width:100%;align-items:center;gap:10px;padding:9px 11px;border:none;background:none;border-radius:8px;font-family:inherit;font-size:13.5px;font-weight:500;color:var(--ink);text-align:left;cursor:pointer;white-space:nowrap}
+.eb-menu button:hover{background:var(--card-2)}
+.eb-menu button.warn{color:var(--danger)}
+.eb-menu .div{height:1px;background:var(--line-soft);margin:5px 8px}
+.eb-menu .mi{width:16px;color:var(--muted);text-align:center;font-size:13px}
+
+.eb-panel{margin:14px 0 2px;background:var(--draft-bg);border:1px solid var(--draft);border-radius:13px;padding:15px 16px}
+.eb-panel.warm{background:var(--watch-bg);border-color:var(--watch)}
+.eb-paneltext{font-size:13px;color:var(--ink);margin-bottom:12px;line-height:1.5}
+.eb-panelactions,.eb-editactions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.eb-editactions{margin-top:14px}
+
+.eb-settings,.eb-editpanel,.eb-history{margin:14px 0 2px;background:var(--card-2);border:1px solid var(--line);border-radius:13px;padding:15px 16px}
+.eb-settings{margin-top:16px}
+.eb-eh{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--forest);margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.eb-eh.sub{margin-top:14px}
+.eb-balance{font-weight:600;text-transform:none;letter-spacing:0;font-size:12px;color:var(--watch)}
+.eb-balance.credit{color:var(--good)}
+.eb-fields{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-end}
+.eb-field{display:flex;flex-direction:column;gap:5px}
+.eb-field.wide{flex:1 1 260px}
+.eb-field label{font-size:11.5px;color:var(--ink-soft);font-weight:600}
+.eb-field input,.eb-field select,.eb-field textarea{font-family:var(--font-jetbrains-mono),ui-monospace,monospace;font-size:15px;font-weight:500;color:var(--forest);background:var(--card);border:1px solid var(--line-strong);border-radius:9px;padding:9px 11px;width:120px}
+.eb-field.wide input,.eb-field textarea{width:100%;font-family:inherit}
+.eb-field textarea{height:76px;resize:vertical;font-size:14px;color:var(--ink)}
+.eb-field select{width:auto;font-family:inherit;font-size:14px}
+.eb-field input:focus-visible,.eb-field select:focus-visible,.eb-field textarea:focus-visible{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(180,132,43,.16)}
+.eb-field .hint{font-size:10.5px;color:var(--muted)}
+.eb-live{font-family:var(--font-jetbrains-mono),ui-monospace,monospace;font-size:13px;color:var(--forest);font-weight:600;padding-bottom:10px}
+.eb-note{font-size:12px;font-weight:600}
+.eb-note.good{color:var(--good)} .eb-note.bad{color:var(--danger)}
+
+.eb-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.eb-table th{text-align:left;color:var(--muted);font-weight:700;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;padding:6px 10px;border-bottom:1px solid var(--line)}
+.eb-table td{padding:7px 10px;border-bottom:1px solid var(--line-soft);color:var(--ink-soft)}
+.eb-payrow{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:7px 0;border-bottom:1px solid var(--line-soft);font-size:12.5px;flex-wrap:wrap}
+.eb-payright{display:flex;align-items:center;gap:10px}
+.eb-balrow{display:flex;justify-content:space-between;padding:10px 0 2px;margin-top:8px;border-top:1px solid var(--line);font-weight:700;font-size:13px;color:var(--good)}
+.eb-balrow.due{color:var(--watch)}
+.eb-empty{text-align:center;color:var(--muted);padding:3rem 0}
+.eb-gear{font-family:inherit;font-weight:600;font-size:14px;color:var(--ink-soft);background:var(--card);border:1px solid var(--line);border-radius:999px;padding:7px 14px;cursor:pointer;white-space:nowrap}
+.eb-gear:hover{border-color:var(--line-strong);color:var(--forest)}
+
+.eb-drawer{margin:16px 0 4px;background:var(--card);border:1px solid var(--gold);border-radius:16px;padding:18px 20px}
+.eb-dh{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.eb-dh .t{font-family:var(--font-newsreader),ui-serif,Georgia,serif;font-size:18px;color:var(--forest);font-weight:500}
+.eb-dh .x{cursor:pointer;color:var(--muted);font-size:18px;border:none;background:none;line-height:1}
+.eb-dnote{font-size:12px;color:var(--muted);margin:0 0 14px}
+.eb-dnote.sm{margin:-6px 0 14px}
+.eb-srow{display:flex;gap:24px;flex-wrap:wrap;margin-bottom:14px;align-items:flex-end}
+.eb-field.email{flex:1 1 100%}
+.eb-field.email textarea{width:100%;min-height:96px;font-family:inherit;font-size:13.5px;color:var(--ink);line-height:1.55;resize:vertical}
+.eb-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center}
+.eb-chips .cl{font-size:11.5px;color:var(--muted);margin-right:2px}
+.eb-chip{font-family:var(--font-jetbrains-mono),ui-monospace,monospace;font-size:11.5px;font-weight:500;color:var(--forest);background:var(--card-2);border:1px solid var(--line);border-radius:7px;padding:3px 8px;cursor:pointer}
+.eb-chip:hover{border-color:var(--gold);color:var(--gold-ink)}
+
+.eb-bal{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;border-radius:999px;padding:3px 9px}
+.eb-bal.owe{background:var(--watch-bg);color:var(--gold-ink)}
+.eb-bal.paid{background:var(--good-bg);color:var(--good)}
+.eb-bal .bd{font-weight:600}
+
+.eb-draftnote{margin:16px 0 0;background:var(--draft-bg);border:1px solid var(--draft);border-radius:12px;padding:11px 15px;font-size:13.5px;color:var(--draft)}
+
+@media (max-width:560px){
+  .eb-row{flex-wrap:wrap}
+  .eb-act{width:100%;justify-content:flex-end;border-top:1px dashed var(--line-soft);padding-top:12px;margin-top:12px}
+  .eb-amtwrap{flex:1 1 auto;text-align:left}
+  .eb-menu{width:212px}
+}
+`
