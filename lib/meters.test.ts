@@ -25,11 +25,38 @@ const seasonal = (id: string, sites: string): MeterCamper =>
 
 // ── WHOSE METER IS THIS ──────────────────────────────────────────────────────────────────────
 
-test('a site meter reads its site number; a common-area meter reads nothing', () => {
+test('every meter reads its own number, linked to a site or not', () => {
   assert.equal(meterSiteKey(m('12'), SITE_NUMBERS), '12')
+  // ⚠ A STANDALONE READ POINT KEEPS ITS NUMBER. Cady reads meters 16, 30, 57 and 62 every cycle
+  // and none has a `sites` row — they are real pitches the park does not currently BOOK.
+  const standalone: Meter = { id: 'm16', meter_number: '16', site_id: null }
+  assert.equal(isSiteMeter(standalone), false, 'not attached to a site')
+  assert.equal(meterSiteKey(standalone, SITE_NUMBERS), '16', 'but still identified by its number')
   const bathhouse: Meter = { id: 'mb', meter_number: 'BH', site_id: null, label: 'Bathhouse' }
-  assert.equal(isSiteMeter(bathhouse), false)
-  assert.equal(meterSiteKey(bathhouse, SITE_NUMBERS), '')
+  assert.equal(meterSiteKey(bathhouse, SITE_NUMBERS), 'bh')
+})
+
+test('⚠ A STANDALONE METER CAN BE CREATED AND READ, and bills whoever is on its number', () => {
+  // The model change. A meter is a READ POINT identified by its number; whether `sites` holds a
+  // row for that number is bookkeeping about BOOKABLE INVENTORY, not about electricity.
+  const standalone: Meter = { id: 'm16', meter_number: '16', site_id: null }
+
+  // Nobody there — the ordinary case for an unbooked pitch — recorded, never billed.
+  assert.deepEqual(resolve(standalone, []), { billable: false, reason: 'no-camper' })
+
+  // ⚠ AND IF A CAMPER IS LATER PLACED THERE, IT BILLS. Under the old rule it returned
+  // 'not-a-site' forever, so that camper would have been read every month and silently never
+  // billed. That is the bug this removes, not a permission it grants.
+  assert.deepEqual(resolve(standalone, [seasonal('g1', '16')]), { billable: true, reason: 'metered' })
+  assert.deepEqual(resolve(standalone, [monthly('g2', '16')]), { billable: true, reason: 'metered' })
+  // The policy still holds on a standalone meter: nightly campers are never billed.
+  assert.deepEqual(resolve(standalone, [transient('g9', '16')]), { billable: false, reason: 'transient' })
+})
+
+test('a standalone meter can carry a note saying what it is (Cady meter 30 is Cabin 1)', () => {
+  const cabin: Meter = { id: 'm30', meter_number: '30', site_id: null, label: 'Cabin 1' }
+  assert.equal(meterSiteKey(cabin, SITE_NUMBERS), '30', 'read under its meter number, not its name')
+  assert.deepEqual(resolve(cabin, []), { billable: false, reason: 'no-camper' })
 })
 
 test('the site row is the authority on the number, so a renumbered site still matches', () => {
@@ -38,10 +65,15 @@ test('the site row is the authority on the number, so a renumbered site still ma
   assert.equal(meterSiteKey(m('12'), renumbered), '12a')
 })
 
-test('a meter whose site was deleted becomes record-only rather than billing a stale number', () => {
+test('a meter whose site was deleted keeps billing whoever is actually on its number', () => {
+  // ⚠ THIS ASSERTION IS THE REVERSE OF WHAT IT WAS, DELIBERATELY. It expected 'not-a-site' — a
+  // meter whose site row had gone was unbillable forever, on the reasoning that a deleted site
+  // cannot have a camper. `guests.site_number` is free text, so it very much can: deleting a site
+  // removes it from BOOKABLE INVENTORY, it does not evict anybody or unplug anything. Losing the
+  // site row must not lose the bill.
   const orphan: Meter = { id: 'm12', meter_number: '12', site_id: null }
   assert.equal(isSiteMeter(orphan), false)
-  assert.equal(resolveBillable(orphan, seasonal('g1', '12')).reason, 'not-a-site')
+  assert.deepEqual(resolveBillable(orphan, seasonal('g1', '12')), { billable: true, reason: 'metered' })
 })
 
 test('a double-site camper is found under BOTH of their site numbers', () => {
@@ -188,18 +220,24 @@ test('⚠ "Always" IS GONE — a surviving TRUE row reads as Auto, not as force-
     'and a real seasonal camper still bills, so no park loses a bill to the migration')
 })
 
-test('a common-area meter is permanently record-only, and no override can force it on', () => {
+test('a common-area meter bills nobody — because nobody is on it, which is self-limiting', () => {
+  // No longer a special case in the code, and it does not need to be: no camper has a site
+  // number of "BH", so the ordinary camper match finds nothing. "Don't bill" stays available as
+  // the explicit control for a meter that must never be charged to anyone.
   const bathhouse: Meter = { id: 'mb', meter_number: 'BH', site_id: null, label: 'Bathhouse' }
-  assert.deepEqual(resolveBillable(bathhouse, null), { billable: false, reason: 'not-a-site' })
-  // Previously an override of `true` billed it. There is no camper on a bathhouse to bill.
+  const { bySite } = campersBySite([seasonal('g1', '12'), monthly('g2', '5')])
   assert.deepEqual(
-    resolveBillable({ ...bathhouse, billable_override: true }, null),
-    { billable: false, reason: 'not-a-site' },
+    resolveBillable(bathhouse, camperForMeter(bathhouse, bySite, SITE_NUMBERS)),
+    { billable: false, reason: 'no-camper' },
+  )
+  assert.deepEqual(
+    resolveBillable({ ...bathhouse, billable_override: false }, null),
+    { billable: false, reason: 'override-off' },
   )
 })
 
 test('every reason has a label, and none of them is empty', () => {
-  for (const reason of ['override-off', 'metered', 'billing-off', 'transient', 'no-camper', 'not-a-site'] as const) {
+  for (const reason of ['override-off', 'metered', 'billing-off', 'transient', 'no-camper'] as const) {
     assert.ok(billableLabel(reason).length > 0, reason)
   }
 })

@@ -53,32 +53,31 @@ export function isMeteredTenure(camper: MeterCamper | null | undefined): boolean
 const norm = (t: unknown): string => (typeof t === 'string' ? t.trim().toLowerCase() : '')
 
 /**
- * Is this a SITE meter — the kind that can bill somebody — or a common-area one?
+ * Is this meter attached to a row in `sites`?
  *
- * `site_id` is the whole test. A bathhouse meter is created with no site and never matches a
- * camper, which is what makes "record only" its permanent, automatic state.
+ * ⚠ THIS IS METADATA, NOT A BILLING GATE — AND IT USED TO BE ONE, WRONGLY. The first version made
+ * a meter with no `site_id` permanently record-only, reasoning that "a site that does not exist
+ * cannot have a camper on it". That is false. `guests.site_number` is FREE TEXT: a camper can sit
+ * on any number a park uses, whether or not `sites` has a row for it.
  *
- * ⚠ A DELETED SITE MAKES ITS METER RECORD-ONLY, and that is the safe direction. The foreign key
- * is ON DELETE SET NULL, so removing a site leaves its meter and its whole reading history intact
- * but unattached. A site that does not exist cannot have a camper on it, so a meter that kept
- * billing from a stale number would be billing nobody — or, worse, whoever later inherits that
- * number. The owner can point it at a site again, or force it on with the override.
+ * A real park proved it. Cady reads meters 1-79 every cycle, but four of those numbers —
+ * 16, 30, 57 and 62 — have no `sites` row: they are real pitches the park does not currently
+ * BOOK (30 is Cabin 1). Under the old rule those meters could not exist on the walk at all, and
+ * had one been created, a camper placed there later would silently never have been billed.
+ *
+ * So the link is now what it always should have been: a convenience. When present it lets a
+ * renumbered site keep its meter matched without anyone retyping the meter number. When absent
+ * the meter simply stands on its own number.
  */
 export function isSiteMeter(meter: Meter): boolean {
   return typeof meter.site_id === 'string' && meter.site_id.length > 0
 }
 
-/**
- * The site number a meter reads, normalised. Empty string for a common-area meter.
- *
- * Meter number IS site number — that decision is the whole reason this feature has no mapping
- * screen. The SITE ROW is nonetheless the authority when it is available: a park that renumbers
- * site 43 to 43A has one meter row pointing at one site, and reading the number through the link
- * keeps the camper match correct without anybody re-typing the meter number.
- */
 export function meterSiteKey(meter: Meter, siteNumberById?: Map<string, string>): string {
-  if (!isSiteMeter(meter)) return ''
-  const fromSite = siteNumberById?.get(meter.site_id as string)
+  // The LINKED SITE'S number wins when there is one, so renumbering a site keeps its meter
+  // matched without anyone editing the meter. Otherwise the meter stands on its own number —
+  // which is the whole point of a standalone read point.
+  const fromSite = isSiteMeter(meter) ? siteNumberById?.get(meter.site_id as string) : undefined
   return norm(fromSite) || norm(meter.meter_number)
 }
 
@@ -185,9 +184,9 @@ export type BillableReason =
   | 'override-off'     // the owner set this meter to "Don't bill"
   | 'metered'          // a seasonal or monthly camper, billed for electric — the ordinary case
   | 'billing-off'      // that camper is here, but electric billing is switched off for them
-  | 'transient'        // somebody is on the site, but nightly — their power is in the rate
-  | 'no-camper'        // nobody on this site
-  | 'not-a-site'       // a common-area meter: no site, so never an automatic bill
+  | 'transient'        // somebody is on this number, but nightly — their power is in the rate
+  | 'no-camper'        // nobody on this number: a standalone read point, a common-area meter,
+                       // or a pitch standing empty. Recorded, never billed.
 
 export function resolveBillable(
   meter: Meter,
@@ -195,7 +194,13 @@ export function resolveBillable(
 ): { billable: boolean; reason: BillableReason } {
   // "Don't bill" wins over everything. NOTE the absence of a `=== true` branch: see the header.
   if (meter.billable_override === false) return { billable: false, reason: 'override-off' }
-  if (!isSiteMeter(meter)) return { billable: false, reason: 'not-a-site' }
+  // ⚠ NO "is this attached to a site" GATE. See isSiteMeter() — it was one, and it was wrong.
+  // A meter bills whoever is standing on its NUMBER; whether `sites` happens to hold a row for
+  // that number is bookkeeping about bookable inventory, not about electricity.
+  //
+  // This is self-limiting rather than permissive: a common-area meter ("Bathhouse", "Shop") bills
+  // nobody because no camper has that site number, and "Don't bill" remains the explicit control
+  // for a meter that must never be charged to anyone.
   if (!camper) return { billable: false, reason: 'no-camper' }
   if (!isMeteredTenure(camper)) return { billable: false, reason: 'transient' }
   if (camper.electric_billing_enabled !== true) return { billable: false, reason: 'billing-off' }
@@ -208,11 +213,10 @@ export function billableLabel(reason: BillableReason): string {
     case 'override-off': return 'Record only — this meter is set to Don\u2019t bill'
     case 'metered':      return 'Bills this camper'
     case 'billing-off':  return 'Record only — electric billing is off for this camper'
-    // Named rather than lumped in with an empty site: somebody IS on the site, and the reason
-    // they are not billed is a policy the reader should be able to see standing at the meter.
+    // Named rather than lumped in with an empty pitch: somebody IS there, and the reason they are
+    // not billed is a policy the reader should be able to see standing at the meter.
     case 'transient':    return 'Record only — nightly camper, power is in their rate'
     case 'no-camper':    return 'Record only \u00b7 kept in history'
-    case 'not-a-site':   return 'Record only \u00b7 kept in history'
   }
 }
 

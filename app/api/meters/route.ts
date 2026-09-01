@@ -58,7 +58,9 @@ export async function PATCH(request: NextRequest) {
   return NextResponse.json({ meter: data })
 }
 
-// Sync from sites: give every site without one a meter, numbered as the site.
+// Two jobs, chosen by the body:
+//   { meter_number, label?, notes? }  -> add ONE standalone meter (no site row, site_id NULL)
+//   {}                                -> sync from sites: give every site without one a meter.
 //
 // ⚠ ADDITIVE ONLY. It never deletes, renumbers or retires a meter — a site removed from the park
 // leaves its meter and its whole reading history in place (unattached, and therefore record-only).
@@ -68,11 +70,42 @@ export async function POST(request: NextRequest) {
   if (denied) return denied
   if (!(await isSummit())) return NextResponse.json({ error: 'Not available on this plan.' }, { status: 403 })
 
+  const body = await request.json().catch(() => ({}))
+  const norm = (t: unknown) => (typeof t === 'string' ? t.trim().toLowerCase() : '')
+
+  // ── ADD ONE STANDALONE METER ───────────────────────────────────────────────────────────────
+  //
+  // ⚠ A METER DOES NOT HAVE TO BE A BOOKABLE SITE. Sync-from-sites (below) covers the ordinary
+  // case, but it can only ever create meters for pitches the park SELLS — and real parks read
+  // meters that are not that: a bathhouse, a shop, a pitch taken out of the booking list while it
+  // is repaired but still wired and still read. Cady reads four such numbers every cycle.
+  //
+  // ⚠ AND IT MUST NOT BE DONE BY CREATING A SITE ROW. A `sites` row is BOOKABLE INVENTORY — add
+  // one to hang a meter off and it can leak back into what guests can book. The meter stands on
+  // its own number with `site_id` NULL instead, which is what the nullable link is for.
+  if (typeof body.meter_number === 'string' && body.meter_number.trim()) {
+    const meterNumber = body.meter_number.trim()
+    const { data: clash } = await svc.from('meters').select('id, meter_number')
+    if ((clash || []).some(m => norm(m.meter_number) === norm(meterNumber))) {
+      // Idempotent by design: asking twice is not an error, it is the same answer.
+      return NextResponse.json({ created: 0, already: true, meter_number: meterNumber })
+    }
+    const { data: made, error } = await svc.from('meters').insert({
+      meter_number: meterNumber,
+      site_id: null,
+      label: typeof body.label === 'string' ? body.label.trim() : '',
+      notes: typeof body.notes === 'string' ? body.notes.trim() : '',
+      active: true,
+      display_order: 0,
+    }).select().single()
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+    return NextResponse.json({ created: 1, meter: made })
+  }
+
   const [{ data: sites }, { data: meters }] = await Promise.all([
     svc.from('sites').select('id, site_number, display_order'),
     svc.from('meters').select('id, meter_number'),
   ])
-  const norm = (t: unknown) => (typeof t === 'string' ? t.trim().toLowerCase() : '')
   const have = new Set((meters || []).map(m => norm(m.meter_number)))
 
   const toCreate: { meter_number: string; site_id: string; label: string; active: boolean; display_order: number }[] = []
