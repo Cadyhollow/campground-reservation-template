@@ -252,7 +252,11 @@ export default function MeterCapture({
             border: '1px solid ' + (current.billable ? 'var(--good)' : 'var(--line)'),
             borderRadius: 999, padding: '5px 13px', fontSize: 13, fontWeight: 600,
           }}>
-            {current.camper ? current.camper.name : 'No seasonal camper'}
+            {/* "No camper", not "No seasonal camper": a monthly or nightly camper on the site is
+                now carried through and NAMED here, with the reason line below saying why they are
+                or are not billed. Saying "no seasonal camper" while somebody is living on the
+                site was the confusing half of the old behaviour. */}
+            {current.camper ? current.camper.name : 'No camper on this site'}
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 5 }}>{current.reasonLabel}</div>
         </div>

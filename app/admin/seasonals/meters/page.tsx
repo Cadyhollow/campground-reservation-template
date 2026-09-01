@@ -184,7 +184,7 @@ export default function MetersHubPage() {
       <h2 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 4px' }}>Electric meter readings</h2>
       <p style={{ color: 'var(--muted)', margin: '8px 0 20px', fontSize: 14, maxWidth: 620, lineHeight: 1.5 }}>
         Walk the park with a phone and enter each meter once. Every reading is kept as a permanent
-        record; the ones on a seasonal camper&rsquo;s site become <strong>draft</strong> electric bills for you to
+        record; the ones on a <strong>seasonal or monthly</strong> camper&rsquo;s site become <strong>draft</strong> electric bills for you to
         review. Nothing is charged to anybody from this screen.
       </p>
 
@@ -299,8 +299,10 @@ export default function MetersHubPage() {
           <div style={{ ...card, marginBottom: 16 }}>
             <h3 style={h3}>The meter list</h3>
             <p style={{ fontSize: 13, color: 'var(--muted)', margin: '0 0 12px', lineHeight: 1.5 }}>
-              One meter per site, numbered the same as the site. A meter bills automatically when its site
-              has a seasonal camper — use <strong>Always</strong> or <strong>Never</strong> only when you need to overrule that.
+              One meter per site, numbered the same as the site. On <strong>Auto</strong> a meter bills
+              whoever is on its site when they are <strong>seasonal or monthly</strong> — nightly campers and
+              empty sites are recorded but never billed, because a nightly camper&rsquo;s power is already in
+              their rate. Use <strong>Don&rsquo;t bill</strong> for a meter that should never be charged to anyone.
             </p>
             <button onClick={syncFromSites} disabled={syncing} style={ghostBtn}>
               {syncing ? 'Checking…' : 'Add meters for any new sites'}
@@ -328,16 +330,37 @@ export default function MetersHubPage() {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                  {([[null, 'Auto'], [true, 'Always'], [false, 'Never']] as const).map(([v, label]) => (
-                    <button key={label} onClick={() => setOverride(m.meter.id, v as boolean | null)}
-                      aria-pressed={m.meter.billable_override === v}
-                      style={{
-                        minHeight: 36, padding: '0 11px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                        border: '1px solid ' + (m.meter.billable_override === v ? 'var(--forest)' : 'var(--line-strong)'),
-                        background: m.meter.billable_override === v ? 'var(--forest)' : 'var(--card)',
-                        color: m.meter.billable_override === v ? 'var(--on-forest)' : 'var(--ink-soft)',
-                      }}>{label}</button>
-                  ))}
+                  {/* ── THE BILLING SETTING ─────────────────────────────────────────────────
+                      Two states, and a group label so the row says what the buttons are FOR. As
+                      three unlabelled buttons this read as an unexplained mode switch; "Auto"
+                      and "Don't bill" sitting next to a bare "Billing:" reads as a sentence.
+
+                      "Always" is gone — see resolveBillable() in lib/meters.ts. A bill is a
+                      charge on a camper's folio, so a meter with nobody on it has nothing to
+                      bill; the button could not do what its name promised. */}
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--muted)', alignSelf: 'center', marginRight: 2 }}>
+                    Billing:
+                  </span>
+                  {([
+                    [null, 'Auto', 'Bills the camper automatically when they\u2019re seasonal or monthly. Transients and empty sites are recorded but not billed.'],
+                    [false, 'Don\u2019t bill', 'Record the reading but never bill this meter (e.g. a work camper with free electric).'],
+                  ] as const).map(([v, label, tip]) => {
+                    // `true` is a removed value; a meter still carrying one reads as Auto here,
+                    // matching what resolveBillable() actually does with it.
+                    const active = (m.meter.billable_override ?? null) !== false
+                      ? v === null
+                      : v === false
+                    return (
+                      <button key={label} onClick={() => setOverride(m.meter.id, v as boolean | null)}
+                        aria-pressed={active} title={tip}
+                        style={{
+                          minHeight: 36, padding: '0 11px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                          border: '1px solid ' + (active ? 'var(--forest)' : 'var(--line-strong)'),
+                          background: active ? 'var(--forest)' : 'var(--card)',
+                          color: active ? 'var(--on-forest)' : 'var(--ink-soft)',
+                        }}>{label}</button>
+                    )
+                  })}
                   <a href={`/admin/seasonals/meters/single/${m.meter.id}`} style={{ ...ghostLink, minHeight: 36, display: 'inline-flex', alignItems: 'center' }}>Read now</a>
                   <button onClick={() => setActive(m.meter.id, false)} style={{ ...ghostBtn, minHeight: 36, padding: '0 11px', fontSize: 12 }}>Retire</button>
                 </div>

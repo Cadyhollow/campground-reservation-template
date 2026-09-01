@@ -367,6 +367,108 @@ test('forcing a meter OFF stops it billing, and withdraws its draft', { skip }, 
   assert.equal(after2.data!.length, 1, 'automatic billing resumes')
 })
 
+// ── THE BILLING SETTING: TWO STATES, AND WHO AUTO COVERS ─────────────────────────────────────
+//
+// The park's policy, over HTTP: electric is billed to SEASONAL and MONTHLY campers, never to
+// nightly ones (their power is in the nightly rate), never to empty sites.
+
+test('Auto bills a MONTHLY camper, not only a seasonal one', { skip }, async () => {
+  const { meters } = await (await api('/api/meters')).json()
+  const monthly = meters.find((m: { camper: { is_monthly?: boolean } | null; reason: string }) =>
+    m.reason === 'metered' && m.camper)
+  assert.ok(monthly, 'the tenant has at least one billable meter')
+
+  // Find one whose camper is monthly rather than seasonal.
+  const { data: monthlyGuests } = await svc!.from('guests')
+    .select('id, site_number').eq('is_monthly', true).eq('electric_billing_enabled', true)
+  if (!monthlyGuests?.length) return // covered exhaustively in lib/meters.test.ts
+
+  const sites = new Set(monthlyGuests.map(g => String(g.site_number).trim().toLowerCase()))
+  const m = meters.find((x: { meter: { meter_number: string } }) =>
+    sites.has(x.meter.meter_number.trim().toLowerCase()))
+  assert.ok(m, 'the monthly camper sits on a metered site')
+  assert.equal(m.billable, true, 'a monthly camper is billed exactly like a seasonal one')
+  assert.equal(m.reason, 'metered')
+})
+
+test('⚠ Auto NEVER bills a NIGHTLY guest, even one flagged for electric billing', { skip }, async () => {
+  // THE REACHABLE NARROWING. The old rule was `electric_billing_enabled === true` with no tenure
+  // test at all, so a nightly guest carrying that flag — a mis-toggle on the Guests screen — was
+  // billed. Tenure is checked first now, and they are refused and NAMED.
+  const { data: flagged } = await svc!.from('guests')
+    .select('site_number').eq('is_seasonal', false).eq('is_monthly', false)
+    .eq('electric_billing_enabled', true)
+    .not('site_number', 'is', null).neq('site_number', '')
+  if (!flagged?.length) return
+
+  const { meters } = await (await api('/api/meters')).json()
+  const sites = new Set(flagged.map(g => String(g.site_number).trim().toLowerCase()))
+  const hit = meters.filter((x: { meter: { meter_number: string } }) =>
+    sites.has(x.meter.meter_number.trim().toLowerCase()))
+  assert.ok(hit.length, 'the flagged nightly guest sits on a metered site')
+
+  for (const m of hit) {
+    assert.equal(m.billable, false, `meter ${m.meter.meter_number} must not bill a nightly guest`)
+    assert.equal(m.reason, 'transient')
+    assert.ok(m.camper, 'and they are NAMED, so the reader can see why it is not billing')
+  }
+})
+
+test('an UNFLAGGED nightly guest is not treated as the occupant at all', { skip }, async () => {
+  // ⚠ THE COUNTERPART, AND IT IS DELIBERATE. `guests.site_number` is not live occupancy for a
+  // nightly guest — it is a leftover from their last reservation, and on the live park 65 of 66
+  // non-long-stay guests carry one. Matching on it would name somebody long departed as the
+  // occupant of a seasonal camper's meter. So such a meter reads "no camper": recorded, never
+  // billed, and honest about not knowing who is standing there.
+  const { data: unflagged } = await svc!.from('guests')
+    .select('site_number').eq('is_seasonal', false).eq('is_monthly', false)
+    .eq('electric_billing_enabled', false)
+    .not('site_number', 'is', null).neq('site_number', '')
+  if (!unflagged?.length) return
+
+  const { meters } = await (await api('/api/meters')).json()
+  const sites = new Set(unflagged.map(g => String(g.site_number).trim().toLowerCase()))
+  const hit = meters.filter((x: { meter: { meter_number: string }; camper: unknown }) =>
+    sites.has(x.meter.meter_number.trim().toLowerCase()) && x.camper === null)
+  for (const m of hit) {
+    assert.equal(m.billable, false)
+    assert.equal(m.reason, 'no-camper', 'recorded, not billed, and not falsely attributed')
+  }
+})
+
+test('a nightly reading is recorded, and produces no bill and no orphan charge', { skip }, async () => {
+  const { meters } = await (await api('/api/meters')).json()
+  const m = meters.find((x: { reason: string }) => x.reason === 'transient')
+    || meters.find((x: { reason: string }) => x.reason === 'no-camper')
+  assert.ok(m, 'the tenant has a meter that bills nobody')
+
+  const res = await api('/api/meter-readings', {
+    method: 'POST',
+    body: JSON.stringify({ meter_id: m.meter.id, session_id: sessionId, reading_value: 4242 }),
+  })
+  assert.equal(res.status, 200)
+  assert.equal((await res.json()).billable, false)
+
+  const { data: row } = await svc!.from('meter_readings')
+    .select('billable, guest_id').eq('session_id', sessionId).eq('meter_id', m.meter.id).single()
+  assert.equal(row!.billable, false, 'recorded')
+  assert.equal(row!.guest_id, null, 'and attached to nobody, so no bill can hang off it')
+})
+
+test('⚠ THE API REFUSES "Always" — the removed value cannot be written back', { skip }, async () => {
+  const { meters } = await (await api('/api/meters')).json()
+  const id = meters[0].meter.id
+  const res = await api('/api/meters', {
+    method: 'PATCH', body: JSON.stringify({ id, billable_override: true }),
+  })
+  assert.equal(res.status, 400, 'refused, rather than quietly mapped to something else')
+  const { error } = await res.json()
+  assert.match(error, /Auto|Don/, 'and the refusal says what the two states are')
+
+  const { data: after } = await svc!.from('meters').select('billable_override').eq('id', id).single()
+  assert.notEqual(after!.billable_override, true, 'nothing was written')
+})
+
 // ── THE LINE A WALK MUST NOT CROSS ───────────────────────────────────────────────────────────
 
 test('⚠ A WALK NEVER OVERWRITES A BILL THAT HAS ALREADY BEEN POSTED', { skip }, async () => {

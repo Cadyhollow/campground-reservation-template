@@ -34,13 +34,17 @@ export async function PATCH(request: NextRequest) {
   if (!id) return NextResponse.json({ error: 'A meter id is required.' }, { status: 400 })
 
   const patch: Record<string, unknown> = {}
-  // ⚠ THREE-VALUED, and the three values must survive the round trip. `null` is "decide from
-  // occupancy" and is the normal setting for almost every meter — collapsing it to false here
-  // would silently stop a park billing anybody.
+  // ⚠ TWO STATES NOW: null = Auto, false = "Don't bill". `true` (the removed "Always") is
+  // REFUSED rather than quietly mapped to null — a request carrying it is either an old client or
+  // a mistake, and both are worth telling the caller about instead of silently doing something
+  // else. resolveBillable() separately treats any surviving `true` row as Auto, so a stale value
+  // cannot resurrect the removed behaviour; this is the half that stops new ones being written.
   if ('billable_override' in body) {
     const v = body.billable_override
-    if (v !== null && typeof v !== 'boolean') {
-      return NextResponse.json({ error: 'billable_override must be true, false or null.' }, { status: 400 })
+    if (v !== null && v !== false) {
+      return NextResponse.json({
+        error: 'billable_override must be null (Auto) or false (Don\u2019t bill). "Always" was removed: a bill is a charge on a camper\u2019s folio, so a meter with nobody on it has nothing to bill.',
+      }, { status: 400 })
     }
     patch.billable_override = v
   }

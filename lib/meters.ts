@@ -29,8 +29,25 @@ export type MeterCamper = {
   name: string
   site_number?: string | null
   is_seasonal?: boolean | null
+  /** Monthly / long-term. Metered and billed exactly like a seasonal — see isMeteredTenure(). */
+  is_monthly?: boolean | null
   electric_billing_enabled?: boolean | null
   email?: string | null
+}
+
+/**
+ * Is this camper the kind the park meters at all?
+ *
+ * THE PARK'S POLICY, in one function: electric is billed to SEASONAL and MONTHLY/long-term
+ * campers. A nightly camper's power is already inside their nightly rate, so metering them and
+ * billing them again would charge twice for the same electricity.
+ *
+ * `is_seasonal` and `is_monthly` are the two tenure flags the Guests screen sets (it treats them
+ * as mutually exclusive) and the Reports screen already pairs them the same way —
+ * `.or('is_seasonal.eq.true,is_monthly.eq.true')`. This is that pair, named once.
+ */
+export function isMeteredTenure(camper: MeterCamper | null | undefined): boolean {
+  return camper?.is_seasonal === true || camper?.is_monthly === true
 }
 
 const norm = (t: unknown): string => (typeof t === 'string' ? t.trim().toLowerCase() : '')
@@ -84,7 +101,20 @@ export function campersBySite(campers: MeterCamper[] | null | undefined): {
 } {
   const bySite = new Map<string, MeterCamper>()
   const clashes = new Map<string, MeterCamper[]>()
-  for (const c of campers || []) {
+  // ⚠ SORTED BEFORE INDEXING, so "the first one wins" is a STABLE answer rather than whatever
+  // order the database happened to return. Without this, two campers on one site resolve
+  // differently between page loads, and "who is billed for this meter" is not a question the
+  // software should answer differently each time you ask it.
+  //
+  // The tiebreak itself (by id) is arbitrary and deliberately so — there is no principled reason
+  // to prefer either camper, which is exactly why the collision is REPORTED rather than resolved.
+  // Stability is the property worth having; correctness here belongs to whoever fixes the site
+  // numbers on the Guests screen.
+  //
+  // This became reachable when monthly campers joined the walk: before, an unflagged monthly
+  // camper was filtered out and could not collide with anybody.
+  const ordered = [...(campers || [])].sort((a, b) => String(a.id).localeCompare(String(b.id)))
+  for (const c of ordered) {
     for (const site of splitSiteNumbers(c.site_number)) {
       const existing = bySite.get(site)
       if (!existing) { bySite.set(site, c); continue }
@@ -113,35 +143,49 @@ export function camperForMeter(
 /**
  * Why a meter does or does not feed a bill.
  *
- * ── THE RULE, AND THE ONE JUDGEMENT CALL IN IT ───────────────────────────────────────────────
+ * ── THE CONTROL IS TWO STATES, NOT THREE ─────────────────────────────────────────────────────
  *
- * The decision was "a meter bills when its site currently has a seasonal camper, and a manual
- * override wins when set". Implementing "has a seasonal camper" needs a column, and there are two
- * candidates on `guests` that mean subtly different things:
+ * It was Auto / Always / Never. "Always" is gone, and its removal is the point rather than a
+ * tidy-up: it read as "always bill", but a bill is a charge on a CAMPER'S FOLIO, so a meter with
+ * nobody on it has nothing to bill and no amount of forcing changes that. It only ever looked
+ * useful because Auto appeared to check seasonal alone — so a monthly camper seemed to need
+ * forcing. That was the real gap, and widening Auto is the fix; "Always" was papering over it.
  *
- *   is_seasonal               — this person is a seasonal camper
- *   electric_billing_enabled  — this person is billed for electric
+ * ⚠ `billable_override === true` IS TREATED AS AUTO, deliberately, rather than as force-on. The
+ * migration rewrites any surviving `true` to NULL, and the API refuses to write a new one — but
+ * a value that has been removed from a product must not be able to resurrect a removed behaviour
+ * from an old row, a restored backup, or a park whose migration has not run yet.
  *
- * The Electric Billing page populates itself from `electric_billing_enabled` and nothing else. So
- * a draft staged against a camper who is `is_seasonal` but NOT `electric_billing_enabled` would
- * be written to a screen that never lists them — an invisible bill, which is worse than no bill.
+ * ── WHAT AUTO NOW CHECKS ─────────────────────────────────────────────────────────────────────
  *
- * So the gate is `electric_billing_enabled`: a draft is only ever staged for a camper the owner
- * will actually see it on. But a seasonal camper with electric billing switched OFF is not
- * silently treated as an empty site either — that combination is reported as its own reason
- * ('billing-off'), and the walk screen says so on the meter. An owner who meant to bill them can
- * see why they are not being billed, on the spot, instead of discovering a missing bill later.
+ *   1. "Don't bill" on the meter wins over everything. That is the deliberate opt-out — a work
+ *      camper with free electric, a meter feeding something the park pays for.
+ *   2. A common-area meter (no site) can never bill anybody.
+ *   3. An empty site bills nobody. Recorded, not an error.
+ *   4. TENURE: the camper must be SEASONAL OR MONTHLY. This is the widening. A nightly camper's
+ *      power is inside their nightly rate, so billing a meter on them charges twice.
+ *   5. Their electric billing must be switched on.
  *
- * ⚠ AN OVERRIDE WINS OVER ALL OF IT, in both directions — that is what "manual override" means.
- * Forcing a meter ON with nobody on the site is allowed and reported as such; the reading is
- * captured and the draft has no camper to attach to, which the caller surfaces rather than
- * guessing at a recipient.
+ * ── ⚠ WHY STEP 5 IS STILL REQUIRED, AND WHAT IT COSTS ────────────────────────────────────────
+ *
+ * `guests.electric_billing_enabled` is what the Electric Billing page populates itself from, and
+ * from nothing else. A draft staged against a camper who lacks it would be written to a screen
+ * that never lists them — an invisible bill, which is worse than no bill.
+ *
+ * The cost is that the column is `NOT NULL DEFAULT false`, so "switched off on purpose" and
+ * "nobody ever set it" are the same value. A monthly camper nobody has flagged therefore does not
+ * bill. That is the safe direction (a missing draft is visible on the walk; an invisible one is
+ * not), and the walk now NAMES them with 'billing-off' instead of showing "No seasonal camper",
+ * so the fix is one toggle away and discoverable from the field.
+ *
+ * On the live park this costs nothing today: all 49 seasonal and both monthly campers already
+ * have it on, and no transient does. Checked 2026-09-01.
  */
 export type BillableReason =
-  | 'override-on'      // the owner forced it on
-  | 'override-off'     // the owner forced it off
-  | 'seasonal'         // a camper on the site, billed for electric — the ordinary billable case
-  | 'billing-off'      // a seasonal camper is here, but electric billing is switched off for them
+  | 'override-off'     // the owner set this meter to "Don't bill"
+  | 'metered'          // a seasonal or monthly camper, billed for electric — the ordinary case
+  | 'billing-off'      // that camper is here, but electric billing is switched off for them
+  | 'transient'        // somebody is on the site, but nightly — their power is in the rate
   | 'no-camper'        // nobody on this site
   | 'not-a-site'       // a common-area meter: no site, so never an automatic bill
 
@@ -149,25 +193,26 @@ export function resolveBillable(
   meter: Meter,
   camper: MeterCamper | null
 ): { billable: boolean; reason: BillableReason } {
-  const override = meter.billable_override
-  if (override === true) return { billable: true, reason: 'override-on' }
-  if (override === false) return { billable: false, reason: 'override-off' }
+  // "Don't bill" wins over everything. NOTE the absence of a `=== true` branch: see the header.
+  if (meter.billable_override === false) return { billable: false, reason: 'override-off' }
   if (!isSiteMeter(meter)) return { billable: false, reason: 'not-a-site' }
   if (!camper) return { billable: false, reason: 'no-camper' }
-  if (camper.electric_billing_enabled === true) return { billable: true, reason: 'seasonal' }
-  if (camper.is_seasonal === true) return { billable: false, reason: 'billing-off' }
-  return { billable: false, reason: 'no-camper' }
+  if (!isMeteredTenure(camper)) return { billable: false, reason: 'transient' }
+  if (camper.electric_billing_enabled !== true) return { billable: false, reason: 'billing-off' }
+  return { billable: true, reason: 'metered' }
 }
 
 /** What the walk screen says under the meter number. Short, because it sits on a phone. */
 export function billableLabel(reason: BillableReason): string {
   switch (reason) {
-    case 'override-on':  return 'Billed — set on by hand'
-    case 'override-off': return 'Record only — set off by hand'
-    case 'seasonal':     return 'Bills this camper'
+    case 'override-off': return 'Record only — this meter is set to Don\u2019t bill'
+    case 'metered':      return 'Bills this camper'
     case 'billing-off':  return 'Record only — electric billing is off for this camper'
-    case 'no-camper':    return 'Record only · kept in history'
-    case 'not-a-site':   return 'Record only · kept in history'
+    // Named rather than lumped in with an empty site: somebody IS on the site, and the reason
+    // they are not billed is a policy the reader should be able to see standing at the meter.
+    case 'transient':    return 'Record only — nightly camper, power is in their rate'
+    case 'no-camper':    return 'Record only \u00b7 kept in history'
+    case 'not-a-site':   return 'Record only \u00b7 kept in history'
   }
 }
 

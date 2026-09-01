@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  isSiteMeter, meterSiteKey, campersBySite, camperForMeter, resolveBillable,
-  meterWalkOrder, buildDraftBills,
+  isSiteMeter, meterSiteKey, campersBySite, camperForMeter, resolveBillable, isMeteredTenure,
+  meterWalkOrder, buildDraftBills, billableLabel,
   type Meter, type MeterCamper, type ReadingRow,
 } from './meters.ts'
 import type { ElectricRate } from './electric-billing.ts'
@@ -62,10 +62,23 @@ test('the messy ways a second site gets typed all read the same', () => {
 
 test('two campers on one site is REPORTED, not silently resolved to whichever came first', () => {
   const { bySite, conflicts } = campersBySite([seasonal('g1', '12'), seasonal('g2', '12')])
-  assert.equal(bySite.get('12')?.id, 'g1', 'the first still wins, so the walk is usable')
+  assert.equal(bySite.get('12')?.id, 'g1', 'one still wins, so the walk is usable')
   assert.equal(conflicts.length, 1)
   assert.equal(conflicts[0].siteNumber, '12')
   assert.deepEqual(conflicts[0].campers.map(c => c.id), ['g1', 'g2'])
+})
+
+test('⚠ a contested site resolves the SAME WAY whatever order the rows arrive in', () => {
+  // Reachable now that monthly campers join the walk — an unflagged monthly camper used to be
+  // filtered out and could not collide. "Who is billed for this meter" must not change between
+  // page loads because PostgREST returned the rows the other way round.
+  const a = campersBySite([seasonal('g1', '12'), monthly('g2', '12')])
+  const b = campersBySite([monthly('g2', '12'), seasonal('g1', '12')])
+  assert.equal(a.bySite.get('12')?.id, b.bySite.get('12')?.id)
+  assert.deepEqual(
+    a.conflicts[0].campers.map(c => c.id).sort(),
+    b.conflicts[0].campers.map(c => c.id).sort(),
+  )
 })
 
 test('a camper listing the same site twice is not a conflict with themselves', () => {
@@ -74,54 +87,121 @@ test('a camper listing the same site twice is not a conflict with themselves', (
 })
 
 // ── DOES IT BILL ─────────────────────────────────────────────────────────────────────────────
+//
+// THE PARK'S POLICY, which these tests are the executable copy of:
+//   electric is billed to SEASONAL and MONTHLY campers, never to nightly ones (their power is
+//   already inside their nightly rate), never to empty sites.
+//
+// The control is two states — Auto and "Don't bill". "Always" was removed: a bill is a charge on
+// a camper's folio, so a meter with nobody on it has nothing to bill.
 
-test('a meter with a seasonal camper on its site bills, automatically', () => {
-  const { bySite } = campersBySite([seasonal('g1', '12')])
-  const r = resolveBillable(m('12'), camperForMeter(m('12'), bySite, SITE_NUMBERS))
-  assert.deepEqual(r, { billable: true, reason: 'seasonal' })
+const monthly = (id: string, sites: string): MeterCamper =>
+  ({ id, name: id, site_number: sites, is_monthly: true, electric_billing_enabled: true })
+const transient = (id: string, sites: string): MeterCamper =>
+  ({ id, name: id, site_number: sites, is_seasonal: false, is_monthly: false, electric_billing_enabled: false })
+
+/** Resolve a meter against a set of campers, the way the walk does. */
+function resolve(meter: Meter, campers: MeterCamper[]) {
+  const { bySite } = campersBySite(campers)
+  return resolveBillable(meter, camperForMeter(meter, bySite, SITE_NUMBERS))
+}
+
+test('CASE 1 — Auto + seasonal camper: bills, as it always has', () => {
+  assert.deepEqual(resolve(m('12'), [seasonal('g1', '12')]), { billable: true, reason: 'metered' })
 })
 
-test('an empty site is record-only, and that is not an error', () => {
-  const { bySite } = campersBySite([])
-  const r = resolveBillable(m('12'), camperForMeter(m('12'), bySite, SITE_NUMBERS))
+test('CASE 2 — Auto + MONTHLY camper: bills. This is the widening.', () => {
+  // The change this refinement exists for. `is_monthly` was not read anywhere in the meter code:
+  // a monthly camper who had not also been flagged for electric billing was dropped from the
+  // walk entirely, and the meter reported "No seasonal camper" while somebody lived on the site.
+  assert.deepEqual(resolve(m('12'), [monthly('g1', '12')]), { billable: true, reason: 'metered' })
+})
+
+test('a monthly camper is metered tenure exactly as a seasonal one is', () => {
+  assert.equal(isMeteredTenure(monthly('g1', '12')), true)
+  assert.equal(isMeteredTenure(seasonal('g1', '12')), true)
+  assert.equal(isMeteredTenure(transient('g1', '12')), false)
+  assert.equal(isMeteredTenure(null), false)
+})
+
+test('CASE 3 — Auto + transient camper: recorded, NEVER billed', () => {
+  // A nightly camper's power is already inside their nightly rate. Billing the meter as well
+  // charges them twice for the same electricity.
+  const r = resolve(m('12'), [transient('g9', '12')])
+  assert.deepEqual(r, { billable: false, reason: 'transient' })
+  assert.match(billableLabel(r.reason), /nightly camper/, 'and the walk says WHY, at the meter')
+})
+
+test('a transient flagged for electric billing STILL does not bill', () => {
+  // ⚠ A NARROWING, and a deliberate one. The old rule was `electric_billing_enabled === true`
+  // alone, with no tenure test at all — so a nightly camper carrying that flag would have been
+  // billed, against the park's policy. Tenure is now checked first.
+  const flagged: MeterCamper = { id: 'g9', name: 'g9', site_number: '12', is_seasonal: false, is_monthly: false, electric_billing_enabled: true }
+  assert.deepEqual(resolve(m('12'), [flagged]), { billable: false, reason: 'transient' })
+})
+
+test('CASE 4 — Auto + empty site: recorded, no bill, no camper to attach a charge to', () => {
+  const r = resolve(m('12'), [])
   assert.deepEqual(r, { billable: false, reason: 'no-camper' })
+  // The orphan-charge guarantee is structural: buildDraftBills() drops any reading with no
+  // guest_id, so an unbilled meter cannot produce a bill with nobody on it.
+  assert.deepEqual(
+    buildDraftBills([{ meter_id: 'm12', previous_value: 100, reading_value: 200, guest_id: null }], metersById, RATE),
+    [], 'no bill, and no error',
+  )
 })
 
-test('a common-area meter is permanently record-only', () => {
+test('CASE 5 — Auto + camper with electric billing switched off: named, not billed (Barnes)', () => {
+  const off: MeterCamper = { id: 'g1', name: 'g1', site_number: '12', is_seasonal: true, electric_billing_enabled: false }
+  assert.deepEqual(resolve(m('12'), [off]), { billable: false, reason: 'billing-off' })
+})
+
+test('a MONTHLY camper with electric billing switched off is named the same way', () => {
+  // ⚠ THE COST OF REQUIRING THE FLAG, pinned so it is a decision rather than a surprise.
+  // `electric_billing_enabled` is NOT NULL DEFAULT false, so "switched off on purpose" and
+  // "nobody ever set it" are the same value — and the flag has to be required, because the
+  // Electric Billing page populates from it alone and a draft for a camper it never lists would
+  // be an invisible bill. So an unflagged monthly camper does not bill; the walk NAMES them and
+  // says why, which puts the fix one toggle away instead of leaving a silent gap.
+  const off: MeterCamper = { id: 'g2', name: 'g2', site_number: '12', is_monthly: true, electric_billing_enabled: false }
+  const r = resolve(m('12'), [off])
+  assert.deepEqual(r, { billable: false, reason: 'billing-off' })
+  assert.match(billableLabel(r.reason), /electric billing is off/)
+})
+
+test("CASE 6 — Don't bill: never bills, whoever is on the site", () => {
+  const dontBill = m('12', { billable_override: false })
+  for (const who of [[seasonal('g1', '12')], [monthly('g2', '12')], [transient('g9', '12')], []]) {
+    assert.deepEqual(resolve(dontBill, who), { billable: false, reason: 'override-off' })
+  }
+})
+
+test('⚠ "Always" IS GONE — a surviving TRUE row reads as Auto, not as force-on', () => {
+  // A removed value must not resurrect removed behaviour from an old row, a restored backup, or
+  // a park whose migration has not run. TRUE now falls through to the ordinary Auto rules.
+  const stale = m('12', { billable_override: true })
+  assert.deepEqual(resolve(stale, []), { billable: false, reason: 'no-camper' },
+    'forced ON with nobody there no longer claims to bill anybody')
+  assert.deepEqual(resolve(stale, [transient('g9', '12')]), { billable: false, reason: 'transient' },
+    'nor a nightly camper')
+  assert.deepEqual(resolve(stale, [seasonal('g1', '12')]), { billable: true, reason: 'metered' },
+    'and a real seasonal camper still bills, so no park loses a bill to the migration')
+})
+
+test('a common-area meter is permanently record-only, and no override can force it on', () => {
   const bathhouse: Meter = { id: 'mb', meter_number: 'BH', site_id: null, label: 'Bathhouse' }
   assert.deepEqual(resolveBillable(bathhouse, null), { billable: false, reason: 'not-a-site' })
+  // Previously an override of `true` billed it. There is no camper on a bathhouse to bill.
+  assert.deepEqual(
+    resolveBillable({ ...bathhouse, billable_override: true }, null),
+    { billable: false, reason: 'not-a-site' },
+  )
 })
 
-test('the manual override wins in BOTH directions', () => {
-  const { bySite } = campersBySite([seasonal('g1', '12')])
-  const camper = camperForMeter(m('12'), bySite, SITE_NUMBERS)
-  // Forced off, despite a seasonal camper sitting on it.
-  assert.deepEqual(resolveBillable(m('12', { billable_override: false }), camper),
-    { billable: false, reason: 'override-off' })
-  // Forced on, with nobody there at all.
-  assert.deepEqual(resolveBillable(m('99', { site_id: 's99', billable_override: true }), null),
-    { billable: true, reason: 'override-on' })
-})
-
-test('an override on a common-area meter still wins — that is how a bathhouse gets billed', () => {
-  const bathhouse: Meter = { id: 'mb', meter_number: 'BH', site_id: null, label: 'Bathhouse', billable_override: true }
-  assert.equal(resolveBillable(bathhouse, null).billable, true)
-})
-
-test('a seasonal camper with electric billing switched OFF is named, not silently ignored', () => {
-  // The distinction that matters: 'billing-off' tells the owner WHY no bill is coming, on the
-  // meter, in the field. Collapsing it into 'no-camper' would hide a misconfiguration until a
-  // bill went missing at the end of the month.
-  const off: MeterCamper = { id: 'g1', name: 'g1', site_number: '12', is_seasonal: true, electric_billing_enabled: false }
-  const { bySite } = campersBySite([off])
-  const r = resolveBillable(m('12'), camperForMeter(m('12'), bySite, SITE_NUMBERS))
-  assert.deepEqual(r, { billable: false, reason: 'billing-off' })
-})
-
-test('a non-seasonal guest parked on a site does not create a bill', () => {
-  const transient: MeterCamper = { id: 'g9', name: 'g9', site_number: '12', is_seasonal: false, electric_billing_enabled: false }
-  const { bySite } = campersBySite([transient])
-  assert.equal(resolveBillable(m('12'), camperForMeter(m('12'), bySite, SITE_NUMBERS)).billable, false)
+test('every reason has a label, and none of them is empty', () => {
+  for (const reason of ['override-off', 'metered', 'billing-off', 'transient', 'no-camper', 'not-a-site'] as const) {
+    assert.ok(billableLabel(reason).length > 0, reason)
+  }
 })
 
 // ── THE ORDER OF THE WALK ────────────────────────────────────────────────────────────────────

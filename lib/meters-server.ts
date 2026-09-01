@@ -57,18 +57,42 @@ export async function loadMeterContext(sessionId: string | null): Promise<{
   const [{ data: meterRows }, { data: siteRows }, { data: guestRows }] = await Promise.all([
     svc.from('meters').select('*').eq('active', true),
     svc.from('sites').select('id, site_number'),
-    svc.from('guests').select('id, name, email, site_number, is_seasonal, electric_billing_enabled'),
+    svc.from('guests').select('id, name, email, site_number, is_seasonal, is_monthly, electric_billing_enabled'),
   ])
 
   const meters = meterWalkOrder((meterRows || []) as Meter[])
   const siteNumberById = new Map<string, string>()
   for (const s of siteRows || []) siteNumberById.set(s.id, s.site_number)
 
-  // Only campers who are actually resident matter for billing. A guest row with a blank site
-  // number cannot occupy a meter and is skipped rather than matched to the empty string.
+  // Only campers who are actually resident matter. A guest row with a blank site number cannot
+  // occupy a meter and is skipped rather than matched to the empty string.
+  //
+  // ⚠ THE TENURE FLAGS ARE THE FILTER NOW — `is_monthly` INCLUDED. It used to be
+  // `is_seasonal || electric_billing_enabled`, which dropped a monthly camper who had not been
+  // flagged for electric billing. Dropped meant the meter reported "No seasonal camper" while
+  // somebody was living on the site — the reader could see no reason for it and nothing to fix.
+  // They are now carried through and resolve to 'billing-off', which names them and says why.
+  //
+  // `electric_billing_enabled` stays in the OR so a camper flagged for electric billing is never
+  // silently dropped from the walk on a park that records tenure differently; resolveBillable()
+  // still decides whether they actually bill — and for a NIGHTLY guest carrying that flag by
+  // mistake, it now refuses. That is the reachable half of the transient rule.
+  //
+  // ⚠ NIGHTLY GUESTS ARE DELIBERATELY *NOT* INDEXED BY `site_number`, AND THIS MUST NOT BE
+  // "FIXED" LATER. It looks like an omission — a nightly camper is on a site, so why not match
+  // them? Because `guests.site_number` is not live occupancy for them: it is a leftover from
+  // whatever reservation last touched the row. On the live park, 65 of 66 non-long-stay guests
+  // carry one (checked 2026-09-01), most of them long departed, many of them holding the number
+  // of a site a seasonal camper lives on today.
+  //
+  // Matching on it would name a guest from a past stay as the current occupant of somebody's
+  // meter, and — because two campers on one site is a conflict — could flip which camper a meter
+  // bills. A meter over an unflagged nightly camper therefore reads "no camper", which is
+  // recorded and never billed: the right OUTCOME, reached without pretending to know who is
+  // standing there. Live nightly occupancy lives in `reservations`, not here.
   const campers = ((guestRows || []) as MeterCamper[])
     .filter(g => typeof g.site_number === 'string' && g.site_number.trim() !== '')
-    .filter(g => g.is_seasonal === true || g.electric_billing_enabled === true)
+    .filter(g => g.is_seasonal === true || g.is_monthly === true || g.electric_billing_enabled === true)
   const { bySite, conflicts } = campersBySite(campers)
 
   const meterIds = meters.map(m => m.id)
