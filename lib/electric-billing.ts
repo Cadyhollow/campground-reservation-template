@@ -162,3 +162,73 @@ export function rateFromSettings(settings: {
       typeof rawMin === 'number' && Number.isFinite(rawMin) ? Math.round(rawMin) : LEGACY_MINIMUM_CHARGE_CENTS,
   }
 }
+
+
+// ── POSTING MUST CONSUME ITS DRAFT ───────────────────────────────────────────────────────────
+//
+// ⚠ WRITTEN AFTER A LIVE INCIDENT. A park posted its September run — 49 correct bills — and was
+// left with 47 orphaned DRAFT rows for the same month. Nothing had been charged twice, because a
+// draft carries no folio line item, but every one of those drafts was still postable: reopening
+// the month and pressing Send All would have billed those campers a second time, some of them
+// from readings the owner had already corrected at posting.
+//
+// TWO CAUSES, AND THE SECOND IS THE ONE WORTH REMEMBERING.
+//
+//   1. The post path created a NEW posted row and left the draft alone.
+//   2. On that park the cleanup that was supposed to remove the draft was
+//        await supabase.from('electric_readings').delete()…
+//      with no check on the result. `authenticated` holds no DELETE privilege on that table, so
+//      PostgREST returned success having deleted NOTHING, every time, for a whole billing run.
+//      A write whose result is never inspected is not a write; it is a wish.
+//
+// So the fix is not "delete harder". It is that posting CONSUMES the draft — the draft row is
+// promoted in place, draft -> posted — plus a guard that refuses to post a second bill for a
+// camper who already has one for that month, so a stray leftover can never become money.
+
+/** What posting should do for one camper this month. */
+export type ElectricPostPlan =
+  | { action: 'skip'; reason: 'already-posted' | 'no-amount' | 'skipped-by-owner' }
+  | { action: 'post'; consumesDraftId: string | null }
+
+/**
+ * Decide whether this camper may be billed for this month, and which draft the bill consumes.
+ *
+ * ⚠ `alreadyPostedThisMonth` IS THE DOUBLE-BILL GUARD, and it is deliberately independent of the
+ * screen's own `sent` flag. `sent` is React state: it is true for a bill posted in THIS browser
+ * session and false after a reload. A camper billed yesterday, or billed on another machine, or
+ * billed before an orphaned draft was left behind, looks unsent to the page and would be billed
+ * again. This asks the database instead.
+ *
+ * `consumesDraftId` is what makes the orphan impossible rather than merely unlikely: the caller
+ * promotes THAT row to posted instead of inserting a new one, so there is no second row left to
+ * post later. When it is null there was no draft — a bill typed in by hand — and the caller
+ * inserts, which is the pre-existing behaviour.
+ */
+export function planElectricPost(opts: {
+  /** A non-voided POSTED electric row already exists for this camper and billing month. */
+  alreadyPostedThisMonth: boolean
+  /** The owner pressed Skip on this row. */
+  skipped?: boolean
+  /** The draft this bill was staged from, if a meter walk staged one. */
+  draftId?: string | null
+  /** What is about to be charged, in cents. */
+  finalAmountCents: number
+}): ElectricPostPlan {
+  if (opts.skipped) return { action: 'skip', reason: 'skipped-by-owner' }
+  // The guard comes before the amount check on purpose: "they have already been billed" is a more
+  // useful thing to tell somebody than "this row has no amount".
+  if (opts.alreadyPostedThisMonth) return { action: 'skip', reason: 'already-posted' }
+  if (!Number.isFinite(opts.finalAmountCents) || opts.finalAmountCents <= 0) {
+    return { action: 'skip', reason: 'no-amount' }
+  }
+  return { action: 'post', consumesDraftId: opts.draftId || null }
+}
+
+/** Plain-English reason, for the row that explains why it was passed over. */
+export function postSkipLabel(reason: 'already-posted' | 'no-amount' | 'skipped-by-owner'): string {
+  switch (reason) {
+    case 'already-posted':   return 'Already billed for this month — not billed again.'
+    case 'no-amount':        return 'Enter meter readings first.'
+    case 'skipped-by-owner': return 'Skipped.'
+  }
+}

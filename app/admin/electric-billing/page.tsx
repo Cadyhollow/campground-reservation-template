@@ -13,6 +13,7 @@ import {
   type ElectricRate,
 } from '@/lib/electric-billing'
 import { detectReadingAnomaly } from '@/lib/meters'
+import { planElectricPost, postSkipLabel } from '@/lib/electric-billing'
 
 // Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
 // Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
@@ -608,7 +609,24 @@ export default function ElectricBillingPage() {
     if (row.skip || row.sent) return
     if (!row.guest.email) { setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], error: 'No email on file' }; return u }); return }
     const finalAmountCents = Math.round(parseFloat(row.finalAmount) * 100) || row.calculatedAmount
-    if (!finalAmountCents) { setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], error: 'Enter meter readings first' }; return u }); return }
+
+    // ⚠ THE DOUBLE-BILL GUARD. Asks the DATABASE whether this camper already has a posted bill
+    // for this month, rather than trusting the screen's `sent` flag — `sent` is React state and
+    // is false after a reload, so a camper billed yesterday, or on another machine, or left
+    // behind as an orphaned draft, looks unbilled to this page.
+    const { data: alreadyPosted } = await supabase.from('electric_readings')
+      .select('id').eq('guest_id', row.guest.id).eq('billing_month', billingMonth)
+      .eq('status', 'posted').eq('voided', false).limit(1)
+    const plan = planElectricPost({
+      alreadyPostedThisMonth: (alreadyPosted?.length || 0) > 0,
+      skipped: row.skip,
+      draftId: row.draftId,
+      finalAmountCents,
+    })
+    if (plan.action === 'skip') {
+      setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, error: postSkipLabel(plan.reason) }; return u })
+      return
+    }
     setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: true, error: '' }; return u })
 
     let folioId = row.folioId
@@ -642,8 +660,22 @@ export default function ElectricBillingPage() {
       folio_line_item_id: lineItem?.id || null,
       status: 'posted',
     }
-    if (row.draftId) {
-      await supabase.from('electric_readings').update(readingRow).eq('id', row.draftId).eq('status', 'draft')
+    // ⚠ POSTING CONSUMES THE DRAFT — it is PROMOTED in place, draft -> posted, not copied.
+    // Inserting a new posted row and leaving the draft behind is what stranded 47 postable
+    // orphans on a live park after a correct billing run.
+    //
+    // ⚠ AND THE RESULT IS CHECKED. `.select()` makes PostgREST return the affected rows; an
+    // empty array means the promotion did not happen (a missing grant, a row already posted by
+    // someone else, RLS) and we must NOT silently continue as though it had — falling back to an
+    // insert here is what turns a blocked write into a duplicate. That exact silence, on a
+    // delete whose result nobody read, is how the orphans were created.
+    if (plan.consumesDraftId) {
+      const { data: promoted } = await supabase.from('electric_readings')
+        .update(readingRow).eq('id', plan.consumesDraftId).eq('status', 'draft').select('id')
+      if (!promoted || promoted.length === 0) {
+        setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], sending: false, error: 'Could not convert the draft into a bill — nothing was billed. Reload and try again.' }; return u })
+        return
+      }
     } else {
       await supabase.from('electric_readings').insert(readingRow)
     }
@@ -707,6 +739,10 @@ export default function ElectricBillingPage() {
 
   async function sendAllBills() {
     setSendingAll(true)
+    // ⚠ EVERY ROW STILL GOES THROUGH sendBill(), WHICH ASKS THE DATABASE FIRST. The `sent` check
+    // here is only a cheap skip for rows billed in this session; the guard that actually prevents
+    // a second bill lives in sendBill() and cannot be bypassed from here. Bulk posting is exactly
+    // where a stray leftover draft would otherwise become 47 duplicate charges in one click.
     for (let i = 0; i < campers.length; i++) {
       if (!campers[i].skip && !campers[i].sent) await sendBill(i)
     }
