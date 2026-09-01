@@ -261,6 +261,16 @@ export default function SeasonalCamperPage() {
   const hasAddress = !!(g.home_street && g.home_city && g.home_state && g.home_zip)
   const roster: Occupant[] = Array.isArray(g.party) ? (g.party as Occupant[]) : []
   const selectedSeason = seasons.find(s => s.id === seasonId) || null
+
+  // THIS CAMPER'S CONTRACT FOR THE SEASON ON SCREEN. Defined once because two controls use it —
+  // the header button and the Seasons-section link — and they must not be able to drift apart.
+  //
+  // The season is carried so the destination opens the contract for the season the picker is
+  // showing, not "this camper's contract this year". Before the season list has loaded there is
+  // no id to carry; the review screen then falls back to the current season year, which is still
+  // this camper's own contract rather than a list of everybody's.
+  const contractHref = `/admin/seasonals/${guestId}/review${
+    seasonId ? `?season_id=${encodeURIComponent(seasonId)}` : ''}`
   // The two facts this release adds: where they stand with THIS season's paperwork, and how the
   // seasonal fee is actually being paid off. Both are read-only derivations — depositView only
   // arranges the lane totals /api/seasonals/guest already computed.
@@ -303,8 +313,18 @@ export default function SeasonalCamperPage() {
               Reviewing, sending, resending and cancelling a packet all live on the Contracts page
               now, along with the document itself. This page is the PERSON: who they are, what they
               owe, and which seasons they are in. A link across is right; a second place to send
-              the paperwork from is what made the two pages feel like the same page. */}
-          <Link href={`/admin/seasonals${seasonId ? `?season_id=${encodeURIComponent(seasonId)}` : ''}`}
+              the paperwork from is what made the two pages feel like the same page.
+
+              ⚠ THE LINK GOES TO THIS CAMPER'S OWN CONTRACT, NOT THE LIST OF EVERYBODY'S.
+              It used to point at `/admin/seasonals`, which is the list of all names — so from a
+              camper you could not actually reach their paperwork: the button looped you back to
+              where you had just come from. That is also why the payment schedule felt impossible
+              to find. The schedule was never missing; the door to it did not open.
+
+              `[guestId]/review` create-or-opens the contract for EXACTLY the season carried in
+              `season_id`, so a camper not yet enrolled in it lands on their own fresh draft
+              rather than on a generic list with nothing selected. */}
+          <Link href={contractHref}
             className="px-3 py-2 rounded-lg text-sm font-semibold border border-line text-ink-soft hover:bg-card-2 whitespace-nowrap">
             Contracts &amp; sending →
           </Link>
@@ -331,7 +351,10 @@ export default function SeasonalCamperPage() {
         <div className="bg-card rounded-xl border border-line-soft p-5 mb-4">
           <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
             <h3 className="text-sm font-bold text-muted uppercase tracking-wide">Seasons</h3>
-            <Link href={`/admin/seasonals${seasonId ? `?season_id=${encodeURIComponent(seasonId)}` : ''}`}
+            {/* Same destination as the header button, and for the same reason — this is the
+                other door to the same room. Fees, the payment schedule and sending all live on
+                the camper's own Review & send screen. */}
+            <Link href={contractHref}
               className="text-xs font-semibold" style={{ color: 'var(--link)' }}>
               Fees, sending &amp; documents →
             </Link>

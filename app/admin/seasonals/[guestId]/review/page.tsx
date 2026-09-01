@@ -167,7 +167,13 @@ export default function SeasonalReviewPage() {
   // are typed.
   const previewContract = {
     ...(draft || {}),
-    season_year: year,
+    // ⚠ THE CONTRACT'S OWN YEAR, NOT THE PAGE'S FALLBACK. `year` is only set from a `?year=`
+    // link; arriving by `?season_id=` leaves it at the CURRENT season year, so the preview
+    // rendered "2027 Seasonal Admission Agreement" as the heading over a 2028 agreement whose
+    // own body said 2028. freezePacket() re-reads the contract from the database, so what was
+    // actually SENT was always right — but this screen's one job is to be true about what the
+    // camper will sign, and a heading with the wrong year on it is not that.
+    season_year: draft?.season_year ?? year,
     occupants,
     total_due_cents: totalDueCents,
     deposit_due_cents: depositDueCents,
@@ -258,7 +264,13 @@ export default function SeasonalReviewPage() {
   const cardCls = 'bg-card rounded-xl border border-line-soft p-5 mb-4'
   const inp = 'w-full border border-line rounded-lg px-3 py-2 text-sm'
   const lbl = 'block text-xs text-muted mb-1'
-  const backHref = `/admin/seasonals/${guestId}`
+  // ⚠ THE SEASON TRAVELS BOTH WAYS. The camper page reads `?season_id=` off the URL, so carrying
+  // it back completes the round trip: leave a camper on their 2027 Spring, open the contract, come
+  // back, and you are still on 2027 Spring. Without it the return leg silently reset the picker to
+  // the default season — the same class of "you are not where you thought you were" problem as the
+  // link that used to land on the list of everybody's contracts instead of this camper's.
+  const backHref = `/admin/seasonals/${guestId}${
+    seasonIdParam ? `?season_id=${encodeURIComponent(seasonIdParam)}` : ''}`
 
   if (loading) return <div className="p-6 text-muted">Loading…</div>
   if (err && !data) return <div className="p-6 text-danger">{err}</div>
@@ -281,7 +293,13 @@ export default function SeasonalReviewPage() {
 
       {alreadyStatus && (
         <div className="rounded-lg px-3 py-2 text-sm mb-4" style={{ background: 'var(--watch-bg)', color: 'var(--watch)', border: '1px solid color-mix(in srgb, var(--watch) 40%, transparent)' }}>
-          This camper already has a <strong>{alreadyStatus}</strong> {year} packet, so it can no longer be edited or re-sent from here.{' '}
+          {/* ⚠ NAMES THE SEASON THIS SCREEN IS ACTUALLY SHOWING, not the page's fallback year.
+              It used to read `{year}`, which is only set from a `?year=` link — so arriving by
+              `?season_id=` (which is how the camper page now links here) left it at the CURRENT
+              season year and the banner announced a "signed 2027 packet" over a 2028 contract.
+              Same `season?.name` the heading two blocks up already uses, so the screen cannot
+              disagree with itself about which season it is on. */}
+          This camper already has a <strong>{alreadyStatus}</strong> {season?.name || `${year}`} packet, so it can no longer be edited or re-sent from here.{' '}
           <Link href={backHref} className="underline font-semibold">Go back</Link>
           {alreadyStatus === 'sent' && <> — on the Contracts list you can resend the email, or cancel the packet to edit and send it again.</>}
         </div>
