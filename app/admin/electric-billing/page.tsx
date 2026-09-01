@@ -20,7 +20,7 @@ import {
 import {
   ELECTRIC_TOKENS, tokenText, insertAtCursor, unknownTokensIn,
 } from '@/lib/electric-bill-tokens'
-import { planElectricPost, postSkipLabel } from '@/lib/electric-billing'
+import { planElectricPost, postSkipLabel, allTimeBilled } from '@/lib/electric-billing'
 
 // Security PR 7-1: the admin browser talks to Supabase as the LOGGED-IN USER, not as `anon`.
 // Same publishable key, but it travels with the session cookie, so PostgREST runs these queries
@@ -48,6 +48,9 @@ type ElectricReading = {
   final_amount: number
   created_at: string
   notes: string
+  /** A voided bill is off the camper's balance. The column exists in the schema and is already
+   *  filtered when checking whether this month is billed; the history total honours it too. */
+  voided?: boolean | null
 }
 
 /**
@@ -1301,6 +1304,17 @@ export default function ElectricBillingPage() {
                                   </tr>
                                 ))}
                               </tbody>
+                              {/* ⚠ RESTORED. The Seasonal redesign dropped this row, which had been
+                                  here since the page was built — the only place a camper's all-time
+                                  billed figure appears. Voided bills are excluded: they are off the
+                                  camper's balance, so counting them would overstate what they have
+                                  actually been charged. */}
+                              <tfoot>
+                                <tr>
+                                  <td colSpan={4}>Total billed (all time)</td>
+                                  <td className="tnum">{fmtUsd(allTimeBilled(row.readings))}</td>
+                                </tr>
+                              </tfoot>
                             </table>
                           )}
                           {row.folioPayments.length > 0 && (
@@ -1617,6 +1631,7 @@ const EB_CSS = `
 .eb-balrow{display:flex;justify-content:space-between;padding:10px 0 2px;margin-top:8px;border-top:1px solid var(--line);font-weight:700;font-size:13px;color:var(--good)}
 .eb-balrow.due{color:var(--watch)}
 .eb-empty{text-align:center;color:var(--muted);padding:3rem 0}
+.eb-table tfoot td{border-bottom:none;border-top:1px solid var(--line);padding-top:9px;font-weight:700;color:var(--forest)}
 .eb-gear{font-family:inherit;font-weight:600;font-size:14px;color:var(--ink-soft);background:var(--card);border:1px solid var(--line);border-radius:999px;padding:7px 14px;cursor:pointer;white-space:nowrap}
 .eb-gear:hover{border-color:var(--line-strong);color:var(--forest)}
 
