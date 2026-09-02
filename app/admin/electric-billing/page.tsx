@@ -15,6 +15,10 @@ import {
 import { detectReadingAnomaly } from '@/lib/meters'
 import { normalizeBillingMode } from '@/lib/ledger-lanes'
 import { seasonalBalanceOf, campFromAccount } from '@/lib/account-buckets'
+// ⚠ THE APP'S ONE VOID RULE. Every other balance in the app — the folio, /api/guests/balances,
+// laneBalances() — excludes voided charges. This page did not, so a camper with a voided charge
+// showed a HIGHER balance here than on their own folio.
+import { notVoided } from '@/lib/ledger'
 import {
   cardStatus, primaryLabel, menuFor, tallyCards, matchesFilter, owesBalance,
   type CardRow, type CardFilter, type MenuActionId,
@@ -399,6 +403,24 @@ export default function ElectricBillingPage() {
     alert('Message saved!')
   }
 
+  /**
+   * The balance this screen shows for a camper.
+   *
+   * ⚠ SEPARATED PARKS SEE THE CAMP ACCOUNT, NOT THE WHOLE ACCOUNT. This is the ELECTRIC screen:
+   * a seasonal camper with an outstanding season fee must not appear here as owing it. Their
+   * $32 of electric should read $32, not $1,632 — the same rule the camper's own bill follows.
+   *
+   * Camp is the account remainder (account − seasonal), which is exact even though almost no
+   * payment carries a lane. See campFromAccount().
+   *
+   * COMBINED PARKS ARE UNTOUCHED: they read folioBalance, exactly as before, and never consult
+   * the seasonal slice at all.
+   */
+  const shownBalance = (row: CamperRow) =>
+    billingMode === 'separated'
+      ? campFromAccount(row.folioBalance, row.seasonalBalance)
+      : row.folioBalance
+
   async function fetchCampers() {
     setLoading(true)
     const { data: guests } = await supabase.from('guests').select('*').eq('electric_billing_enabled', true)
@@ -420,13 +442,16 @@ export default function ElectricBillingPage() {
           supabase.from('folio_line_items').select('*').eq('folio_id', folio.id).order('charged_at'),
           supabase.from('folio_payments').select('*').eq('folio_id', folio.id).eq('status', 'completed').order('paid_at', { ascending: false }),
         ])
-        const itemsTotal = (items || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
+        // ⚠ VOIDED CHARGES ARE NOT COUNTED, but they are still SHOWN. `recentCharges` keeps the
+        // full list below so a voided row remains visible and marked; only the totals exclude it.
+        const liveItems = (items || []).filter(notVoided)
+        const itemsTotal = liveItems.reduce((sum: number, i: any) => sum + i.line_total, 0)
         const paymentsTotal = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
         folioBalance = itemsTotal - paymentsTotal
-        // ⚠ SUMMED THE SAME WAY AS folioBalance ABOVE — no void filter, payments net of
-        // surcharge — because Camp is the REMAINDER of that figure. Two different summation
+        // ⚠ THE SAME ROWS, SUMMED THE SAME WAY as folioBalance above — void-filtered, payments net
+        // of surcharge — because Camp is the REMAINDER of that figure. Two different summation
         // rules here would make camp + seasonal fail to equal the account.
-        seasonalBalance = seasonalBalanceOf(items || [], pmts || [])
+        seasonalBalance = seasonalBalanceOf(liveItems, pmts || [])
         recentCharges = items || []
         folioPayments = pmts || []
       }
@@ -482,7 +507,16 @@ export default function ElectricBillingPage() {
     const amountCents = Math.round(parseFloat(row.paymentAmount) * 100)
     // Anything beyond the balance becomes an account credit. Warn rather than block: this
     // screen records money already received, so refusing would leave it recorded nowhere.
-    const creditCents = Math.max(0, amountCents - Math.max(0, row.folioBalance))
+    //
+    // ⚠ MEASURED AGAINST THE BALANCE THE OPERATOR IS LOOKING AT. On a separated park this screen
+    // shows — and this button pays down — the CAMP ACCOUNT. Measuring the overpayment against the
+    // whole account instead meant an electric overpayment went unrecognised for as long as any
+    // seasonal balance was outstanding: pay $100 against a $42 Camp balance while $2,000 of season
+    // fee is owing, and the $58 credit was silently not flagged. shownBalance() is the same figure
+    // the pill and the panel show, so the warning now matches what is on screen.
+    //
+    // COMBINED IS UNCHANGED: shownBalance() returns folioBalance there, exactly as before.
+    const creditCents = Math.max(0, amountCents - Math.max(0, shownBalance(row)))
     if (creditCents > 0 && maxCreditAmount > 0 && creditCents > maxCreditAmount) {
       if (!confirm('This will add a credit of $' + (creditCents / 100).toFixed(2) + ', which exceeds the $' + (maxCreditAmount / 100).toFixed(2) + ' credit limit for this account. Add it anyway?')) {
         setCampers(prev => { const u = [...prev]; u[index] = { ...u[index], savingPayment: false }; return u })
@@ -499,7 +533,8 @@ export default function ElectricBillingPage() {
       supabase.from('folio_line_items').select('*').eq('folio_id', row.folioId),
       supabase.from('folio_payments').select('*').eq('folio_id', row.folioId).eq('status', 'completed'),
     ])
-    const itemsTotal = (items || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
+    const liveItems = (items || []).filter(notVoided)
+    const itemsTotal = liveItems.reduce((sum: number, i: any) => sum + i.line_total, 0)
     const paymentsTotal = (pmts || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
     // Not clamped at zero. An overpayment leaves the folio negative and that negative IS the
     // account credit — clamping it here recorded the credit but hid it, so the operator saw a
@@ -507,7 +542,7 @@ export default function ElectricBillingPage() {
     const newBalance = itemsTotal - paymentsTotal
     // Recomputed alongside the account balance, from the same rows, so the Camp figure the pill
     // shows cannot go stale after a payment.
-    const newSeasonal = seasonalBalanceOf(items || [], pmts || [])
+    const newSeasonal = seasonalBalanceOf(liveItems, pmts || [])
 
     setCampers(prev => {
       const u = [...prev]
@@ -528,12 +563,11 @@ export default function ElectricBillingPage() {
         guestName: row.guest.name, guestEmail: row.guest.email, siteNumber: row.guest.site_number,
         paymentAmount: row.lastPaymentRecorded.amount, paymentMethod: row.lastPaymentRecorded.method,
         paymentNote: row.lastPaymentRecorded.note, paidAt: row.lastPaymentRecorded.paid_at,
-        // ⚠ THE CAMP BALANCE IN SEPARATED MODE. This figure is printed in the camper's receipt
-        // as "your remaining balance". Sending the whole account would tell someone who just
-        // paid their electric that they still owe their season fee — the same misleading number
-        // the electric bill itself no longer shows.
-        // NOTE: /api/electric-payment-receipt trusts this value; unlike the bill route it does
-        // not recompute it server-side. Worth giving it the same guard.
+        // ⚠ THE FOLIO IS WHAT MATTERS NOW. /api/electric-payment-receipt recomputes the balance
+        // it states from this folio — the Camp Account in separated mode, the whole account in
+        // combined — so no figure from this screen can put a wrong balance in a camper's receipt.
+        // `remainingBalance` is still sent as the route's fallback for a folio it cannot read.
+        folioId: row.folioId,
         remainingBalance: shownBalance(row), paymentId: row.lastPaymentRecorded.id,
       }),
     })
@@ -605,7 +639,8 @@ export default function ElectricBillingPage() {
     // Just re-send the email — don't touch the database
     const { data: allItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', row.folioId).order('charged_at')
     const { data: allPayments } = await supabase.from('folio_payments').select('*').eq('folio_id', row.folioId).eq('status', 'completed')
-    const itemsTotal = (allItems || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
+    const liveAllItems = (allItems || []).filter(notVoided)
+    const itemsTotal = liveAllItems.reduce((sum: number, i: any) => sum + i.line_total, 0)
     const paymentsTotal = (allPayments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
     const balance = Math.max(0, itemsTotal - paymentsTotal)
 
@@ -735,11 +770,12 @@ export default function ElectricBillingPage() {
 
     const { data: allItems } = await supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at')
     const { data: allPayments } = await supabase.from('folio_payments').select('*').eq('folio_id', folioId).eq('status', 'completed').order('paid_at')
-    const itemsTotal = (allItems || []).reduce((sum: number, i: any) => sum + i.line_total, 0)
+    const liveAllItems = (allItems || []).filter(notVoided)
+    const itemsTotal = liveAllItems.reduce((sum: number, i: any) => sum + i.line_total, 0)
     const paymentsTotal = (allPayments || []).reduce((sum: number, p: any) => sum + p.amount - (p.surcharge_amount || 0), 0)
     // Live folio balance — matches what shows in their guest folio exactly
     const liveBalance = itemsTotal - paymentsTotal
-    const liveSeasonal = seasonalBalanceOf(allItems || [], allPayments || [])
+    const liveSeasonal = seasonalBalanceOf(liveAllItems, allPayments || [])
 
     // Find the date the previous electric bill was sent for this camper
     // ⚠ POSTED ONLY — same reason as in resendBill() above.
@@ -841,24 +877,6 @@ export default function ElectricBillingPage() {
     // Account; both figures were read off the folio by fetchCampers().
     balanceCents: shownBalance(row),
   })
-
-  /**
-   * The balance this screen shows for a camper.
-   *
-   * ⚠ SEPARATED PARKS SEE THE CAMP ACCOUNT, NOT THE WHOLE ACCOUNT. This is the ELECTRIC screen:
-   * a seasonal camper with an outstanding season fee must not appear here as owing it. Their
-   * $32 of electric should read $32, not $1,632 — the same rule the camper's own bill follows.
-   *
-   * Camp is the account remainder (account − seasonal), which is exact even though almost no
-   * payment carries a lane. See campFromAccount().
-   *
-   * COMBINED PARKS ARE UNTOUCHED: they read folioBalance, exactly as before, and never consult
-   * the seasonal slice at all.
-   */
-  const shownBalance = (row: CamperRow) =>
-    billingMode === 'separated'
-      ? campFromAccount(row.folioBalance, row.seasonalBalance)
-      : row.folioBalance
 
   /** Every menu item dispatches to a handler that already existed. Nothing is reimplemented. */
   function runMenuAction(id: MenuActionId, i: number) {

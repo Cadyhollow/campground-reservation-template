@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
 import { requireRole } from '@/lib/require-role'
+import { normalizeBillingMode, laneBalances } from '@/lib/ledger-lanes'
+import { accountBuckets } from '@/lib/account-buckets'
 
 function getResend() { return new Resend(process.env.RESEND_API_KEY) }
 const supabase = createClient(
@@ -15,9 +17,70 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { guestName, guestEmail, siteNumber, paymentAmount, paymentMethod, paymentNote, paidAt, remainingBalance } = body
+    const {
+      guestName, guestEmail, siteNumber, paymentAmount, paymentMethod, paymentNote, paidAt,
+      // ⚠ NOT TRUSTED. Kept only as the fallback for a folio that cannot be read — see below.
+      remainingBalance,
+      // The folio to recompute from. Absent on an older caller, in which case the fallback applies.
+      folioId,
+    } = body
 
     const { data: settings } = await supabase.from('settings').select('park_name, park_location, park_email, park_phone').single()
+
+    // ── WHAT THIS RECEIPT SAYS IS STILL OWED ────────────────────────────────────────────────
+    //
+    // ⚠ THE SERVER DECIDES IT, NOT THE CALLER. `remainingBalance` arrives in the request body
+    // from the Electric Billing screen. This figure is printed in a CAMPER'S receipt, so a stale
+    // or wrong one from any caller — or a crafted request — would state a balance the camper does
+    // not owe. The bill route recomputes for exactly this reason; this now matches it.
+    //
+    // SEPARATED → the CAMP ACCOUNT balance (electric, store and everyday). A camper who has just
+    // paid their electric must not be told they still owe their season fee.
+    // COMBINED → the whole account, which is what that park's receipts have always shown.
+    //
+    // Both figures come from laneBalances(), which already excludes voided charges — so this also
+    // cannot quote a balance inflated by a charge that was voided.
+    //
+    // ⚠ ITS OWN GUARDED SELECT for billing_mode, like the bill route: a park that has not run the
+    // Phase 4 migration has no such column, and a failed select there would break a receipt that
+    // works today. Any failure lands on 'combined', which is today's behaviour.
+    let billingMode: 'combined' | 'separated' = 'combined'
+    try {
+      const { data: modeRow } = await supabase.from('settings').select('billing_mode').limit(1).single()
+      billingMode = normalizeBillingMode(modeRow?.billing_mode)
+    } catch {
+      // stays 'combined'
+    }
+
+    let recomputedBalance: number | null = null
+    if (folioId) {
+      try {
+        const [{ data: items }, { data: pmts }] = await Promise.all([
+          supabase.from('folio_line_items').select('id, line_total, voided, product_id, lane').eq('folio_id', folioId),
+          supabase.from('folio_payments').select('amount, surcharge_amount, lane').eq('folio_id', folioId).eq('status', 'completed'),
+        ])
+        // The electric signal, so a metered charge classifies as electric rather than `other`.
+        // Both fold into Camp, so it does not move this number — it is read for correctness of
+        // the classification itself, exactly as the bill route does.
+        const itemIds = (items || []).map(i => i.id)
+        const { data: readings } = itemIds.length
+          ? await supabase.from('electric_readings').select('folio_line_item_id').in('folio_line_item_id', itemIds)
+          : { data: [] }
+        const lanes = laneBalances(items || [], pmts || [], {
+          electricLineItemIds: new Set((readings || []).map(r => r.folio_line_item_id).filter(Boolean) as string[]),
+        })
+        recomputedBalance = billingMode === 'separated'
+          ? accountBuckets(lanes).camp.balance
+          : lanes.accountBalance
+      } catch {
+        // A folio that cannot be read falls back below rather than failing to send the receipt —
+        // the same trade the bill route makes.
+      }
+    }
+
+    /** What the receipt states. The recomputed figure whenever there is one. */
+    const statedBalance: number =
+      recomputedBalance !== null ? recomputedBalance : Number(remainingBalance) || 0
 
     const campgroundName = settings?.park_name || 'Our Campground'
     const campgroundLocation = settings?.park_location || ''
@@ -31,8 +94,8 @@ export async function POST(request: NextRequest) {
 
     const methodDisplay = paymentMethod ? paymentMethod.charAt(0).toUpperCase() + paymentMethod.slice(1) : 'Payment'
 
-    const remainingDisplay = remainingBalance > 0
-      ? `<p style="margin:0;font-size:15px;color:#6B7280;">Your remaining balance is <strong style="color:#DC2626;">$${(remainingBalance / 100).toFixed(2)}</strong>.</p>`
+    const remainingDisplay = statedBalance > 0
+      ? `<p style="margin:0;font-size:15px;color:#6B7280;">Your remaining balance is <strong style="color:#DC2626;">$${(statedBalance / 100).toFixed(2)}</strong>.</p>`
       : `<p style="margin:0;font-size:15px;color:#15803d;font-weight:600;">&#10003; Your account is fully paid up &mdash; thank you!</p>`
 
     const noteRow = paymentNote
@@ -65,7 +128,7 @@ export async function POST(request: NextRequest) {
         </tr>
       </table>
     </div>
-    <div style="background:${remainingBalance > 0 ? '#fef2f2' : '#f0fdf4'};border:1px solid ${remainingBalance > 0 ? '#fecaca' : '#bbf7d0'};border-radius:10px;padding:16px 20px;margin-bottom:28px;">
+    <div style="background:${statedBalance > 0 ? '#fef2f2' : '#f0fdf4'};border:1px solid ${statedBalance > 0 ? '#fecaca' : '#bbf7d0'};border-radius:10px;padding:16px 20px;margin-bottom:28px;">
       ${remainingDisplay}
     </div>
     <p style="margin:0 0 6px;font-size:14px;color:#9ca3af;text-align:center;">Questions? Reach out to us anytime.</p>
