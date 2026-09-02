@@ -24,7 +24,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { laneBalances } from './ledger-lanes.ts'
-import { accountBuckets, paymentLaneForBucket } from './account-buckets.ts'
+import { accountBuckets, paymentLaneForBucket, filterToBucket } from './account-buckets.ts'
 
 const REPO_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
 const ENV_PATH = resolvePath(REPO_ROOT, '.env.local')
@@ -173,4 +173,59 @@ test('a seasonal overpayment stays a Seasonal credit and does not bleed into Cam
 test('THE INVARIANT HOLDS ON REAL ROWS: camp + seasonal === accountBalance', async () => {
   const b = await readBuckets()
   assert.equal(b.camp.balance + b.seasonal.balance, b.accountBalance)
+})
+
+
+// ── ⚠ THE COLUMN LIST IS PART OF THE LOGIC ───────────────────────────────────────────────────
+//
+// This test exists because of a real bug that shipped. The electric bill route selected `lane` on
+// PAYMENTS but not on LINE ITEMS. classifyLineItem() checks a DECLARED lane first and only then
+// infers from the electric signal and product_id — and the seasonal fee has neither, so with the
+// column missing it fell through to `other`, which rolls up into Camp.
+//
+// The consequences were invisible on every screen and wrong on the one thing that leaves the
+// building: the season fee appeared on the camper's electric bill, and the Camp balance equalled
+// the whole account, which silently defeated billAccountBalance().
+//
+// Every unit test passed throughout, because they all build their fixtures WITH a lane. Only a
+// read that uses the route's own column list can catch this, which is what this does.
+
+/** The exact column list app/api/electric-bill-email/route.ts selects for line items. */
+const BILL_ITEM_COLUMNS = 'id, description, quantity, line_total, charged_at, product_id, voided, lane'
+/** ...and for payments. */
+const BILL_PAYMENT_COLUMNS = 'id, method, amount, surcharge_amount, paid_at, lane'
+
+test('⚠ THE BILL ROUTE\'S OWN COLUMN LIST STILL SEPARATES SEASONAL FROM CAMP', async () => {
+  // ⚠ DERIVED FROM THE PRIOR STATE, NOT ASSUMED. The tests above leave this folio with a
+  // seasonal credit and a settled camp balance; hard-coding a total here would pass alone and
+  // fail in the suite.
+  const before = await readBuckets()
+
+  // A seasonal charge with no product_id and no electric reading — the exact shape that
+  // misclassified. It must NOT land in Camp when read the way the bill route reads it.
+  await addCharge('Season fee — column-list guard', 150000, 'seasonal')
+
+  const [{ data: items }, { data: pmts }] = await Promise.all([
+    svc!.from('folio_line_items').select(BILL_ITEM_COLUMNS).eq('folio_id', folioId),
+    svc!.from('folio_payments').select(BILL_PAYMENT_COLUMNS).eq('folio_id', folioId).eq('status', 'completed'),
+  ])
+
+  const seasonalRow = (items || []).find(i => i.description === 'Season fee — column-list guard')
+  assert.ok(seasonalRow, 'the seasonal charge should come back')
+  assert.equal(
+    (seasonalRow as { lane?: string | null }).lane, 'seasonal',
+    'the bill route must SELECT `lane` on line items — without it the season fee classifies as ' +
+    '`other` and lands on the electric bill',
+  )
+
+  const scoped = filterToBucket('camp', items || [], pmts || [], { electricLineItemIds: new Set<string>() })
+  assert.ok(
+    !scoped.items.some(i => i.description === 'Season fee — column-list guard'),
+    'the season fee must be absent from a Camp-scoped statement',
+  )
+
+  // And the Camp balance must not have absorbed it.
+  const b = accountBuckets(laneBalances(items || [], pmts || [], { electricLineItemIds: new Set<string>() }))
+  assert.equal(b.seasonal.balance - before.seasonal.balance, 150000, 'the whole fee landed in Seasonal')
+  assert.equal(b.camp.balance, before.camp.balance, 'Camp is completely unchanged by a seasonal charge')
 })

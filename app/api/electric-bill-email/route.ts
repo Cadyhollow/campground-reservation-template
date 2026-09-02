@@ -86,9 +86,15 @@ export async function POST(request: NextRequest) {
     if (folioId) {
       try {
         const [{ data: items }, { data: pmts }] = await Promise.all([
-          // `id` and `product_id` are selected for lane classification; `lane` for payments. On a
-          // combined park these are simply unused — the rows are identical either way.
-          supabase.from('folio_line_items').select('id, description, quantity, line_total, charged_at, product_id, voided').eq('folio_id', folioId),
+          // ⚠ `lane` MUST BE SELECTED ON LINE ITEMS, and its absence was a real bug. classifyLineItem()
+          // checks a DECLARED lane first and only then infers from the electric signal and
+          // product_id. The seasonal fee is declared — it has no product_id and no electric
+          // reading — so without this column it fell through to `other`, which rolls up into
+          // Camp. The result: the season fee appeared on the electric bill and the Camp balance
+          // equalled the whole account, silently defeating billAccountBalance().
+          // `id` and `product_id` are also selected for classification. On a combined park these
+          // are simply unused — the rows are identical either way.
+          supabase.from('folio_line_items').select('id, description, quantity, line_total, charged_at, product_id, voided, lane').eq('folio_id', folioId),
           supabase.from('folio_payments').select('id, method, amount, surcharge_amount, paid_at, lane').eq('folio_id', folioId).eq('status', 'completed'),
         ])
         folioItems = (items || []) as BillItem[]
