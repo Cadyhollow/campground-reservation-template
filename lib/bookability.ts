@@ -36,6 +36,7 @@ export type BookabilityReason =
   | 'blocked'
   | 'double-booked'
   | 'min-stay'
+  | 'seasonal-site'
 
 export type BookabilityResult = {
   bookable: boolean
@@ -414,12 +415,41 @@ export function checkSeasonSpan(
 // Rule matching (shared with the availability route's min-stay resolution)
 // ---------------------------------------------------------------------------
 
-export type RuleTarget = { id: string; site_type?: string | null }
+export type RuleTarget = {
+  id: string
+  site_type?: string | null
+  /** ⚠ OPTIONAL BECAUSE IT MAY NOT EXIST. A park that has not run
+   *  db/migrations/2026-08-30-seasonal-site-flag.sql has no such column, and its rows arrive
+   *  without the property at all. `undefined` means "not a seasonal site", which is that park's
+   *  correct and existing behaviour. See isSeasonalSite(). */
+  is_seasonal_site?: boolean | null
+}
 
 // How a min_stay_rules / pricing_rules row selects the sites it applies to: an explicit CSV of
 // site ids, a single site id, or a whole site type — checked in that order of specificity. A
 // rule that names none of them applies to nothing. Lifted from the availability route so the
 // min-stay a guest was shown at search is resolved by the same code that enforces it at create.
+/**
+ * Is this site sold for the season — i.e. NOT nightly inventory?
+ *
+ * ⚠ A SEASONAL SITE HAS A PERSON LIVING ON IT. Letting one be booked for a night is not an
+ * overbooking of an empty pitch; it is sending a guest to a site somebody's camper is parked on
+ * for the summer. That is why this is a hard refusal on every path with no override, and why the
+ * server enforces it rather than trusting the search listing.
+ *
+ * ⚠ `=== true`, NEVER `!== false`. A park that has not run the seasonal-site migration has no
+ * `is_seasonal_site` column, so its site rows carry no such property and this returns false —
+ * every site stays bookable, exactly as it is today on that park. Testing for falsity instead
+ * would make every site on an unmigrated park seasonal and take its booking offline.
+ */
+export function isSeasonalSite(site: { is_seasonal_site?: boolean | null } | null | undefined): boolean {
+  return site?.is_seasonal_site === true
+}
+
+/** Guest-facing wording for a seasonal site. Deliberately says nothing about who is on it. */
+export const SEASONAL_SITE_MESSAGE =
+  'That site is reserved for a seasonal camper and is not available to book by the night. Please choose another site.'
+
 export function ruleAppliesToSite(rule: any, site: RuleTarget): boolean {
   if (rule?.site_ids) return String(rule.site_ids).split(',').includes(site.id)
   if (rule?.site_id) return rule.site_id === site.id
@@ -597,13 +627,38 @@ export async function checkBookability(
   const dates = checkDateFacts(siteId, facts)
   if (!dates.bookable) return dates
 
-  // Min-stay last: it needs the site's type, and there is no point paying for that lookup on a
-  // booking already rejected above.
-  let site = input.site
-  if (site === undefined || site === null) {
-    const { data } = await supabase.from('sites').select('id, site_type').eq('id', siteId).single()
-    site = data
+  // The site row: needed for the seasonal gate below and for min-stay's site type. Loaded here
+  // rather than at the top because there is no point paying for the lookup on a booking already
+  // rejected above — a seasonal site refused for being out of season is still refused.
+  //
+  // ⚠ `select('*')`, NOT NAMED COLUMNS. PostgREST fails any query naming a column the table does
+  // not have, and a park that has not run the seasonal-site migration has no `is_seasonal_site`.
+  // Naming it here would 400 this read and take EVERY booking offline on those parks — the gate
+  // would become the outage. `select('*')` is safe everywhere; the field is simply absent there.
+  //
+  // ⚠ A CALLER-SUPPLIED ROW IS NOT TRUSTED FOR THIS FLAG. /api/payment passes the site it looked
+  // up, and that lookup selects `id, site_number, site_type, base_rate` — no seasonal field. Using
+  // it as-is would silently skip the gate on the PUBLIC path, which is the one path that most
+  // needs it. So the row is re-read unless it demonstrably carries the property. On an unmigrated
+  // park the re-read costs one query and correctly finds nothing.
+  let site: RuleTarget | null | undefined = input.site
+  const carriesSeasonalField =
+    site != null && Object.prototype.hasOwnProperty.call(site, 'is_seasonal_site')
+  if (site === undefined || site === null || !carriesSeasonalField) {
+    const { data } = await supabase.from('sites').select('*').eq('id', siteId).single()
+    // ⚠ `?? site` — the re-read UPGRADES the row, it never discards one. A read that finds
+    // nothing must not turn a caller-supplied site into null, which would silently skip the
+    // min-stay check below along with it.
+    site = data ?? site ?? null
   }
+
+  // ⚠ THE SEASONAL GATE. A seasonal site is not nightly inventory: somebody is living on it.
+  // Refused on every path that composes through here, with no override — unlike the horizon,
+  // this is not a park preference a staff member may set aside. See isSeasonalSite().
+  if (isSeasonalSite(site)) {
+    return { bookable: false, reason: 'seasonal-site', message: SEASONAL_SITE_MESSAGE }
+  }
+
   if (site) {
     const { data: minStayRules } = await supabase
       .from('min_stay_rules')

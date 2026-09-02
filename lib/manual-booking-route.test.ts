@@ -131,8 +131,18 @@ const isoPlus = (days: number) => addDays(new Date().toISOString().slice(0, 10),
 // A site with nothing overlapping the given range. Read from the database rather than from
 // /api/availability, because availability refuses to quote anything beyond the window at all —
 // which is the very situation most of these tests are about.
+/** Just enough of a site row for these helpers. `is_seasonal_site` is optional because a park
+ *  that has not run the seasonal-site migration has no such column. */
+type Site = { id: string; base_rate?: number | null; is_seasonal_site?: boolean | null }
+
+/** A site that is genuinely nightly-bookable: available, unbooked, and NOT sold for the season.
+ *  ⚠ The seasonal exclusion matters to every test in this file — the sandbox's lowest-numbered
+ *  sites ARE seasonal, so without it this helper would hand back a site the route now refuses and
+ *  every gate test would fail for the wrong reason. `select('*')` so the flag can be read without
+ *  naming a column an unmigrated park lacks. */
 async function freeSite(arrival: string, departure: string) {
-  const { data: sites } = await supabase.from('sites').select('id, base_rate').eq('is_available', true).order('display_order')
+  const { data: allSites } = await supabase.from('sites').select('*').eq('is_available', true).order('display_order')
+  const sites = ((allSites || []) as Site[]).filter(x => x.is_seasonal_site !== true)
   const { data: taken } = await supabase
     .from('reservations').select('site_id')
     .neq('status', 'cancelled').lt('arrival_date', departure).gt('departure_date', arrival)
@@ -567,4 +577,63 @@ test('manual-booking: a service animal is stored as such, free, and on any site'
   assert.equal(out.row!.is_service_animal, true)
   assert.equal(out.row!.pet_fee, 0, 'a service animal must be free')
   assert.equal(out.row!.pet_count, 0, 'a service animal is not a pet')
+})
+
+
+// ── THE SEASONAL-SITE GATE ───────────────────────────────────────────────────────────────────
+//
+// ⚠ A NEW SERVER GATE, SO IT IS PROVEN WITH A CRAFTED REQUEST rather than a UI check. A seasonal
+// site has a camper living on it; booking a guest onto it double-books a real person. The search
+// listing hides these sites, but a hand-made POST does not go through the search.
+
+/** A site sold for the season, if the tenant has any. */
+async function seasonalSite() {
+  const { data } = await supabase.from('sites').select('*').eq('is_available', true)
+  return ((data || []) as Site[]).find(x => x.is_seasonal_site === true) || null
+}
+
+test('⚠ manual-booking: a crafted POST for a SEASONAL site is refused', { skip }, async (t) => {
+  const site = await seasonalSite()
+  if (!site) return t.skip('no seasonal site on this tenant to craft against')
+  // Gates wide open, so the ONLY thing that can refuse this booking is the seasonal flag.
+  await withGates({ horizon: null, seasonStart: null, seasonEnd: null }, async () => {
+    const r = await book({
+      site_id: site.id, arrival_date: '2031-07-04', departure_date: '2031-07-07',
+      base_nightly_rate: site.base_rate, total_price: (site.base_rate || 0) * 3,
+    })
+    assert.equal(r.status, 400, 'a seasonal site must be refused')
+    assert.equal(r.json?.reason, 'seasonal-site')
+    assert.match(String(r.json?.error), /seasonal camper/i)
+  })
+})
+
+test('⚠ manual-booking: the seasonal refusal has NO staff override', { skip }, async (t) => {
+  const site = await seasonalSite()
+  if (!site) return t.skip('no seasonal site on this tenant to craft against')
+  await withGates({ horizon: null, seasonStart: null, seasonEnd: null }, async () => {
+    // Every override this route accepts, asserted together: none of them reaches this gate.
+    const r = await book({
+      site_id: site.id, arrival_date: '2031-07-04', departure_date: '2031-07-07',
+      base_nightly_rate: site.base_rate, total_price: (site.base_rate || 0) * 3,
+      override_horizon: true, horizon_override: true,
+      override_season: true, season_override: true,
+      override_site: true, site_override: true,
+    })
+    assert.equal(r.status, 400)
+    assert.equal(r.json?.reason, 'seasonal-site', 'no override may sell a site somebody lives on')
+  })
+})
+
+test('manual-booking: a NON-seasonal site on the same dates still books', { skip }, async (t) => {
+  // The other half of the gate: it refuses seasonal sites and nothing else.
+  await withGates({ horizon: null, seasonStart: null, seasonEnd: null }, async () => {
+    const site = await freeSite('2031-07-04', '2031-07-07')
+    if (!site) return t.skip('no free nightly site on this tenant')
+    const r = await book({
+      site_id: site.id, arrival_date: '2031-07-04', departure_date: '2031-07-07',
+      base_nightly_rate: site.base_rate, total_price: site.base_rate * 3,
+    })
+    assert.equal(r.status, 200, `an ordinary booking is untouched by the new gate: ${JSON.stringify(r.json)}`)
+    assert.ok(r.json?.reservationId, 'and it really is created')
+  })
 })

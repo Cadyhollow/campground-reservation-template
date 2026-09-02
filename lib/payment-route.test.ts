@@ -232,11 +232,19 @@ test('payment: a malformed range is refused, and never reaches Square', { skip }
 // payment, so nothing above it turned a legitimate booking away. The invalid token means no
 // card is charged, and the reservation insert is downstream of a successful charge, so nothing
 // is written.
+/** Just enough of a site row for the seasonal helpers. Optional because a park that has not run
+ *  the seasonal-site migration has no such column. */
+type SeasonalFlagged = { id: string; is_seasonal_site?: boolean | null }
+
 test('payment: a legitimate booking is NOT refused — it reaches the charge', { skip }, async (t) => {
   const arrival = '2026-08-18', departure = '2026-08-20'
-  const { data: sites } = await supabase.from('sites').select('id').eq('is_available', true)
+  // ⚠ NOT SEASONAL. The search no longer offers seasonal sites and the route refuses them, so
+  // picking one here would make this test SKIP at the pricing step below — and this file's own
+  // history shows how long a silent skip can hide rot. Filtered in JS, never named in the query.
+  const { data: allSites } = await supabase.from('sites').select('*').eq('is_available', true)
+  const sites = ((allSites || []) as SeasonalFlagged[]).filter(x => x.is_seasonal_site !== true)
   const facts = await fetchDateFacts(supabase, arrival, departure)
-  const free = (sites || []).find((s: any) => checkDateFacts(s.id, facts).bookable)
+  const free = (sites || []).find((s) => checkDateFacts(s.id, facts).bookable)
   if (!free) return t.skip('no free site in the sample week — nothing to prove the negative with')
   // The season must actually contain the sample week, or this asserts the wrong thing.
   const { data: st } = await supabase.from('settings').select('season_start, season_end').limit(1).single()
@@ -879,10 +887,20 @@ async function withHorizon(days: number | null, fn: () => Promise<void>) {
 const isoPlus = (days: number) =>
   new Date(Date.now() + days * 86400000).toISOString().slice(0, 10)
 
+/** ⚠ NOT SEASONAL. A seasonal site is now refused outright, so handing one back here would make
+ *  every gate test in this file fail for the wrong reason. `select('*')` so the flag can be read
+ *  without naming a column an unmigrated park lacks. */
 async function aFreeSite(arrival: string, departure: string) {
-  const { data: sites } = await supabase.from('sites').select('id').eq('is_available', true)
+  const { data: allSites } = await supabase.from('sites').select('*').eq('is_available', true)
+  const sites = ((allSites || []) as SeasonalFlagged[]).filter(x => x.is_seasonal_site !== true)
   const facts = await fetchDateFacts(supabase, arrival, departure)
   return (sites || []).find((s: any) => checkDateFacts(s.id, facts).bookable) || null
+}
+
+/** A site sold for the season, if this tenant has one. */
+async function aSeasonalSite() {
+  const { data } = await supabase.from('sites').select('*').eq('is_available', true)
+  return ((data || []) as SeasonalFlagged[]).find(x => x.is_seasonal_site === true) || null
 }
 
 // THE CRAFTED REQUEST. The whole reason the horizon cannot live in the browser.
@@ -1094,6 +1112,47 @@ test('payment: a wrapping winter season is bookable across New Year', { skip }, 
 
       assert.notEqual(r.json.reason, 'out-of-season',
         `a wrapping season refused its own mid-season dates: ${JSON.stringify(r.json)}`)
+    })
+  })
+})
+
+
+// ── THE SEASONAL-SITE GATE, ON THE PUBLIC PATH ───────────────────────────────────────────────
+//
+// ⚠ THE MOST CONSEQUENTIAL CRAFTED REQUEST IN THIS FILE. A seasonal site has a camper living on
+// it for the season. Hiding it from the search is UX; a hand-edited /book URL or a doctored POST
+// goes nowhere near the search. If this gate is not on the server, a guest can be CHARGED for a
+// site somebody's camper is parked on.
+test('⚠ payment: a crafted booking for a SEASONAL site is refused, and never reaches Square', { skip }, async (t) => {
+  const site = await aSeasonalSite()
+  if (!site) return t.skip('no seasonal site on this tenant to craft against')
+
+  // BOTH gates pinned off, so the ONLY thing that can refuse this is the seasonal flag. A live
+  // window or season on the tenant would otherwise refuse first and the test would pass without
+  // ever exercising what it claims to.
+  await withHorizon(null, async () => {
+    await withSeason(null, null, async () => {
+    const arrival = isoPlus(10), departure = isoPlus(13)
+    const r = await post({ siteId: site.id, arrival, departure, nights: 3 })
+
+    assert.ok(r.gated, `a seasonal site reached Square: ${JSON.stringify(r.json)}`)
+    assert.equal(r.json.reason, 'seasonal-site')
+    assert.equal(r.status, 400, 'never bookable, so 400 rather than 409')
+    })
+  })
+})
+
+test('payment: a NON-seasonal site on the same dates is not refused by the new gate', { skip }, async () => {
+  await withHorizon(null, async () => {
+    await withSeason(null, null, async () => {
+      const arrival = isoPlus(10), departure = isoPlus(13)
+      const site = await aFreeSite(arrival, departure)
+      if (!site) return
+
+      const r = await post({ siteId: site.id, arrival, departure, nights: 3 })
+
+      assert.notEqual(r.json.reason, 'seasonal-site',
+        `an ordinary site was wrongly refused as seasonal: ${JSON.stringify(r.json)}`)
     })
   })
 })

@@ -11,6 +11,7 @@ import {
   ruleAppliesToSite,
   HORIZON_SERVER_SLACK_DAYS,
   DEFAULT_CLOSED_MESSAGE,
+  isSeasonalSite,
 } from '@/lib/bookability'
 import { summarizeSiteFees, extraGuestFeeCents } from '@/lib/search-pricing'
 
@@ -134,11 +135,28 @@ export async function GET(request: NextRequest) {
     query = query.eq('pet_friendly', true)
   }
 
-  const { data: sites, error } = await query
+  const { data: sitesRaw, error } = await query
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
+
+  // ── SEASONAL SITES ARE NOT NIGHTLY INVENTORY ────────────────────────────────────────────────
+  //
+  // A site sold for the season has a camper living on it all season. Offering it in a nightly
+  // search invites a guest to book onto somebody's pitch — so it never appears here.
+  //
+  // ⚠ FILTERED IN JS, NOT IN THE QUERY. PostgREST fails any query naming a column the table does
+  // not have, so `.not('is_seasonal_site', …)` — or even selecting it — would 400 this route and
+  // take BOOKING OFFLINE on a park that has not run the seasonal-site migration. The query above
+  // already uses `select('*')`; reading the property is safe everywhere, and `!== true` keeps
+  // every site on an unmigrated park exactly as bookable as it is today.
+  //
+  // This mirrors the server gate in checkBookability(), so the calendar and the gate agree: a
+  // site hidden here is a site create refuses, and vice versa.
+  const sites = (sitesRaw || []).filter(
+    (x: { is_seasonal_site?: boolean | null }) => !isSeasonalSite(x),
+  )
 
   // Same two range queries as before, and the same filter — now shared with /api/payment, so a
   // site the search hides as blocked or already booked is a site create refuses to charge for.

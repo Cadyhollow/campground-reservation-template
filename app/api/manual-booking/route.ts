@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { requireRole } from '@/lib/require-role'
-import { checkHorizon, checkSeasonSpan, HORIZON_SERVER_SLACK_DAYS } from '@/lib/bookability'
+import { checkHorizon, checkSeasonSpan, isSeasonalSite, SEASONAL_SITE_MESSAGE, HORIZON_SERVER_SLACK_DAYS } from '@/lib/bookability'
 import { checkPetBooking, computePetFee } from '@/lib/pet-fee'
 
 const supabase = createClient(
@@ -127,6 +127,31 @@ export async function POST(request: NextRequest) {
           // `reason` so the booking pages can tell this apart from a horizon refusal or a
           // double-booking and offer the right override rather than a dead end.
           { error: season.message, reason: 'out-of-season' },
+          { status: 400 }
+        )
+      }
+    }
+
+    // ── THE SEASONAL-SITE GATE ────────────────────────────────────────────────────────────────
+    //
+    // ⚠ ADDED HERE EXPLICITLY, NOT BY SWITCHING THIS ROUTE TO checkBookability(). The header above
+    // explains why this route calls the pieces directly: adopting the full chokepoint would
+    // silently close the blocked-dates and min-stay gaps too, which is exactly the unreviewable
+    // change being avoided. So the seasonal gate is added on its own, and nothing else changes.
+    //
+    // ⚠ AND IT HAS NO STAFF OVERRIDE, unlike the horizon and the season above. Those are park
+    // preferences a staff member may knowingly set aside. This is not: a seasonal site has a
+    // camper living on it, and booking a guest onto it is double-booking a real person. An
+    // operator who genuinely needs to sell that pitch nightly can clear its seasonal flag on the
+    // Sites screen, which is a deliberate act with its own record.
+    //
+    // ⚠ `select('*')` — naming `is_seasonal_site` would 400 on a park without the column and take
+    // staff booking offline. Absent property → not seasonal → today's behaviour exactly.
+    {
+      const { data: siteRow } = await supabase.from('sites').select('*').eq('id', site_id).single()
+      if (isSeasonalSite(siteRow)) {
+        return NextResponse.json(
+          { error: SEASONAL_SITE_MESSAGE, reason: 'seasonal-site' },
           { status: 400 }
         )
       }
