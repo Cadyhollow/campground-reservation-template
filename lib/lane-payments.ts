@@ -13,22 +13,44 @@ import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 /** One lane's share of a card charge. `amount` is GROSS — the base plus that lane's own fee. */
-export type LaneSplitRow = { lane: string; amount: number; surchargeAmount: number }
+/**
+ * One row of a split payment.
+ *
+ * ⚠ `lane: null` MEANS UNTAGGED ON PURPOSE — a whole-account row — and it is not the same thing
+ * as a missing or empty lane. Two-bucket parks need this: a "Pay both" tender settles Seasonal
+ * (tagged) and the Camp Account (untagged, exactly as every ordinary payment is) in one charge,
+ * so one of the two rows must legitimately carry no lane. See normalizeLaneSplit().
+ */
+export type LaneSplitRow = { lane: string | null; amount: number; surchargeAmount: number }
 
-/** Normalise whatever a caller (or a stored jsonb column) hands over. Rows with no positive
- *  amount are dropped rather than written as zero-value payments. */
+/**
+ * Normalise whatever a caller (or a stored jsonb column) hands over. Rows with no positive amount
+ * are dropped rather than written as zero-value payments.
+ *
+ * ⚠ AN EXPLICIT `lane: null` SURVIVES; A MISSING OR EMPTY LANE IS STILL DROPPED. That distinction
+ * is deliberate and it is the whole change here. A row that names no lane because the caller
+ * never set one is malformed — dropping it is what has always happened and what keeps a garbled
+ * request from being charged. A row whose lane is *explicitly* null is a caller saying "this part
+ * is a whole-account payment", which is what the Camp Account half of a "Pay both" tender is.
+ *
+ * Nothing existing changes shape: every current caller sends a real lane string, so this is
+ * additive. The dropped-row fallback in the card routes (`split.length ? total : amount`) is why
+ * getting this wrong would be quiet rather than loud — a silently dropped Camp row would charge
+ * the card the Seasonal amount alone while the screen showed the total.
+ */
 export function normalizeLaneSplit(input: unknown): LaneSplitRow[] {
   if (!Array.isArray(input)) return []
   return input
     .map((l) => {
       const r = (l ?? {}) as { lane?: unknown; amount?: unknown; surchargeAmount?: unknown }
+      const untagged = r.lane === null
       return {
-        lane: String(r.lane ?? ''),
+        lane: untagged ? null : String(r.lane ?? ''),
         amount: Math.round(Number(r.amount ?? 0)),
         surchargeAmount: Math.round(Number(r.surchargeAmount ?? 0)) || 0,
       }
     })
-    .filter(l => l.lane && Number.isFinite(l.amount) && l.amount > 0)
+    .filter(l => (l.lane === null || l.lane !== '') && Number.isFinite(l.amount) && l.amount > 0)
 }
 
 /**
@@ -93,8 +115,10 @@ export async function recordCardPayment(
     note,
   }
 
+  // An untagged split row writes `lane: null` — the same thing the no-split branch below records
+  // by omitting the column, and the same thing every pre-Phase-4 payment already is.
   const rows = split.length
-    ? split.map(l => ({ ...base, amount: l.amount, surcharge_amount: l.surchargeAmount, lane: l.lane }))
+    ? split.map(l => ({ ...base, amount: l.amount, surcharge_amount: l.surchargeAmount, lane: l.lane ?? null }))
     : [{ ...base, amount: opts.amount ?? 0, surcharge_amount: opts.surchargeAmount ?? 0 }]
 
   const { error } = await supabase.from('folio_payments').insert(rows)

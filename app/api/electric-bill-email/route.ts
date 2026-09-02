@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { renderElectricMessageFor } from '@/lib/electric-bill-tokens'
 import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
-import { buildLedger, buildStatement } from '@/lib/ledger'
-import { normalizeBillingMode, filterToLane } from '@/lib/ledger-lanes'
+import { buildLedger, buildStatement, type LedgerLineItem, type LedgerPayment } from '@/lib/ledger'
+import { normalizeBillingMode, filterToLane, laneBalances, type LaneLineItem, type LanePayment } from '@/lib/ledger-lanes'
+import { accountBuckets, billAccountBalance } from '@/lib/account-buckets'
 import { requireRole } from '@/lib/require-role'
 
 // Lazy so `next build` (which has no RESEND_API_KEY) doesn't construct — and
@@ -42,6 +43,81 @@ export async function POST(request: NextRequest) {
       .select('park_name, park_location, park_email')
       .single()
 
+    // ── PHASE 4: WHICH MONEY GOES ON THIS BILL ──────────────────────────────────────────────
+    //
+    // 'combined' (the default, and every park until one opts in) → the statement below is built
+    // from the WHOLE folio, byte-for-byte as it always has been. 'separated' → the ELECTRIC LANE
+    // ONLY, so a camper's store tab and seasonal fee never appear on an electric bill.
+    //
+    // Read in its own query, deliberately, rather than added to the settings select above: a park
+    // that has not run the Phase 4 migration has no billing_mode column, and a failed select there
+    // would break an email that works today. Any failure here — missing column, missing row —
+    // lands on 'combined', which is exactly today's behaviour.
+    let billingMode: 'combined' | 'separated' = 'combined'
+    try {
+      const { data: modeRow } = await supabase.from('settings').select('billing_mode').limit(1).single()
+      billingMode = normalizeBillingMode(modeRow?.billing_mode)
+    } catch {
+      // stays 'combined'
+    }
+
+    // ── SEPARATED: THE BILL SHOWS THE CAMP ACCOUNT, NOT THE WHOLE ACCOUNT ──────────────────
+    //
+    // ⚠ THE SERVER DECIDES THIS, NOT THE CALLER. `totalBalance` arrives in the request body from
+    // the Electric Billing screen. In separated mode the figure that belongs on an electric bill
+    // is the CAMP ACCOUNT balance — electric, store and everything everyday — never the account
+    // total, because the account total includes the season fee. A camper sent a $32 October
+    // electric bill must not read "$1,632 due" because their seasonal instalment is outstanding.
+    //
+    // Recomputed here from the folio rather than trusted, so a stale or wrong figure from any
+    // caller cannot put the season fee on an electric bill.
+    //
+    // Combined mode does not touch this: `campBalanceCents` stays null and the caller's
+    // totalBalance is used exactly as it always has been.
+    // One row type that satisfies BOTH consumers: the lane classifier and the ledger builder.
+    // The select below already returns every field either of them needs; only the declared type
+    // was too narrow.
+    type BillItem = LaneLineItem & LedgerLineItem
+    type BillPayment = LanePayment & LedgerPayment
+    let folioItems: BillItem[] = []
+    let folioPmts: BillPayment[] = []
+    let electricItemIds = new Set<string>()
+    let campBalanceCents: number | null = null
+    if (folioId) {
+      try {
+        const [{ data: items }, { data: pmts }] = await Promise.all([
+          // `id` and `product_id` are selected for lane classification; `lane` for payments. On a
+          // combined park these are simply unused — the rows are identical either way.
+          supabase.from('folio_line_items').select('id, description, quantity, line_total, charged_at, product_id, voided').eq('folio_id', folioId),
+          supabase.from('folio_payments').select('id, method, amount, surcharge_amount, paid_at, lane').eq('folio_id', folioId).eq('status', 'completed'),
+        ])
+        folioItems = (items || []) as BillItem[]
+        folioPmts = (pmts || []) as BillPayment[]
+        if (billingMode === 'separated') {
+          // THE ELECTRIC SIGNAL: the electric_readings rows that point at this folio's line items.
+          // Not the category — see the long note in lib/ledger-lanes.ts about 'Fees' also being a
+          // POS store category.
+          const itemIds = folioItems.map(i => i.id)
+          const { data: readings } = itemIds.length
+            ? await supabase.from('electric_readings').select('folio_line_item_id').in('folio_line_item_id', itemIds)
+            : { data: [] }
+          electricItemIds = new Set(
+            (readings || []).map(r => r.folio_line_item_id).filter(Boolean) as string[])
+          campBalanceCents = accountBuckets(
+            laneBalances(folioItems, folioPmts, { electricLineItemIds: electricItemIds }),
+          ).camp.balance
+        }
+      } catch {
+        // A folio that cannot be read leaves campBalanceCents null, so the bill falls back to the
+        // caller's figure — the behaviour before this existed — rather than failing to send.
+      }
+    }
+
+    /** What this bill says is owed: the Camp Account in separated mode, the whole account in
+     *  combined. One value, so the headline figure and the {{balance}} token cannot disagree.
+     *  The rule itself lives in lib/account-buckets.ts so it can be tested without a server. */
+    const billBalance: number = billAccountBalance(billingMode, campBalanceCents, totalBalance)
+
     // ⚠ THE OWNER'S MESSAGE IS NOW RENDERED, NOT INSERTED RAW.
     //
     // It used to go straight into the email with only newlines converted. The billing screen now
@@ -56,7 +132,7 @@ export async function POST(request: NextRequest) {
       guestName, siteNumber, billingMonth,
       kwhUsed: typeof kwhUsed === 'number' ? kwhUsed : null,
       amountCents: typeof electricAmount === 'number' ? electricAmount : null,
-      balanceCents: typeof totalBalance === 'number' ? totalBalance : null,
+      balanceCents: typeof billBalance === 'number' ? billBalance : null,
     })
 
     const campgroundName = settings?.park_name || 'Our Campground'
@@ -76,10 +152,10 @@ export async function POST(request: NextRequest) {
         <td style="padding:6px 0;color:#ffffff;font-size:14px;text-align:right;">$${(item.line_total/100).toFixed(2)}</td>
       </tr>`).join('')
 
-    const isCredit = totalBalance < 0
-    const balanceColor = isCredit ? '#4ADE80' : totalBalance === 0 ? '#4ADE80' : '#FCD34D'
-    const balanceLabel = isCredit ? 'Credit on Account' : totalBalance === 0 ? '✓ Paid in Full' : 'Total Balance Due'
-    const balanceDisplay = isCredit ? '$' + (Math.abs(totalBalance)/100).toFixed(2) : totalBalance === 0 ? '' : '$' + (totalBalance/100).toFixed(2)
+    const isCredit = billBalance < 0
+    const balanceColor = isCredit ? '#4ADE80' : billBalance === 0 ? '#4ADE80' : '#FCD34D'
+    const balanceLabel = isCredit ? 'Credit on Account' : billBalance === 0 ? '✓ Paid in Full' : 'Total Balance Due'
+    const balanceDisplay = isCredit ? '$' + (Math.abs(billBalance)/100).toFixed(2) : billBalance === 0 ? '' : '$' + (billBalance/100).toFixed(2)
 
     // ── Account Statement: a running ledger — every charge AND payment/credit in
     //    true date order with a running balance per line.
@@ -90,51 +166,19 @@ export async function POST(request: NextRequest) {
     const money = (c: number) => '$' + (Math.abs(c) / 100).toFixed(2)
     const fmtDate = (ts: number) => new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 
-    // ── PHASE 4: WHICH MONEY GOES ON THIS BILL ──────────────────────────────────────────────
-    //
-    // 'combined' (the default, and every park until one opts in) → the statement below is built
-    // from the WHOLE folio, byte-for-byte as it always has been. 'separated' → the ELECTRIC LANE
-    // ONLY, so a camper's store tab and seasonal fee never appear on an electric bill.
-    //
-    // Read in its own query, deliberately, rather than added to the settings select above: a park
-    // that has not run the Phase 4 migration has no billing_mode column, and a failed select there
-    // would break an email that works today. Any failure here — missing column, missing row —
-    // lands on 'combined', which is exactly today's behaviour.
-    let billingMode: 'combined' | 'separated' = 'combined'
-    try {
-      const { data: modeRow } = await supabase.from('settings').select('billing_mode').limit(1).single()
-      billingMode = normalizeBillingMode(modeRow?.billing_mode)
-    } catch {
-      // stays 'combined'
-    }
-
     let statementHtml = ''
     let ledgerBuilt = false
     if (folioId) {
       try {
-        const [{ data: items }, { data: pmts }] = await Promise.all([
-          // `id` and `product_id` are selected for lane classification; `lane` for payments. On a
-          // combined park these are simply unused — the rows are identical either way.
-          supabase.from('folio_line_items').select('id, description, quantity, line_total, charged_at, product_id, voided').eq('folio_id', folioId),
-          supabase.from('folio_payments').select('id, method, amount, surcharge_amount, paid_at, lane').eq('folio_id', folioId).eq('status', 'completed'),
-        ])
+        // The folio rows and the electric signal were already read above, for the Camp balance.
+        // Reused rather than fetched a second time, so the statement and the headline figure are
+        // built from exactly the same rows and cannot disagree.
+        let stmtItems: BillItem[] = folioItems
+        let stmtPmts: BillPayment[] = folioPmts
 
         // Narrow to the electric lane ONLY when the park asked for it.
-        let stmtItems = items || []
-        let stmtPmts = pmts || []
         if (billingMode === 'separated') {
-          // THE ELECTRIC SIGNAL: the electric_readings rows that point at this folio's line items.
-          // Not the category — see the long note in lib/ledger-lanes.ts about 'Fees' also being a
-          // POS store category.
-          const itemIds = stmtItems.map(i => i.id)
-          const { data: readings } = itemIds.length
-            ? await supabase.from('electric_readings').select('folio_line_item_id').in('folio_line_item_id', itemIds)
-            : { data: [] }
-          const ctx = {
-            electricLineItemIds: new Set(
-              (readings || []).map(r => r.folio_line_item_id).filter(Boolean) as string[]),
-          }
-          const lane = filterToLane('electric', stmtItems, stmtPmts, ctx)
+          const lane = filterToLane('electric', stmtItems, stmtPmts, { electricLineItemIds: electricItemIds })
           stmtItems = lane.items
           stmtPmts = lane.payments
         }

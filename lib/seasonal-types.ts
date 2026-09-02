@@ -164,6 +164,9 @@ export type SeasonalGuestData = {
    * when deciding which payment screen to send someone to.
    */
   billingMode?: 'combined' | 'separated'
+  /** The park's wording for the two buckets, already defaulted server-side. Absent on an older
+   *  payload, in which case the cards fall back to the built-in labels themselves. */
+  bucketLabels?: { camp: string; seasonal: string }
   guest: SeasonalGuest
   contracts: SeasonalContract[]
   currentContract: SeasonalContract | null
