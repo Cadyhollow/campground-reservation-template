@@ -9,7 +9,8 @@
 //
 // Relative import with the extension: the repo convention for one lib module importing another,
 // and the only form that resolves under `node --test` (see the note in ledger-lanes.ts).
-import type { Lane, LaneBalances, LaneTotals } from './ledger-lanes.ts'
+import { classifyLineItem } from './ledger-lanes.ts'
+import type { Lane, LaneBalances, LaneTotals, LaneLineItem, LanePayment, LaneContext } from './ledger-lanes.ts'
 
 export type Bucket = 'camp' | 'seasonal'
 
@@ -110,6 +111,30 @@ export function accountBuckets(lanes: LaneBalances): AccountBuckets {
  */
 export function paymentLaneForBucket(bucket: Bucket): Lane | null {
   return bucket === 'seasonal' ? 'seasonal' : null
+}
+
+/**
+ * The line items and payments belonging to ONE bucket — what a bucket-scoped statement (the
+ * electric / Camp bill) is built from.
+ *
+ * Items are grouped by their lane's bucket (LANE_BUCKET). Payments follow the bucket model:
+ *   - seasonal → only payments explicitly tagged 'seasonal'.
+ *   - camp     → every payment NOT tagged 'seasonal' — untagged whole-account payments INCLUDED,
+ *                because untagged money is everyday/Camp money. This is what makes the camp
+ *                statement's running balance reconcile to accountBuckets(...).camp.balance.
+ * Voided items are kept for display; downstream totals still run through notVoided.
+ */
+export function filterToBucket<I extends LaneLineItem, P extends LanePayment>(
+  bucket: Bucket,
+  items: I[] | null | undefined,
+  payments: P[] | null | undefined,
+  ctx: LaneContext,
+): { items: I[]; payments: P[] } {
+  const isSeasonalPayment = (p: P) => String(p.lane ?? '').trim().toLowerCase() === 'seasonal'
+  return {
+    items: (items || []).filter(i => LANE_BUCKET[classifyLineItem(i, ctx)] === bucket),
+    payments: (payments || []).filter(p => (bucket === 'seasonal' ? isSeasonalPayment(p) : !isSeasonalPayment(p))),
+  }
 }
 
 /**

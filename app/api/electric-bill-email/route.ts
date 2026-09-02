@@ -3,8 +3,8 @@ import { renderElectricMessageFor } from '@/lib/electric-bill-tokens'
 import { Resend } from 'resend'
 import { createClient } from '@supabase/supabase-js'
 import { buildLedger, buildStatement, type LedgerLineItem, type LedgerPayment } from '@/lib/ledger'
-import { normalizeBillingMode, filterToLane, laneBalances, type LaneLineItem, type LanePayment } from '@/lib/ledger-lanes'
-import { accountBuckets, billAccountBalance } from '@/lib/account-buckets'
+import { normalizeBillingMode, laneBalances, type LaneLineItem, type LanePayment } from '@/lib/ledger-lanes'
+import { accountBuckets, billAccountBalance, filterToBucket } from '@/lib/account-buckets'
 import { requireRole } from '@/lib/require-role'
 
 // Lazy so `next build` (which has no RESEND_API_KEY) doesn't construct — and
@@ -176,11 +176,13 @@ export async function POST(request: NextRequest) {
         let stmtItems: BillItem[] = folioItems
         let stmtPmts: BillPayment[] = folioPmts
 
-        // Narrow to the electric lane ONLY when the park asked for it.
         if (billingMode === 'separated') {
-          const lane = filterToLane('electric', stmtItems, stmtPmts, { electricLineItemIds: electricItemIds })
-          stmtItems = lane.items
-          stmtPmts = lane.payments
+          // The Camp Account: electric + store + everyday — everything EXCEPT the seasonal fee.
+          // Matches the Camp balance in the headline, and matches how this park bills (its bill
+          // message says firewood and visitor fees are included in the total amount due).
+          const camp = filterToBucket('camp', stmtItems, stmtPmts, { electricLineItemIds: electricItemIds })
+          stmtItems = camp.items
+          stmtPmts = camp.payments
         }
 
         const stmt = buildStatement(buildLedger(stmtItems, stmtPmts), Date.now(), 90)
@@ -214,9 +216,9 @@ export async function POST(request: NextRequest) {
 
         statementHtml = `
   <div style="background-color:#2B2B2B;margin:16px;border-radius:12px;padding:24px;">
-    <h3 style="color:#ffffff;margin:0 0 4px;font-size:16px;">${billingMode === 'separated' ? 'Electric Account' : 'Account Statement'}</h3>
+    <h3 style="color:#ffffff;margin:0 0 4px;font-size:16px;">Account Statement</h3>
     <p style="color:#6B7280;margin:0 0 12px;font-size:12px;">${billingMode === 'separated'
-      ? 'Your electric charges and payments in date order. Store and seasonal charges are billed separately.'
+      ? 'Your electric, store and everyday charges and payments in date order. Seasonal fees are billed separately.'
       : 'Your running account — every charge and payment in date order.'}</p>
     <table style="width:100%;border-collapse:collapse;">
       <tr>
