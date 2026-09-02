@@ -159,3 +159,46 @@ export function billAccountBalance(
   if (mode !== 'separated') return wholeAccountBalance
   return typeof campBalance === 'number' ? campBalance : wholeAccountBalance
 }
+
+/**
+ * The SEASONAL slice of a folio, from rows the caller already has.
+ *
+ * For screens that compute a whole-account balance themselves and need the Camp figure without a
+ * second query or a full laneBalances() pass. Seasonal is DECLARED — `lane = 'seasonal'` on both
+ * the charge and the payment — so no electric signal and no product_id inspection is needed here.
+ *
+ * ⚠ IT DELIBERATELY DOES NOT FILTER VOIDED ROWS, and that is not an oversight. This exists to be
+ * subtracted from a caller's own account total, and the two must be summed the SAME way or the
+ * remainder is not the Camp balance. A caller whose account total excludes voided rows should
+ * pass rows already filtered; one whose total includes them should pass them all. Mixing the two
+ * rules is the only way to get a wrong answer here, so the rule lives in this comment rather than
+ * being silently chosen for the caller.
+ *
+ * Payments are netted of their surcharge, matching how every balance in the app is summed.
+ */
+export function seasonalBalanceOf(
+  items: { line_total: number; lane?: string | null }[] | null | undefined,
+  payments: { amount: number; surcharge_amount?: number | null; lane?: string | null }[] | null | undefined,
+): number {
+  const isSeasonal = (lane: string | null | undefined) =>
+    String(lane ?? '').trim().toLowerCase() === 'seasonal'
+  const charges = (items || [])
+    .filter(i => isSeasonal(i.lane))
+    .reduce((sum, i) => sum + (i.line_total || 0), 0)
+  const paid = (payments || [])
+    .filter(p => isSeasonal(p.lane))
+    .reduce((sum, p) => sum + ((p.amount || 0) - (p.surcharge_amount || 0)), 0)
+  return charges - paid
+}
+
+/**
+ * Camp is the account remainder — the same rule accountBuckets() applies, for callers that
+ * already hold the whole-account figure.
+ *
+ * ⚠ THE SUBTRACTION IS THE POINT. "Camp charges minus camp-tagged payments" would show everyday
+ * money as still owed, because almost no payment carries a lane. Taking Seasonal off the true
+ * account balance is exact, and guarantees the two shown figures can never exceed the account.
+ */
+export function campFromAccount(accountBalance: number, seasonalBalance: number): number {
+  return accountBalance - seasonalBalance
+}
