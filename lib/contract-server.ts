@@ -11,6 +11,7 @@ import {
   buildContractVars, renderTemplate,
 } from '@/lib/contracts'
 import { normalizeBillingMode, type BillingMode } from '@/lib/ledger-lanes'
+import { bucketLabels, type BucketLabels } from '@/lib/bucket-labels'
 
 // Service-role client (bypasses RLS). Constructed at import is fine — createClient
 // doesn't throw on missing env (unlike Resend, which we keep lazy below).
@@ -246,6 +247,24 @@ export async function getBillingMode(): Promise<BillingMode> {
     return normalizeBillingMode(data?.billing_mode)
   } catch {
     return 'combined'
+  }
+}
+
+/**
+ * The park's wording for the two money buckets, defaults where they have chosen nothing.
+ *
+ * ⚠ ITS OWN GUARDED SELECT, like getBillingMode() above and for the same reason: a park that has
+ * not run db/migrations/2026-09-02-bucket-labels.sql has neither column, and widening an existing
+ * settings select to include them would fail that whole query and take the screen with it. A
+ * failure here is not an error state — it is a park that has not configured this — so it falls
+ * back to the built-in labels rather than surfacing anything.
+ */
+export async function getBucketLabels(): Promise<BucketLabels> {
+  try {
+    const { data } = await svc.from('settings').select('bucket_label_camp, bucket_label_seasonal').limit(1).single()
+    return bucketLabels(data)
+  } catch {
+    return bucketLabels(null)
   }
 }
 

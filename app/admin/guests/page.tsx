@@ -1,5 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { bucketLabels, type BucketLabels } from '@/lib/bucket-labels'
+import { normalizeBillingMode } from '@/lib/ledger-lanes'
 import { useRouter } from 'next/navigation'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { guestFormFrom, guestPatchFrom } from '@/lib/guest-record'
@@ -60,8 +62,21 @@ export default function GuestsPage() {
   const [syncResult, setSyncResult] = useState<{ added: number; updated: number } | null>(null)
   const [paymentMode, setPaymentMode] = useState(false)
   const [balances, setBalances] = useState<Record<string, number>>({})
+  // Separated parks only: the SEASONAL half of each balance. Camp is the remainder — the same
+  // rule accountBuckets() applies, so a row can never show more owed on one card than in total.
+  const [seasonalBal, setSeasonalBal] = useState<Record<string, number>>({})
+  const [billingMode, setBillingMode] = useState<'combined' | 'separated'>('combined')
+  const [labels, setLabels] = useState<BucketLabels>(() => bucketLabels(null))
 
   useEffect(() => { fetchGuests() }, [])
+  // Two guarded selects, as elsewhere: a park missing either column keeps today's behaviour
+  // rather than losing the screen.
+  useEffect(() => {
+    supabase.from('settings').select('billing_mode').single()
+      .then(({ data, error }) => { if (!error) setBillingMode(normalizeBillingMode(data?.billing_mode)) })
+    supabase.from('settings').select('bucket_label_camp, bucket_label_seasonal').single()
+      .then(({ data, error }) => { if (!error) setLabels(bucketLabels(data)) })
+  }, [])
   // Payment mode (?mode=payment) — read from the URL, not useSearchParams (no Suspense).
   useEffect(() => { setPaymentMode(new URLSearchParams(window.location.search).get('mode') === 'payment') }, [])
 
@@ -180,7 +195,7 @@ export default function GuestsPage() {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ guest_ids: ids }),
         })
-        if (res.ok) { const d = await res.json(); setBalances(prev => ({ ...prev, ...d.balances })) }
+        if (res.ok) { const d = await res.json(); setBalances(prev => ({ ...prev, ...d.balances })); setSeasonalBal(prev => ({ ...prev, ...(d.seasonal || {}) })) }
       } catch { /* balances are best-effort; the row just shows … */ }
     }, 300)
     return () => clearTimeout(t)
@@ -443,14 +458,40 @@ export default function GuestsPage() {
 
               {/* Payment mode: balance at a glance. Normal mode: Account / Edit / Remove. */}
               {paymentMode ? (
-                <div style={{ flexShrink: 0, textAlign: 'right', minWidth: 96 }}>
+                <div style={{ flexShrink: 0, textAlign: 'right', minWidth: 116 }}>
                   {g.id in balances ? (
+                    billingMode === 'separated' && g.is_seasonal ? (
+                      // ⚠ TWO FIGURES, AND CAMP IS THE REMAINDER. Not "camp charges minus
+                      // camp-tagged payments": almost no payment carries a lane, so that sum
+                      // would show everyday money as still owed. Subtracting the seasonal half
+                      // from the true account balance is exact, and the two always add back up.
+                      (() => {
+                        const total = balances[g.id]
+                        const seasonal = seasonalBal[g.id] ?? 0
+                        const camp = total - seasonal
+                        const line = (label: string, cents: number, accent: string) => (
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'baseline', gap: 6 }}>
+                            <span style={{ fontSize: 10, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '.04em' }}>{label}</span>
+                            <span style={{ fontSize: 14, fontWeight: 700, color: cents > 0 ? accent : '#15803d' }}>
+                              {cents < 0 ? 'Cr ' + fmtMoney(-cents) : fmtMoney(cents)}
+                            </span>
+                          </div>
+                        )
+                        return (
+                          <>
+                            {line(labels.camp, camp, '#15803d')}
+                            {line(labels.seasonal, seasonal, '#B4842B')}
+                          </>
+                        )
+                      })()
+                    ) : (
                     <>
                       <div style={{ fontSize: 17, fontWeight: 700, color: balances[g.id] > 0 ? '#b45309' : '#15803d' }}>
                         {balances[g.id] < 0 ? 'Credit ' + fmtMoney(-balances[g.id]) : fmtMoney(balances[g.id])}
                       </div>
                       <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }}>{balances[g.id] > 0 ? 'balance due' : 'paid up'}</div>
                     </>
+                    )
                   ) : (
                     <div style={{ fontSize: 14, color: '#d1d5db' }}>…</div>
                   )}

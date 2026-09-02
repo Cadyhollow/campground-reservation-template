@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { svc, isSummit, getBillingMode } from '@/lib/contract-server'
+import { svc, isSummit, getBillingMode, getBucketLabels } from '@/lib/contract-server'
 import { laneBalances, type LaneBalances } from '@/lib/ledger-lanes'
 import { notVoided } from '@/lib/ledger'
 import { REFUNDABLE_STATUSES, lastIncomingPayment } from '@/lib/refundable'
@@ -138,10 +138,14 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   // folio instead of the lane checkout — which is exactly the camper most likely to be paying an
   // early deposit against a lane. The mode is a property of the PARK; state it as one.
   const billingMode = await getBillingMode()
+  // The park's wording for the two cards. Read even in combined mode: it is two harmless strings,
+  // and the client decides what to render — keeping the payload shape stable between modes.
+  const bucketLabelsOut = await getBucketLabels()
 
   return NextResponse.json({
     year,
     billingMode,
+    bucketLabels: bucketLabelsOut,
     guest,
     contracts: contractsOut,
     currentContract,

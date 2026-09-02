@@ -1,6 +1,9 @@
 'use client'
 import { allPaymentMethods } from '@/lib/transactions'
 import { useEffect, useState } from 'react'
+import { normalizeBillingMode, laneBalances } from '@/lib/ledger-lanes'
+import { bucketLabels, type BucketLabels } from '@/lib/bucket-labels'
+import AccountBucketCards from '@/app/components/AccountBucketCards'
 import { useParams, useRouter } from 'next/navigation'
 import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 import { PosCategoryTiles, POS_TILE_GRID, byNameAsc } from '@/app/components/PosCategoryTiles'
@@ -90,6 +93,8 @@ type Reservation = {
 type Folio = {
   id: string
   reservation_id: string | null
+  /** Present on a guest_account folio. Selected all along (select('*')); only the type omitted it. */
+  guest_id?: string | null
   guest_name: string
   guest_email: string
   folio_type: string
@@ -120,6 +125,15 @@ export default function FolioPage() {
 
   const [reservation, setReservation] = useState<Reservation | null>(null)
   const [folio, setFolio] = useState<Folio | null>(null)
+  // ── SEPARATED PARKS, GUEST-ACCOUNT FOLIOS ONLY ────────────────────────────────────────────
+  // This page is primarily the RESERVATION folio and has never known about lanes. It can also be
+  // reached for a seasonal camper's guest_account folio by id, and when it is, it should show the
+  // same two accounts every other screen shows rather than one blended figure. Everything below
+  // stays null/false for every other folio, so a reservation or walk-up folio is untouched.
+  const [billingMode, setBillingMode] = useState<'combined' | 'separated'>('combined')
+  const [labels, setLabels] = useState<BucketLabels>(() => bucketLabels(null))
+  const [guestIsSeasonal, setGuestIsSeasonal] = useState(false)
+  const [electricItemIds, setElectricItemIds] = useState<Set<string>>(() => new Set())
   const [lineItems, setLineItems] = useState<LineItem[]>([])
   const [payments, setPayments] = useState<Payment[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -305,6 +319,23 @@ export default function FolioPage() {
     setChargingCard(false)
   }
 
+  /** Billing mode and bucket labels — two guarded selects, as everywhere else: a park missing
+   *  either column keeps today's behaviour rather than losing the screen. */
+  useEffect(() => {
+    supabase.from('settings').select('billing_mode').single()
+      .then(({ data, error }) => { if (!error) setBillingMode(normalizeBillingMode(data?.billing_mode)) })
+    supabase.from('settings').select('bucket_label_camp, bucket_label_seasonal').single()
+      .then(({ data, error }) => { if (!error) setLabels(bucketLabels(data)) })
+  }, [])
+
+  /** Is the folio's owner a seasonal camper? Only asked for a guest_account folio — a reservation
+   *  or walk-up folio never reaches this and issues no extra query. */
+  useEffect(() => {
+    if (folio?.folio_type !== 'guest_account' || !folio?.guest_id) { setGuestIsSeasonal(false); return }
+    supabase.from('guests').select('is_seasonal').eq('id', folio.guest_id).single()
+      .then(({ data, error }) => { if (!error) setGuestIsSeasonal(!!data?.is_seasonal) })
+  }, [folio?.folio_type, folio?.guest_id])
+
   async function loadFolioData(folioId: string) {
     const [{ data: items }, { data: pmts }] = await Promise.all([
       supabase.from('folio_line_items').select('*').eq('folio_id', folioId).order('charged_at'),
@@ -317,6 +348,16 @@ export default function FolioPage() {
     ])
     setLineItems(items || [])
     setPayments(pmts || [])
+    // THE ELECTRIC SIGNAL, for lane classification. Not the category — see lib/ledger-lanes.ts.
+    // Only fetched when there is something to classify against.
+    const itemIds = (items || []).map((i: LineItem) => i.id)
+    if (itemIds.length) {
+      const { data: readings } = await supabase.from('electric_readings')
+        .select('folio_line_item_id').in('folio_line_item_id', itemIds)
+      setElectricItemIds(new Set((readings || []).map(r => r.folio_line_item_id).filter(Boolean) as string[]))
+    } else {
+      setElectricItemIds(new Set())
+    }
   }
 
   async function createWalkUpFolio() {
@@ -842,6 +883,23 @@ export default function FolioPage() {
         <div style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: activeTab === 'tab' ? 'block' : 'none', background: '#FBF7EE' }}>
 
           {/* LEDGER — charges & payments in chronological order with a running balance */}
+          {/* ── THE TWO ACCOUNTS ─────────────────────────────────────────────────────────
+              Shown ONLY for a seasonal camper's guest_account folio at a separated park — this
+              page is otherwise the reservation folio and is untouched. Reached by folio id rather
+              than through /admin/folio/guest, it should still show the same two accounts every
+              other screen shows instead of one blended figure.
+
+              The ledger beneath keeps every row, seasonal included: this page is the audit trail
+              and the cards summarise it, they do not filter it. */}
+          {billingMode === 'separated' && guestIsSeasonal && folio?.folio_type === 'guest_account' && (
+            <div style={{ marginBottom: 14 }}>
+              <AccountBucketCards
+                lanes={laneBalances(lineItems, payments, { electricLineItemIds: electricItemIds })}
+                labels={labels}
+              />
+            </div>
+          )}
+
           {ledgerEvents.length > 0 && (
             <div style={{ background: '#fff', border: '1px solid #ECE3D2', borderRadius: 12, marginBottom: 14, overflow: 'hidden' }}>
               <div style={{ display: 'flex', alignItems: 'center', padding: '0.7rem 1rem', borderBottom: '1px solid #F3EEE2' }}>

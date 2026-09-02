@@ -100,6 +100,8 @@ const defaultSettings = {
   contract_text: '',
   packet_email_intro: '',
   billing_mode: 'combined',
+  bucket_label_camp: '',
+  bucket_label_seasonal: '',
   maintenance_mode: false,
   maintenance_message: 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
   deposit_type: 'first_night',
@@ -192,6 +194,7 @@ export default function SettingsPage() {
     </div>
   )
   const [hasBillingModeColumn, setHasBillingModeColumn] = useState(false)
+  const [hasBucketLabelColumns, setHasBucketLabelColumns] = useState(false)
   const [earlyPriceInput, setEarlyPriceInput] = useState('0.00')
   const [latePriceInput, setLatePriceInput] = useState('0.00')
   const [uploadingLogo, setUploadingLogo] = useState(false)
@@ -223,6 +226,7 @@ export default function SettingsPage() {
       // save would fail. Same pattern as hero_image_url and the pet columns.
       setHasPacketIntroColumn('packet_email_intro' in data)
       setHasBillingModeColumn('billing_mode' in data)
+      setHasBucketLabelColumns('bucket_label_camp' in data)
       setForm({
         park_name: data.park_name || '',
         park_tagline: data.park_tagline || '',
@@ -275,6 +279,10 @@ export default function SettingsPage() {
         packet_email_intro: data.packet_email_intro || '',
         // Anything unrecognised reads as combined — the same fail-safe the server applies.
         billing_mode: data.billing_mode === 'separated' ? 'separated' : 'combined',
+        // Blank when unset — the placeholder shows the default that will actually be used, so an
+        // empty box reads as "the built-in name", not as "no name".
+        bucket_label_camp: data.bucket_label_camp || '',
+        bucket_label_seasonal: data.bucket_label_seasonal || '',
         maintenance_mode: data.maintenance_mode || false,
         maintenance_message: data.maintenance_message || 'We are temporarily unavailable for online reservations. Please call us to book your stay!',
         pets_enabled: data.pets_enabled || false,
@@ -636,6 +644,13 @@ export default function SettingsPage() {
         ? { packet_email_intro: form.packet_email_intro.trim() || null }
         : {}),
       ...(hasBillingModeColumn ? { billing_mode: form.billing_mode } : {}),
+      // ⚠ BLANK SAVES AS NULL, NOT AS "". NULL is what "this park has not chosen" means, and the
+      // app reads it as "use the default" — see lib/bucket-labels.ts. Saving an empty string
+      // would be indistinguishable from a park that deliberately chose a blank heading.
+      ...(hasBucketLabelColumns ? {
+        bucket_label_camp: form.bucket_label_camp.trim() || null,
+        bucket_label_seasonal: form.bucket_label_seasonal.trim() || null,
+      } : {}),
       maintenance_mode: form.maintenance_mode,
       maintenance_message: form.maintenance_message,
       deposit_type: form.deposit_type,
@@ -1182,10 +1197,41 @@ export default function SettingsPage() {
               })}
             </div>
             {form.billing_mode === 'separated' && (
-              <p className="text-xs text-gray-500 mt-3">
-                Seasonal campers now show Electric, Store and Seasonal balances on their page, and you can take a
-                payment against specific lanes from <strong>Take a payment</strong> there.
-              </p>
+              <>
+                <p className="text-xs text-gray-500 mt-3">
+                  Seasonal campers show two accounts — everyday money and the season fee — on their page, in the
+                  guest list and on their folio, and <strong>Take a payment</strong> opens the one you mean.
+                </p>
+                {/* ── WHAT THIS PARK CALLS THE TWO ACCOUNTS ──────────────────────────────────
+                    Offered only where the columns exist, like every other migration-gated field
+                    on this page: a park that has not run the bucket-labels migration must not be
+                    shown a box whose save would fail.
+
+                    Left blank, each falls back to the built-in name — which is what the
+                    placeholder shows, so an empty box reads as "the default", not as "nothing". */}
+                {hasBucketLabelColumns && (
+                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1">Name for the everyday account</label>
+                      <input type="text" maxLength={40}
+                        value={form.bucket_label_camp}
+                        onChange={e => setForm({ ...form, bucket_label_camp: e.target.value })}
+                        placeholder="Camp Account"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+                      <p className="text-[11px] text-gray-400 mt-1">Electric, the store tab and anything else day to day.</p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1">Name for the season-fee account</label>
+                      <input type="text" maxLength={40}
+                        value={form.bucket_label_seasonal}
+                        onChange={e => setForm({ ...form, bucket_label_seasonal: e.target.value })}
+                        placeholder="Seasonal"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+                      <p className="text-[11px] text-gray-400 mt-1">The site fee, its deposit and any installments.</p>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

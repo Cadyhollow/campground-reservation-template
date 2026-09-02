@@ -5,6 +5,7 @@
 // NO writes — all editing (rig, notes, Send Packet) lives on the admin page.
 import Link from 'next/link'
 import type { SeasonalGuestData, SeasonalOccupant } from '@/lib/seasonal-types'
+import AccountBucketCards from '@/app/components/AccountBucketCards'
 
 type Mode = 'admin' | 'camper'
 
@@ -35,25 +36,8 @@ const Row = ({ label, value }: { label: string; value: React.ReactNode }) => (
   <div className="flex justify-between text-sm py-1"><span className="text-muted">{label}</span><span className="font-medium text-ink text-right">{value}</span></div>
 )
 
-/** The lanes shown on the camper page, in the order an owner reads them. `other` is deliberately
- *  absent: it is the classifier's catch-all, not a bill a camper is sent, and giving it a line
- *  here would put a heading on money nobody meant to categorise. It still counts in the account
- *  balance below, which is the figure that must never change meaning. */
-const LANE_ROWS = [
-  { lane: 'electric' as const, label: 'Electric' },
-  { lane: 'store' as const, label: 'Store' },
-  { lane: 'seasonal' as const, label: 'Seasonal fee' },
-]
-
 export default function SeasonalSections({ data, mode }: { data: SeasonalGuestData; mode: Mode }) {
   const lanes = data.lanes || null
-  // One rendering of an amount, so a lane line and the account line cannot disagree about what a
-  // credit looks like.
-  const money = (cents: number) => (
-    <span className="tnum" style={{ color: cents > 0 ? 'var(--watch)' : 'var(--good)' }}>
-      {cents < 0 ? 'Credit ' + fmtMoney(-cents) : fmtMoney(cents)}
-    </span>
-  )
   const g = data.guest || {}
   // Single-line home address, gap-safe (no stray commas): "Street, City, ST ZIP".
   const homeAddressLine = [
@@ -127,39 +111,31 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
                           everything else. No special-casing: it is just another line item in the
                           one folio, which is what "everything together" should mean.
             The lane breakdown is purely additive and only a separated park ever sees it. */}
+        {/* ── SEPARATED: THE TWO CARDS ────────────────────────────────────────────────────
+            The per-lane rows that used to sit here (Electric / Store / Seasonal fee, plus a
+            "Payments not yet assigned" line) are gone, and their disappearance is the fix rather
+            than a simplification.
+
+            Those rows showed each lane's charges against its OWN tagged payments. Almost no
+            payment carries a lane — around 2% on the live park — so Electric and Store showed
+            their full original charges as still owed, and the honest "not yet assigned" line
+            underneath was the app admitting it could not say who had paid what. A camper whose
+            real balance was $903.63 read as owing thousands.
+
+            accountBuckets() answers the question the data can actually answer: Seasonal is
+            genuinely tagged, so it is computed directly; Camp is the account remainder, so every
+            untagged payment counts toward everyday money. The two always sum to the account
+            balance, which is why no separate "unassigned" line is needed any more — there is
+            nothing left over to confess.
+
+            COMBINED is untouched: one blended balance, exactly as before. */}
         {lanes ? (
-          <>
-            {/* A lane in CREDIT says so in words. A camper who pays a deposit before any charge
-                exists has a negative seasonal balance, and "−$500.00" is a figure somebody has to
-                decode; "credit on account" is what it actually means. The credit is not parked
-                anywhere special — when the seasonal charge is posted at send, the lane balance is
-                charges − payments and it nets automatically. */}
-            {LANE_ROWS.map(({ lane, label }) => {
-              const bal = lanes.byLane[lane].balance
-              return (
-                <Row key={lane} label={label} value={
-                  bal < 0
-                    ? <span className="tnum" style={{ color: 'var(--good)' }}>
-                        credit on account {fmtMoney(-bal)}
-                      </span>
-                    : money(bal)
-                } />
-              )
-            })}
-            {/* Shown HONESTLY rather than folded into a lane. Until the checkout screen lands,
-                every payment is recorded against the whole account rather than against one lane,
-                so a camper will normally have some sitting here. Silently spreading it across
-                the lanes would make each lane's figure a guess. */}
-            {lanes.untaggedPayments !== 0 && (
-              <Row
-                label="Payments not yet assigned"
-                value={<span className="tnum" style={{ color: 'var(--good)' }}>−{fmtMoney(lanes.untaggedPayments)}</span>}
-              />
-            )}
-            <div className="mt-2 pt-2 border-t border-line-soft">
-              <Row label="Account balance" value={money(data.balance_cents)} />
-            </div>
-          </>
+          <AccountBucketCards
+            lanes={lanes}
+            labels={data.bucketLabels}
+            payHref={bucket => `/admin/checkout?guestId=${g.id}&bucket=${bucket}`}
+            folioHref={`/admin/folio/guest/${g.id}`}
+          />
         ) : (
           <Row label="Account balance" value={<span className="tnum" style={{ color: data.balance_cents > 0 ? 'var(--watch)' : 'var(--good)' }}>{data.balance_cents < 0 ? 'Credit ' + fmtMoney(-data.balance_cents) : fmtMoney(data.balance_cents)}</span>} />
         )}
@@ -172,12 +148,24 @@ export default function SeasonalSections({ data, mode }: { data: SeasonalGuestDa
             created on the first payment.
 
             WHICH SCREEN, THOUGH, DEPENDS ON THE PARK, and both are the EXISTING lane-aware path:
-              separated → /admin/checkout, the lane boxes (Phase 4 PR 3).
+              separated → /admin/checkout, opened ON THE SEASONAL DOOR (&bucket=seasonal).
               combined  → the folio's own payment box, which carries the lane selector from #77.
+
+            ⚠ THE BUCKET IS NAMED, AND THAT IS THE BUG THIS FIXES. This link sits under a
+            SEASONAL camper's record, beneath their season fee — somebody clicking it is paying
+            that fee. It used to land on the payment screen with nothing chosen, so the fee had to
+            be re-found and re-selected, and the amount offered came from the old per-lane figures
+            that were wrong. Naming the bucket opens the right door with the right number in it.
+            The Camp door is one tap away on the same screen for the rarer case.
             No second payment path is built here; this only routes to the one that fits. */}
-        {admin && (
+        {/* ⚠ SEPARATED HIDES THIS ROW, because the two cards above already carry both links —
+            one "Take a payment" per account and "Open folio" on the Camp card. Leaving it visible
+            put THREE "Take a payment" buttons on one screen, two of which meant different things
+            and one of which meant "you decide later". Combined mode has no cards, so it keeps the
+            row exactly as it was. */}
+        {admin && !lanes && (
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            <Link href={data.billingMode === 'separated' ? `/admin/checkout?guestId=${g.id}` : `/admin/folio/guest/${g.id}`}
+            <Link href={data.billingMode === 'separated' ? `/admin/checkout?guestId=${g.id}&bucket=seasonal` : `/admin/folio/guest/${g.id}`}
               className="px-3 py-2 rounded-lg text-xs font-bold text-on-good"
               style={{ background: 'var(--good)' }}>
               Take a payment

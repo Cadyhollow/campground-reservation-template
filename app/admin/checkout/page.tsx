@@ -18,13 +18,15 @@
 //                     same surcharge and status handling, plus the `lane` tag.
 // There is no second way to write a payment in this codebase after this PR, and that is
 // deliberate: a parallel money path is exactly where a money bug hides.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { planAtLeast } from '@/lib/plan'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { loadSquarePayments } from '@/lib/square-card-client'
-import { normalizeBillingMode, type Lane } from '@/lib/ledger-lanes'
+import { normalizeBillingMode } from '@/lib/ledger-lanes'
+import { accountBuckets, paymentLaneForBucket, BUCKETS, type Bucket } from '@/lib/account-buckets'
+import { bucketLabels, type BucketLabels } from '@/lib/bucket-labels'
 import { methodLabel as methodLabelOf } from '@/lib/transactions'
 import type { SeasonalGuestData } from '@/lib/seasonal-types'
 import toast, { Toaster } from 'react-hot-toast'
@@ -32,13 +34,25 @@ import TerminalChargeControls from '@/app/components/TerminalChargeControls'
 
 const supabase = createBrowserSupabase()
 
-/** The lanes an owner can take money against. `other` is excluded: it is the classifier's
- *  catch-all, not something a camper is billed for. It still counts in the account total. */
-const PAYABLE: { lane: Lane; label: string; hint: string }[] = [
-  { lane: 'electric', label: 'Electric', hint: 'Metered electricity' },
-  { lane: 'store', label: 'Store', hint: 'Camp store tab' },
-  { lane: 'seasonal', label: 'Seasonal', hint: 'Site fee for the season' },
-]
+/**
+ * TWO DOORS, NOT FOUR LANES — and this is the fix, not a simplification.
+ *
+ * The three lane boxes that used to be here (Electric / Store / Seasonal) offered each lane's
+ * charges against its OWN tagged payments. Almost no payment carries a lane — about 2% on the
+ * live park — so Electric and Store offered their full original charges as the amount due. Staff
+ * were shown "$1,865 store due" on an account whose real balance was a fraction of that, and the
+ * box pre-filled that figure into the amount field.
+ *
+ * The two buckets are exact: Seasonal is genuinely tagged so it is computed directly, and Camp is
+ * the account remainder, so every untagged payment already counts toward it. What each door
+ * offers is now what the camper actually owes.
+ *
+ * `hint` is fixed copy; the LABELS are the park's own (settings, see bucketLabels).
+ */
+const DOOR_HINT: Record<Bucket, string> = {
+  camp: 'Electric, store and everything else',
+  seasonal: 'Site fee, deposit and installments',
+}
 
 const money = (c: number) => '$' + (Math.abs(c) / 100).toFixed(2)
 const toCents = (v: string) => Math.round((parseFloat(v) || 0) * 100)
@@ -52,6 +66,7 @@ export default function LaneCheckoutPage() {
   const [surchargePct, setSurchargePct] = useState(0)
   const [maxCreditAmount, setMaxCreditAmount] = useState(0)
   const [customMethods, setCustomMethods] = useState<string[]>([])
+  const [labels, setLabels] = useState<BucketLabels>(() => bucketLabels(null))
 
   // Camper selection
   const [guestId, setGuestId] = useState('')
@@ -94,6 +109,15 @@ export default function LaneCheckoutPage() {
   // only ever calls .attach()/.tokenize() through it.
   const [cardRef, setCardRef] = useState<{ tokenize: () => Promise<{ status: string; token?: string }> } | null>(null)
 
+  // The park's wording for the two doors. ⚠ ITS OWN GUARDED SELECT: a park that has not run
+  // db/migrations/2026-09-02-bucket-labels.sql has neither column, and folding these into the
+  // select below would fail that query and take the whole screen — including the billing mode —
+  // down with it. A failure here just means "not configured", so it falls back to the defaults.
+  useEffect(() => {
+    supabase.from('settings').select('bucket_label_camp, bucket_label_seasonal').single()
+      .then(({ data, error }) => { if (!error) setLabels(bucketLabels(data)) })
+  }, [])
+
   useEffect(() => {
     supabase.from('settings').select('plan, billing_mode, card_surcharge_percent, custom_payment_methods, max_credit_amount, square_terminal_device_id').single()
       .then(({ data, error }) => {
@@ -110,9 +134,17 @@ export default function LaneCheckoutPage() {
   }, [router])
 
   // ?guestId= — opened from a camper's page with them already loaded.
+  // ?bucket=  — opened ON a specific door. "Take a payment" under a seasonal camper's record
+  //             means their season fee, and landing on this screen with nothing chosen made
+  //             somebody re-find and re-pick it every time. Only the door is preselected; the
+  //             AMOUNT is filled in by the effect below, once balances have actually loaded.
+  const pendingBucket = useRef<Bucket | null>(null)
   useEffect(() => {
-    const g = new URLSearchParams(window.location.search).get('guestId')
+    const q = new URLSearchParams(window.location.search)
+    const g = q.get('guestId')
     if (g) setGuestId(g)
+    const b = q.get('bucket')
+    if (b === 'camp' || b === 'seasonal') pendingBucket.current = b
   }, [])
 
   const load = useCallback(async (id: string) => {
@@ -121,7 +153,20 @@ export default function LaneCheckoutPage() {
     try {
       const res = await fetch(`/api/seasonals/guest/${id}`)
       const d = await res.json()
-      if (res.ok) setData(d)
+      if (res.ok) {
+        setData(d)
+        // ⚠ THE DOOR OPENS HERE, NOT ON MOUNT, because only now is there a balance to put in it.
+        // Preselecting before the fetch returned would prefill $0.00 and quietly offer to take
+        // nothing. The ref is cleared as it is consumed, so this is a one-shot: it never fights a
+        // staff member who then closes that door or retypes the amount.
+        const want: Bucket | null = pendingBucket.current
+        if (want) {
+          pendingBucket.current = null
+          const due = d?.lanes ? Math.max(0, accountBuckets(d.lanes)[want].balance) : 0
+          setSelected(prev => ({ ...prev, [want]: true }))
+          setAmounts(a => (a[want] !== undefined ? a : { ...a, [want]: (due / 100).toFixed(2) }))
+        }
+      }
     } catch { /* the empty state below covers it */ }
     setLoading(false)
   }, [])
@@ -142,21 +187,36 @@ export default function LaneCheckoutPage() {
   }, [search])
 
   const lanes = data?.lanes || null
-  const dueFor = (lane: Lane) => Math.max(0, lanes?.byLane[lane]?.balance ?? 0)
+  // ⚠ ONE DERIVATION OF THE TWO BUCKETS, shared with the cards on every other screen. Nothing on
+  // this page recomputes a balance of its own, so the amount a door offers is by construction the
+  // amount the camper's card shows.
+  const buckets = lanes ? accountBuckets(lanes) : null
+  const dueFor = (b: Bucket) => Math.max(0, buckets?.[b].balance ?? 0)
 
-  /** Selecting a lane pre-fills its full amount due — the common case is "pay it off". */
-  function toggle(lane: Lane) {
+  /** Opening a door pre-fills its full amount due — the common case is "pay it off". */
+  function toggle(b: Bucket) {
     setSelected(prev => {
-      const on = !prev[lane]
-      if (on) setAmounts(a => ({ ...a, [lane]: a[lane] ?? (dueFor(lane) / 100).toFixed(2) }))
-      return { ...prev, [lane]: on }
+      const on = !prev[b]
+      if (on) setAmounts(a => ({ ...a, [b]: a[b] ?? (dueFor(b) / 100).toFixed(2) }))
+      return { ...prev, [b]: on }
     })
   }
 
-  const lineFor = (lane: Lane) => (selected[lane] ? Math.max(0, toCents(amounts[lane] ?? '')) : 0)
-  const baseTotal = PAYABLE.reduce((s, p) => s + lineFor(p.lane), 0)
+  /** PAY BOTH — one tender, both doors, each pre-filled with its own balance. It records TWO
+   *  rows (see splits()), so each bucket settles exactly rather than one absorbing the other. */
+  function payBoth() {
+    setAmounts(a => {
+      const next = { ...a }
+      for (const b of BUCKETS) if (next[b] === undefined) next[b] = (dueFor(b) / 100).toFixed(2)
+      return next
+    })
+    setSelected({ camp: true, seasonal: true })
+  }
+
+  const lineFor = (b: Bucket) => (selected[b] ? Math.max(0, toCents(amounts[b] ?? '')) : 0)
+  const baseTotal = BUCKETS.reduce((s, b) => s + lineFor(b), 0)
   const surcharge = method === 'card' && surchargePct > 0 && !waiveFee
-    ? PAYABLE.reduce((s, p) => s + Math.round(lineFor(p.lane) * (surchargePct / 100)), 0)
+    ? BUCKETS.reduce((s, b) => s + Math.round(lineFor(b) * (surchargePct / 100)), 0)
     : 0
   const grandTotal = baseTotal + surcharge
 
@@ -175,9 +235,9 @@ export default function LaneCheckoutPage() {
   const overageExceedsCap = maxCreditAmount > 0 && overageCents > maxCreditAmount
   const shortCents = method === 'cash' && cashTendered !== '' ? Math.max(0, grandTotal - tenderedCents) : 0
   const creditCents = keepAsCredit ? overageCents : 0
-  // Which lane a kept credit will be filed under — only when exactly one lane is being paid.
-  const selectedLanes = PAYABLE.filter(p => lineFor(p.lane) > 0)
-  const creditLaneLabel = selectedLanes.length === 1 ? selectedLanes[0].label : ''
+  // Which bucket a kept credit will be filed under — only when exactly one door is being paid.
+  const selectedBuckets = BUCKETS.filter(b => lineFor(b) > 0)
+  const creditLaneLabel = selectedBuckets.length === 1 ? labels[selectedBuckets[0]] : ''
 
   // ⚠ THE CARD FORM RENDERED TWICE, AND THIS IS WHY.
   //
@@ -225,11 +285,21 @@ export default function LaneCheckoutPage() {
     }
   }, [method, cardEntryMode])
 
-  /** The lanes actually being paid, with each one's own surcharge computed from its own amount —
-   *  so no proportional allocation and no rounding drift between the charge and the ledger. */
+  /**
+   * The doors actually being paid, each with its own surcharge computed from its own amount — so
+   * no proportional allocation and no rounding drift between the charge and the ledger.
+   *
+   * ⚠ A CAMP ROW IS UNTAGGED, AND THAT IS DELIBERATE, NOT AN OMISSION. paymentLaneForBucket()
+   * returns null for Camp: a whole-account payment, exactly what every payment already is today.
+   * Camp is computed as the account remainder, so an untagged row settles it precisely, and the
+   * park's existing untagged history already reads as Camp without being retagged.
+   *
+   * "Pay both" therefore writes TWO rows from one tender — one seasonal-tagged, one untagged —
+   * which is what lets each bucket land on exactly zero instead of one swallowing the other.
+   */
   function splits() {
-    return PAYABLE
-      .map(p => ({ lane: p.lane, amount: lineFor(p.lane) }))
+    return BUCKETS
+      .map(b => ({ lane: paymentLaneForBucket(b), amount: lineFor(b) }))
       .filter(l => l.amount > 0)
       .map(l => ({
         ...l,
@@ -303,6 +373,7 @@ export default function LaneCheckoutPage() {
           surcharge_amount: 0,
           status: 'completed',
           note,
+          // null for Camp — an untagged, whole-account row.
           lane: l.lane,
         }))
         // ── PR 3c: A KEPT OVERPAYMENT CARRIES THE LANE IT WAS PAID ON ───────────────────────
@@ -458,46 +529,65 @@ export default function LaneCheckoutPage() {
 
       {data && !loading && (
         <>
-          {/* LANES */}
+          {/* ── THE TWO DOORS ────────────────────────────────────────────────────────────
+              One balance each, and "Pay both" for the common case of settling a camper up in a
+              single tender. The old third box and the "not yet assigned" footnote are both gone:
+              with Camp computed as the account remainder there is no unassigned money left to
+              confess, and the two doors always sum to the account balance. */}
           <div className="mb-4">
-            <p className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">What are they paying?</p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {PAYABLE.map(({ lane, label, hint }) => {
-                const due = dueFor(lane)
-                const on = !!selected[lane]
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">What are they paying?</p>
+              {buckets && (buckets.camp.balance > 0 || buckets.seasonal.balance > 0) && (
+                <button type="button" onClick={payBoth}
+                  className="text-xs font-bold rounded-lg px-3 py-1.5"
+                  style={{ background: '#15803d', color: '#fff' }}>
+                  Pay both
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {BUCKETS.map(b => {
+                const due = dueFor(b)
+                const on = !!selected[b]
+                const bal = buckets?.[b].balance ?? 0
+                // Camp keeps the green this screen has always used; Seasonal takes the gold the
+                // theme reserves for the season, so the two doors are tellable apart at a glance
+                // and match the camper's cards on every other screen.
+                const accent = b === 'seasonal' ? '#B4842B' : '#15803d'
+                const tint = b === 'seasonal' ? '#FFFBEB' : '#f0fdf4'
                 return (
-                  <div key={lane}
-                    onClick={() => toggle(lane)}
+                  <div key={b}
+                    onClick={() => toggle(b)}
                     role="checkbox" aria-checked={on} tabIndex={0}
-                    onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggle(lane) } }}
+                    onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggle(b) } }}
                     className="rounded-xl border-2 p-4 cursor-pointer transition-colors"
-                    style={{ borderColor: on ? '#15803d' : '#e5e7eb', background: on ? '#f0fdf4' : '#fff' }}>
+                    style={{ borderColor: on ? accent : '#e5e7eb', background: on ? tint : '#fff' }}>
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <p className="text-sm font-bold text-gray-900">{label}</p>
-                        <p className="text-[11px] text-gray-400">{hint}</p>
+                        <p className="text-sm font-bold text-gray-900">{labels[b]}</p>
+                        <p className="text-[11px] text-gray-400">{DOOR_HINT[b]}</p>
                       </div>
                       <span style={{
                         width: 22, height: 22, borderRadius: 6, flexShrink: 0, display: 'inline-flex',
                         alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#fff',
-                        border: `2px solid ${on ? '#15803d' : '#9ca3af'}`, background: on ? '#15803d' : '#fff',
+                        border: `2px solid ${on ? accent : '#9ca3af'}`, background: on ? accent : '#fff',
                       }}>{on ? '✓' : ''}</span>
                     </div>
-                    <p className="mt-3 text-xl font-bold" style={{ color: due > 0 ? '#d97706' : '#15803d' }}>
+                    <p className="mt-3 text-xl font-bold" style={{ color: due > 0 ? accent : '#15803d' }}>
                       {due > 0 ? money(due) : 'Paid up'}
                     </p>
                     <p className="text-[11px] text-gray-400">
-                      {due > 0 ? 'due' : (lanes?.byLane[lane]?.balance ?? 0) < 0 ? 'in credit' : 'nothing owing'}
+                      {due > 0 ? 'due' : bal < 0 ? `in credit ${money(bal)}` : 'nothing owing'}
                     </p>
                     {on && (
-                      // Editable once selected: lower it for a part payment, raise it for a
-                      // prepayment — an overpayment simply becomes a credit in that lane.
+                      // Editable once opened: lower it for a part payment, raise it for a
+                      // prepayment — an overpayment simply becomes a credit on that account.
                       <div className="mt-3" onClick={e => e.stopPropagation()}>
                         <label className="block text-[11px] text-gray-500 mb-1">Amount</label>
                         <div className="flex items-center gap-1">
                           <span className="text-sm text-gray-500">$</span>
                           <input type="number" step="0.01" min="0"
-                            value={amounts[lane] ?? ''} onChange={e => setAmounts(a => ({ ...a, [lane]: e.target.value }))}
+                            value={amounts[b] ?? ''} onChange={e => setAmounts(a => ({ ...a, [b]: e.target.value }))}
                             className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm font-bold" />
                         </div>
                       </div>
@@ -506,10 +596,10 @@ export default function LaneCheckoutPage() {
                 )
               })}
             </div>
-            {lanes && lanes.untaggedPayments !== 0 && (
+            {buckets && (
               <p className="text-xs text-gray-400 mt-2">
-                {money(lanes.untaggedPayments)} of past payments isn&rsquo;t assigned to a lane yet, so it sits against the
-                account as a whole. Account balance {money(data.balance_cents)}.
+                Account balance {money(buckets.accountBalance)} — {labels.camp} {money(buckets.camp.balance)} plus{' '}
+                {labels.seasonal} {money(buckets.seasonal.balance)}.
               </p>
             )}
           </div>
@@ -660,10 +750,10 @@ export default function LaneCheckoutPage() {
             {/* An electronic tender cannot give change, so an overage there can only be a credit —
                 and it lands in the LANE that was overpaid, not on the account. Same reasoning the
                 folio prints for a card or check. */}
-            {method !== 'cash' && PAYABLE.some(p => lineFor(p.lane) > dueFor(p.lane)) && (
+            {method !== 'cash' && BUCKETS.some(b => lineFor(b) > dueFor(b)) && (
               <p className="text-xs mt-3 rounded-lg px-3 py-2" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534' }}>
-                One of these amounts is more than that lane owes. {methodLabelOf(method)} can&rsquo;t give change, so the
-                extra stays as a credit in that lane and comes off its next charge.
+                One of these amounts is more than that account owes. {methodLabelOf(method)} can&rsquo;t give change, so the
+                extra stays as a credit on that account and comes off its next charge.
               </p>
             )}
 
@@ -711,7 +801,7 @@ export default function LaneCheckoutPage() {
             <div className="flex items-end justify-between mb-2">
               <div>
                 <p className="text-xs text-gray-500">
-                  {PAYABLE.filter(p => lineFor(p.lane) > 0).map(p => p.label).join(' + ') || 'Nothing selected'}
+                  {BUCKETS.filter(b => lineFor(b) > 0).map(b => labels[b]).join(' + ') || 'Nothing selected'}
                 </p>
                 {surcharge > 0 && <p className="text-[11px] text-gray-400">includes {money(surcharge)} card fee</p>}
                 {creditCents > 0 && <p className="text-[11px] text-green-700">plus {money(creditCents)} kept as account credit</p>}
