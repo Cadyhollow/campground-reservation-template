@@ -1,7 +1,7 @@
 // Unit tests for the two-bucket view. Pure — `node --test`, no server, no DB.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { accountBuckets, paymentLaneForBucket, LANE_BUCKET, billAccountBalance, filterToBucket } from './account-buckets.ts'
+import { accountBuckets, paymentLaneForBucket, LANE_BUCKET, billAccountBalance, filterToBucket, seasonalBalanceOf, campFromAccount } from './account-buckets.ts'
 import { laneBalances, type LaneBalances } from './ledger-lanes.ts'
 
 const totals = (charges: number, payments: number) => ({ charges, payments, balance: charges - payments })
@@ -191,4 +191,79 @@ test('filterToBucket(camp) reconciles to accountBuckets(...).camp.balance', () =
   const chargeSum = camp.items.filter(i => i.voided !== true).reduce((s, i) => s + i.line_total, 0)
   const paySum = camp.payments.reduce((s, p) => s + (p.amount - (p.surcharge_amount || 0)), 0)
   assert.equal(chargeSum - paySum, accountBuckets(laneBalances(items, payments, ctx)).camp.balance)
+})
+
+
+// ── THE STAFF-FACING CAMP FIGURE ─────────────────────────────────────────────────────────────
+//
+// For screens that already hold a whole-account balance and need Camp without a second query.
+// The scenario: a seasonal camper owing $1,600 of season fee and $32 of electric must not appear
+// on the ELECTRIC screen as owing $1,632.
+
+test('⚠ THE ELECTRIC SCREEN SHOWS CAMP, NOT THE WHOLE ACCOUNT', () => {
+  const items = [
+    { line_total: 160000, lane: 'seasonal' },
+    { line_total: 3200, lane: 'electric' },
+  ]
+  const payments: { amount: number; lane?: string | null }[] = []
+  const account = 163200
+  const seasonal = seasonalBalanceOf(items, payments)
+  assert.equal(seasonal, 160000)
+  assert.equal(campFromAccount(account, seasonal), 3200, 'the pill must read $32.00, not $1,632.00')
+})
+
+test('an untagged payment reduces Camp, leaving the season fee owing', () => {
+  const items = [{ line_total: 160000, lane: 'seasonal' }, { line_total: 3200, lane: 'electric' }]
+  const payments = [{ amount: 3200 }]   // untagged — everyday money
+  const account = 163200 - 3200
+  const seasonal = seasonalBalanceOf(items, payments)
+  assert.equal(seasonal, 160000, 'untagged money never touches Seasonal')
+  assert.equal(campFromAccount(account, seasonal), 0, 'and it settles Camp exactly')
+})
+
+test('a seasonal payment reduces Seasonal only', () => {
+  const items = [{ line_total: 160000, lane: 'seasonal' }, { line_total: 3200, lane: 'electric' }]
+  const payments = [{ amount: 60000, lane: 'seasonal' }]
+  assert.equal(seasonalBalanceOf(items, payments), 100000)
+  assert.equal(campFromAccount(163200 - 60000, seasonalBalanceOf(items, payments)), 3200)
+})
+
+test('a camper with no seasonal money at all shows the whole account as Camp', () => {
+  // The ordinary monthly/nightly camper on an electric screen — nothing changes for them.
+  const items = [{ line_total: 3200, lane: 'electric' }, { line_total: 900 }]
+  assert.equal(seasonalBalanceOf(items, []), 0)
+  assert.equal(campFromAccount(4100, 0), 4100)
+})
+
+test('a seasonal overpayment is a Seasonal credit and does not inflate Camp', () => {
+  const items = [{ line_total: 160000, lane: 'seasonal' }, { line_total: 3200 }]
+  const payments = [{ amount: 200000, lane: 'seasonal' }]
+  const seasonal = seasonalBalanceOf(items, payments)
+  assert.equal(seasonal, -40000, 'a credit in its own bucket')
+  assert.equal(campFromAccount(163200 - 200000, seasonal), 3200, 'Camp still owes its $32')
+})
+
+test('the surcharge is netted off a seasonal payment, as everywhere else', () => {
+  const items = [{ line_total: 100000, lane: 'seasonal' }]
+  const payments = [{ amount: 51500, surcharge_amount: 1500, lane: 'seasonal' }]
+  assert.equal(seasonalBalanceOf(items, payments), 50000)
+})
+
+test('lane matching tolerates case and stray whitespace, and ignores anything else', () => {
+  assert.equal(seasonalBalanceOf([{ line_total: 500, lane: ' Seasonal ' }], []), 500)
+  assert.equal(seasonalBalanceOf([{ line_total: 500, lane: 'seasonally' }], []), 0)
+  assert.equal(seasonalBalanceOf([{ line_total: 500, lane: null }], []), 0)
+  assert.equal(seasonalBalanceOf(null, null), 0)
+})
+
+test('seasonalBalanceOf agrees with accountBuckets on the same rows', () => {
+  // The two derivations must not drift: one is the full classifier, the other the shortcut.
+  const items = [
+    { id: 'a', line_total: 189500, lane: 'seasonal' },
+    { id: 'b', line_total: 205618, product_id: 'p1' },
+  ]
+  const payments = [{ amount: 99137, lane: 'seasonal' }, { amount: 205618 }]
+  const full = accountBuckets(laneBalances(items, payments, { electricLineItemIds: new Set<string>() }))
+  assert.equal(seasonalBalanceOf(items, payments), full.seasonal.balance)
+  assert.equal(campFromAccount(full.accountBalance, seasonalBalanceOf(items, payments)), full.camp.balance)
 })
