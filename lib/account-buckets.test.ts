@@ -267,3 +267,68 @@ test('seasonalBalanceOf agrees with accountBuckets on the same rows', () => {
   assert.equal(seasonalBalanceOf(items, payments), full.seasonal.balance)
   assert.equal(campFromAccount(full.accountBalance, seasonalBalanceOf(items, payments)), full.camp.balance)
 })
+
+
+// ── VOIDED CHARGES ARE NOT OWED, IN EITHER MODE ──────────────────────────────────────────────
+//
+// The Electric Billing page used to sum every folio line item with no void filter, so a camper
+// with a voided charge showed a HIGHER balance there than on their own folio. Every other balance
+// in the app — the folio, /api/guests/balances, laneBalances() — excludes them.
+//
+// The rule these pin: whatever the caller filters out of its account total must ALSO be filtered
+// out of the seasonal slice, or camp + seasonal stops equalling the account.
+
+const VOID_ITEMS = [
+  { line_total: 160000, lane: 'seasonal' },
+  { line_total: 50000, lane: 'seasonal', voided: true },   // voided seasonal charge
+  { line_total: 3200, lane: 'electric' },
+  { line_total: 900, voided: true },                        // voided store charge
+]
+
+test('⚠ A VOIDED CHARGE IS EXCLUDED FROM BOTH BUCKETS, AND FROM THE ACCOUNT', () => {
+  const live = VOID_ITEMS.filter(i => i.voided !== true)
+  const payments: { amount: number; lane?: string | null }[] = []
+
+  // laneBalances already filters voided; this is the reference answer.
+  const full = accountBuckets(laneBalances(VOID_ITEMS, payments, { electricLineItemIds: new Set<string>() }))
+  assert.equal(full.accountBalance, 163200, 'the two voided charges are not owed')
+  assert.equal(full.seasonal.balance, 160000)
+  assert.equal(full.camp.balance, 3200)
+
+  // The page's shortcut must reach the same figures when fed the same void-filtered rows.
+  const account = live.reduce((sum, i) => sum + i.line_total, 0)
+  const seasonal = seasonalBalanceOf(live, payments)
+  assert.equal(account, full.accountBalance, 'the page balance matches the folio balance')
+  assert.equal(seasonal, full.seasonal.balance)
+  assert.equal(campFromAccount(account, seasonal), full.camp.balance)
+})
+
+test('⚠ MIXING THE TWO RULES IS THE ONLY WAY TO GET A WRONG ANSWER — pinned', () => {
+  // Filtering the account total but NOT the seasonal slice: camp + seasonal no longer reconciles.
+  // Stated as a failing shape so the requirement in seasonalBalanceOf's comment is testable
+  // rather than merely written down.
+  const live = VOID_ITEMS.filter(i => i.voided !== true)
+  const account = live.reduce((sum, i) => sum + i.line_total, 0)
+  const seasonalUnfiltered = seasonalBalanceOf(VOID_ITEMS, [])   // WRONG: includes the voided fee
+  assert.notEqual(campFromAccount(account, seasonalUnfiltered), 3200)
+  // ...and the correct pairing does reconcile.
+  assert.equal(campFromAccount(account, seasonalBalanceOf(live, [])), 3200)
+})
+
+test('a combined park benefits too — a voided charge is not owed there either', () => {
+  // Combined never splits buckets, but the account total is the same figure, and it is the one
+  // the electric page shows. This is the one combined-visible change in this batch, and it is a
+  // fix: the page now agrees with the camper's folio.
+  const live = VOID_ITEMS.filter(i => i.voided !== true)
+  assert.equal(live.reduce((s, i) => s + i.line_total, 0), 163200)
+  assert.notEqual(VOID_ITEMS.reduce((s, i) => s + i.line_total, 0), 163200)
+})
+
+test('a voided PAYMENT is out of scope here — payments are filtered by status, not voided', () => {
+  // Documented so nobody adds a voided filter to payments by symmetry: the app excludes
+  // non-completed payments with .eq('status','completed') at the query, and laneBalances counts
+  // every payment it is handed.
+  const items = [{ line_total: 10000, lane: 'seasonal' }]
+  const payments = [{ amount: 4000, lane: 'seasonal' }]
+  assert.equal(seasonalBalanceOf(items, payments), 6000)
+})
